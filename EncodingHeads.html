@@ -1,0 +1,1826 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Encode</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="EncodingHeads_files/libs/clipboard/clipboard.min.js"></script>
+<script src="EncodingHeads_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="EncodingHeads_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="EncodingHeads_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="EncodingHeads_files/libs/quarto-html/popper.min.js"></script>
+<script src="EncodingHeads_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="EncodingHeads_files/libs/quarto-html/anchor.min.js"></script>
+<link href="EncodingHeads_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="EncodingHeads_files/libs/quarto-html/quarto-syntax-highlighting-ed96de9b727972fe78a7b5d16c58bf87.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="EncodingHeads_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="EncodingHeads_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="EncodingHeads_files/libs/bootstrap/bootstrap-d6a003b94517c951b2d65075d42fb01b.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Encode</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>
+Attaching package: 'dplyr'</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>The following objects are masked from 'package:stats':
+
+    filter, lag</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>The following objects are masked from 'package:base':
+
+    intersect, setdiff, setequal, union</code></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyr)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(patchwork)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning: package 'patchwork' was built under R version 4.4.1</code></pre>
+</div>
+</div>
+<section id="encoder-for-the-thermometry-chains-placed-at-kohnen-in-2026" class="level2">
+<h2 class="anchored" data-anchor-id="encoder-for-the-thermometry-chains-placed-at-kohnen-in-2026">Encoder for the Thermometry chains placed at Kohnen in 2026</h2>
+<p>The data is a hex-string that has to split up into different blocks and the blocks are than converted to decimal numbers</p>
+<p>Code for the encoder:</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">#' Extract a substring block from a hex string</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param s Character scalar. Full hex string.</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param pos Integer. 1-based start position in `s`.</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param n Integer. Number of characters to extract.</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Character scalar of length `n` (or shorter if `s` ends early).</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>hex_block <span class="ot">&lt;-</span> <span class="cf">function</span>(s, pos, n) <span class="fu">substr</span>(s, pos, pos <span class="sc">+</span> n <span class="sc">-</span> <span class="dv">1</span>L)</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert hexadecimal string to an unsigned number (robust)</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="co">#' Robustly converts a hexadecimal string to a numeric value.</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="co">#' This avoids potential overflow issues of `strtoi()` for unsigned 32-bit values</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="co">#' (e.g., Unix time encoded as 8 hex chars).</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param h Character scalar. Hex string (e.g., "1A18", "FFFFFFFF").</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Numeric scalar (or `NA_real_` if parsing fails).</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="co">#' @examples</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a><span class="co">#' hex_to_uint("1a18")     # 6680</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a><span class="co">#' hex_to_uint("FFFFFFFF") # 4294967295</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>hex_to_uint <span class="ot">&lt;-</span> <span class="cf">function</span>(h) {</span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.na</span>(h) <span class="sc">||</span> h <span class="sc">==</span> <span class="st">""</span> <span class="sc">||</span> <span class="fu">nchar</span>(h) <span class="sc">==</span> <span class="dv">0</span>L) <span class="fu">return</span>(<span class="cn">NA_real_</span>)</span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>  h <span class="ot">&lt;-</span> <span class="fu">toupper</span>(h)</span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>  chars <span class="ot">&lt;-</span> <span class="fu">strsplit</span>(h, <span class="st">""</span>, <span class="at">fixed =</span> <span class="cn">TRUE</span>)[[<span class="dv">1</span>]]</span>
+<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Map '0'..'9','A'..'F' -&gt; 0..15</span></span>
+<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a>  nibble <span class="ot">&lt;-</span> <span class="fu">match</span>(chars, <span class="fu">c</span>(<span class="fu">as.character</span>(<span class="dv">0</span><span class="sc">:</span><span class="dv">9</span>), LETTERS[<span class="dv">1</span><span class="sc">:</span><span class="dv">6</span>])) <span class="sc">-</span> <span class="dv">1</span>L</span>
+<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">any</span>(<span class="fu">is.na</span>(nibble))) <span class="fu">return</span>(<span class="cn">NA_real_</span>)</span>
+<span id="cb7-29"><a href="#cb7-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-30"><a href="#cb7-30" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Accumulate in base-16 (numeric is exact up to 2^53)</span></span>
+<span id="cb7-31"><a href="#cb7-31" aria-hidden="true" tabindex="-1"></a>  v <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb7-32"><a href="#cb7-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (d <span class="cf">in</span> nibble) v <span class="ot">&lt;-</span> v <span class="sc">*</span> <span class="dv">16</span> <span class="sc">+</span> d</span>
+<span id="cb7-33"><a href="#cb7-33" aria-hidden="true" tabindex="-1"></a>  v</span>
+<span id="cb7-34"><a href="#cb7-34" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb7-35"><a href="#cb7-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-36"><a href="#cb7-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-37"><a href="#cb7-37" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert hexadecimal string to signed integer (two's complement)</span></span>
+<span id="cb7-38"><a href="#cb7-38" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-39"><a href="#cb7-39" aria-hidden="true" tabindex="-1"></a><span class="co">#' Interprets an unsigned hex value as a signed two's-complement integer</span></span>
+<span id="cb7-40"><a href="#cb7-40" aria-hidden="true" tabindex="-1"></a><span class="co">#' of given bit width.</span></span>
+<span id="cb7-41"><a href="#cb7-41" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-42"><a href="#cb7-42" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param h Character scalar. Hex string.</span></span>
+<span id="cb7-43"><a href="#cb7-43" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param bits Integer. Bit width (e.g., 16, 24).</span></span>
+<span id="cb7-44"><a href="#cb7-44" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Integer scalar (or `NA_integer_` if parsing fails).</span></span>
+<span id="cb7-45"><a href="#cb7-45" aria-hidden="true" tabindex="-1"></a><span class="co">#' @examples</span></span>
+<span id="cb7-46"><a href="#cb7-46" aria-hidden="true" tabindex="-1"></a><span class="co">#' hex_to_int("FF", 8)     # -1</span></span>
+<span id="cb7-47"><a href="#cb7-47" aria-hidden="true" tabindex="-1"></a><span class="co">#' hex_to_int("8000", 16)  # -32768</span></span>
+<span id="cb7-48"><a href="#cb7-48" aria-hidden="true" tabindex="-1"></a>hex_to_int <span class="ot">&lt;-</span> <span class="cf">function</span>(h, bits) {</span>
+<span id="cb7-49"><a href="#cb7-49" aria-hidden="true" tabindex="-1"></a>  v <span class="ot">&lt;-</span> <span class="fu">hex_to_uint</span>(h)</span>
+<span id="cb7-50"><a href="#cb7-50" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">is.na</span>(v)) <span class="fu">return</span>(<span class="cn">NA_integer_</span>)</span>
+<span id="cb7-51"><a href="#cb7-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-52"><a href="#cb7-52" aria-hidden="true" tabindex="-1"></a>  sign_bit <span class="ot">&lt;-</span> <span class="dv">2</span><span class="sc">^</span>(bits <span class="sc">-</span> <span class="dv">1</span>L)</span>
+<span id="cb7-53"><a href="#cb7-53" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (v <span class="sc">&gt;=</span> sign_bit) v <span class="ot">&lt;-</span> v <span class="sc">-</span> <span class="dv">2</span><span class="sc">^</span>bits</span>
+<span id="cb7-54"><a href="#cb7-54" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-55"><a href="#cb7-55" aria-hidden="true" tabindex="-1"></a>  <span class="fu">as.integer</span>(v)</span>
+<span id="cb7-56"><a href="#cb7-56" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb7-57"><a href="#cb7-57" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-58"><a href="#cb7-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-59"><a href="#cb7-59" aria-hidden="true" tabindex="-1"></a><span class="co">#' Get decoding specification for a field name</span></span>
+<span id="cb7-60"><a href="#cb7-60" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-61"><a href="#cb7-61" aria-hidden="true" tabindex="-1"></a><span class="co">#' Returns the number of hex characters (`n_hex`) and a decoding function</span></span>
+<span id="cb7-62"><a href="#cb7-62" aria-hidden="true" tabindex="-1"></a><span class="co">#' to convert the corresponding block into a value.</span></span>
+<span id="cb7-63"><a href="#cb7-63" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-64"><a href="#cb7-64" aria-hidden="true" tabindex="-1"></a><span class="co">#' Rules implemented:</span></span>
+<span id="cb7-65"><a href="#cb7-65" aria-hidden="true" tabindex="-1"></a><span class="co">#' - `time_unix`: 8 hex chars, unsigned</span></span>
+<span id="cb7-66"><a href="#cb7-66" aria-hidden="true" tabindex="-1"></a><span class="co">#' - `adc_temp`: 6 hex chars, signed 24-bit</span></span>
+<span id="cb7-67"><a href="#cb7-67" aria-hidden="true" tabindex="-1"></a><span class="co">#' - `battery_mv`: 4 hex chars, unsigned (uint16)</span></span>
+<span id="cb7-68"><a href="#cb7-68" aria-hidden="true" tabindex="-1"></a><span class="co">#' - `*.gnd`: 4 hex chars, signed 16-bit</span></span>
+<span id="cb7-69"><a href="#cb7-69" aria-hidden="true" tabindex="-1"></a><span class="co">#' - `*.ntc1`, `*.ntc2`, `*.pressure`: 6 hex chars, signed 24-bit</span></span>
+<span id="cb7-70"><a href="#cb7-70" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-71"><a href="#cb7-71" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param name Character scalar. Field name from the schema.</span></span>
+<span id="cb7-72"><a href="#cb7-72" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return List with elements `n_hex` (integer) and `decode` (function).</span></span>
+<span id="cb7-73"><a href="#cb7-73" aria-hidden="true" tabindex="-1"></a>field_spec <span class="ot">&lt;-</span> <span class="cf">function</span>(name) {</span>
+<span id="cb7-74"><a href="#cb7-74" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (name <span class="sc">==</span> <span class="st">"time_unix"</span>) {</span>
+<span id="cb7-75"><a href="#cb7-75" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span>(<span class="fu">list</span>(<span class="at">n_hex =</span> <span class="dv">8</span>L, <span class="at">decode =</span> hex_to_uint))</span>
+<span id="cb7-76"><a href="#cb7-76" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-77"><a href="#cb7-77" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (name <span class="sc">==</span> <span class="st">"adc_temp"</span>) {</span>
+<span id="cb7-78"><a href="#cb7-78" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span>(<span class="fu">list</span>(<span class="at">n_hex =</span> <span class="dv">6</span>L, <span class="at">decode =</span> <span class="cf">function</span>(h) <span class="fu">hex_to_int</span>(h, <span class="at">bits =</span> <span class="dv">24</span>L)))</span>
+<span id="cb7-79"><a href="#cb7-79" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-80"><a href="#cb7-80" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (name <span class="sc">==</span> <span class="st">"battery_mv"</span>) {</span>
+<span id="cb7-81"><a href="#cb7-81" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span>(<span class="fu">list</span>(<span class="at">n_hex =</span> <span class="dv">4</span>L, <span class="at">decode =</span> hex_to_uint))</span>
+<span id="cb7-82"><a href="#cb7-82" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-83"><a href="#cb7-83" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-84"><a href="#cb7-84" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">grepl</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.gnd$"</span>, name)) {</span>
+<span id="cb7-85"><a href="#cb7-85" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span>(<span class="fu">list</span>(<span class="at">n_hex =</span> <span class="dv">4</span>L, <span class="at">decode =</span> <span class="cf">function</span>(h) <span class="fu">hex_to_int</span>(h, <span class="at">bits =</span> <span class="dv">16</span>L)))</span>
+<span id="cb7-86"><a href="#cb7-86" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-87"><a href="#cb7-87" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">grepl</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.(ntc1|ntc2|pressure|testSB)$"</span>, name)) {</span>
+<span id="cb7-88"><a href="#cb7-88" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span>(<span class="fu">list</span>(<span class="at">n_hex =</span> <span class="dv">6</span>L, <span class="at">decode =</span> <span class="cf">function</span>(h) <span class="fu">hex_to_int</span>(h, <span class="at">bits =</span> <span class="dv">24</span>L)))</span>
+<span id="cb7-89"><a href="#cb7-89" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-90"><a href="#cb7-90" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-91"><a href="#cb7-91" aria-hidden="true" tabindex="-1"></a>  <span class="fu">stop</span>(<span class="st">"No decoding rule for field: "</span>, name)</span>
+<span id="cb7-92"><a href="#cb7-92" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb7-93"><a href="#cb7-93" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-94"><a href="#cb7-94" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-95"><a href="#cb7-95" aria-hidden="true" tabindex="-1"></a><span class="co">#' Decode a hex-encoded record according to a schema</span></span>
+<span id="cb7-96"><a href="#cb7-96" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-97"><a href="#cb7-97" aria-hidden="true" tabindex="-1"></a><span class="co">#' Decodes a single hex string into named values according to a schema that</span></span>
+<span id="cb7-98"><a href="#cb7-98" aria-hidden="true" tabindex="-1"></a><span class="co">#' specifies the order and names of fields. Fields are separated by whitespace.</span></span>
+<span id="cb7-99"><a href="#cb7-99" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb7-100"><a href="#cb7-100" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param schema Character scalar. Whitespace-separated field names.</span></span>
+<span id="cb7-101"><a href="#cb7-101" aria-hidden="true" tabindex="-1"></a><span class="co">#'   Example: `"time_unix adc_temp n1.ntc1 n1.ntc2 n1.gnd n1.pressure battery_mv"`.</span></span>
+<span id="cb7-102"><a href="#cb7-102" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param hex_string Character scalar. The full hex payload to decode.</span></span>
+<span id="cb7-103"><a href="#cb7-103" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Named list with one element per schema field.</span></span>
+<span id="cb7-104"><a href="#cb7-104" aria-hidden="true" tabindex="-1"></a><span class="co">#' @examples</span></span>
+<span id="cb7-105"><a href="#cb7-105" aria-hidden="true" tabindex="-1"></a><span class="co">#' schema &lt;- "time_unix adc_temp n1.ntc1 n1.ntc2 n1.gnd n1.pressure battery_mv"</span></span>
+<span id="cb7-106"><a href="#cb7-106" aria-hidden="true" tabindex="-1"></a><span class="co">#' # decoded &lt;- decode_hex_line(schema, "6971e7d2...1a18")</span></span>
+<span id="cb7-107"><a href="#cb7-107" aria-hidden="true" tabindex="-1"></a>decode_hex_line <span class="ot">&lt;-</span> <span class="cf">function</span>(schema, hex_string) {</span>
+<span id="cb7-108"><a href="#cb7-108" aria-hidden="true" tabindex="-1"></a>  fields <span class="ot">&lt;-</span> <span class="fu">strsplit</span>(<span class="fu">trimws</span>(schema), <span class="st">"</span><span class="sc">\\</span><span class="st">s+"</span>)[[<span class="dv">1</span>]]</span>
+<span id="cb7-109"><a href="#cb7-109" aria-hidden="true" tabindex="-1"></a>  out <span class="ot">&lt;-</span> <span class="fu">vector</span>(<span class="st">"list"</span>, <span class="fu">length</span>(fields))</span>
+<span id="cb7-110"><a href="#cb7-110" aria-hidden="true" tabindex="-1"></a>  <span class="fu">names</span>(out) <span class="ot">&lt;-</span> fields</span>
+<span id="cb7-111"><a href="#cb7-111" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-112"><a href="#cb7-112" aria-hidden="true" tabindex="-1"></a>  pos <span class="ot">&lt;-</span> <span class="dv">1</span>L</span>
+<span id="cb7-113"><a href="#cb7-113" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (i <span class="cf">in</span> <span class="fu">seq_along</span>(fields)) {</span>
+<span id="cb7-114"><a href="#cb7-114" aria-hidden="true" tabindex="-1"></a>    sp <span class="ot">&lt;-</span> <span class="fu">field_spec</span>(fields[i])</span>
+<span id="cb7-115"><a href="#cb7-115" aria-hidden="true" tabindex="-1"></a>    block <span class="ot">&lt;-</span> <span class="fu">hex_block</span>(hex_string, pos, sp<span class="sc">$</span>n_hex)</span>
+<span id="cb7-116"><a href="#cb7-116" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-117"><a href="#cb7-117" aria-hidden="true" tabindex="-1"></a>    out[[i]] <span class="ot">&lt;-</span> <span class="cf">if</span> (<span class="fu">nchar</span>(block) <span class="sc">==</span> sp<span class="sc">$</span>n_hex) sp<span class="sc">$</span><span class="fu">decode</span>(block) <span class="cf">else</span> <span class="cn">NA</span></span>
+<span id="cb7-118"><a href="#cb7-118" aria-hidden="true" tabindex="-1"></a>    pos <span class="ot">&lt;-</span> pos <span class="sc">+</span> sp<span class="sc">$</span>n_hex</span>
+<span id="cb7-119"><a href="#cb7-119" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-120"><a href="#cb7-120" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-121"><a href="#cb7-121" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Warn if extra characters remain (usually indicates schema mismatch)</span></span>
+<span id="cb7-122"><a href="#cb7-122" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (pos <span class="sc">&lt;=</span> <span class="fu">nchar</span>(hex_string)) {</span>
+<span id="cb7-123"><a href="#cb7-123" aria-hidden="true" tabindex="-1"></a>    leftover <span class="ot">&lt;-</span> <span class="fu">substr</span>(hex_string, pos, <span class="fu">nchar</span>(hex_string))</span>
+<span id="cb7-124"><a href="#cb7-124" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">nchar</span>(<span class="fu">trimws</span>(leftover)) <span class="sc">&gt;</span> <span class="dv">0</span>L) {</span>
+<span id="cb7-125"><a href="#cb7-125" aria-hidden="true" tabindex="-1"></a>      <span class="fu">warning</span>(<span class="st">"Unused trailing hex characters: "</span>, leftover)</span>
+<span id="cb7-126"><a href="#cb7-126" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb7-127"><a href="#cb7-127" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb7-128"><a href="#cb7-128" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-129"><a href="#cb7-129" aria-hidden="true" tabindex="-1"></a>  out</span>
+<span id="cb7-130"><a href="#cb7-130" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Code for plausibility check of the data (are the outputs reasonable); If e.g.&nbsp;a byte is shifted, usually this will fail and is thus a useful check of the integrity</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">#' Check plausibility of decoded sensor values</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="co">#' Performs a simple plausibility check on decoded sensor data.</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">#' Ground reference values (`*.gnd`) must lie between -1000 and -500,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co">#' and pressure values (`*.pressure`) between 620000 and 740000.</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co">#' If all values fall within the expected ranges, a message "Plausibility check: OK"</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="co">#' is printed. Otherwise a warning is issued.</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param decoded Named list returned by `decode_hex_line()`.</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Invisibly returns `NULL`. The function is intended for quick validation.</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="co">#' @examples</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="co">#' decoded &lt;- decode_hex_line(schema, hex_string)</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="co">#' check_plausibility(decoded)</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>check_plausibility <span class="ot">&lt;-</span> <span class="cf">function</span>(decoded) {</span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>  gnd  <span class="ot">&lt;-</span> <span class="fu">unlist</span>(decoded[<span class="fu">grep</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.gnd$"</span>, <span class="fu">names</span>(decoded))])</span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>  pres <span class="ot">&lt;-</span> <span class="fu">unlist</span>(decoded[<span class="fu">grep</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.pressure$"</span>, <span class="fu">names</span>(decoded))])</span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="fu">all</span>(gnd <span class="sc">&gt;=</span> <span class="sc">-</span><span class="dv">1000</span> <span class="sc">&amp;</span> gnd <span class="sc">&lt;=</span> <span class="sc">-</span><span class="dv">500</span>, <span class="at">na.rm =</span> <span class="cn">TRUE</span>) <span class="sc">&amp;&amp;</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>      <span class="fu">all</span>(pres <span class="sc">&gt;=</span> <span class="dv">620000</span> <span class="sc">&amp;</span> pres <span class="sc">&lt;=</span> <span class="dv">740000</span>, <span class="at">na.rm =</span> <span class="cn">TRUE</span>)) {</span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>    <span class="fu">message</span>(<span class="st">"Plausibility check: OK"</span>)</span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>  } <span class="cf">else</span> {</span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>    <span class="fu">warning</span>(<span class="st">"Plausibility check failed"</span>)</span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Define the schema (= what is sent); This is a configuration programmed on the field and will stay all the time like this. It differs for each head = for each measurement device and is therefore hardcoded here.</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>schema_head03 <span class="ot">&lt;-</span> <span class="st">"time_unix adc_temp    n1.ntc1 n1.ntc2 n1.gnd  n1.pressure n2.ntc1 n2.ntc2 n2.gnd  n2.pressure n3.ntc1 n3.ntc2 n3.gnd  n3.pressure n4.ntc1 n4.ntc2 n4.gnd  n4.pressure n5.ntc1 n5.ntc2 n5.gnd  n5.pressure n6.ntc1 n6.ntc2 n6.gnd  n6.pressure n7.ntc1 n7.ntc2 n7.gnd  n7.pressure n8.ntc1 n8.ntc2 n8.gnd  n8.pressure n9.ntc1 n9.ntc2 n9.gnd  n9.pressure n10.ntc1    n10.ntc2    n10.gnd n10.pressure    n11.ntc1    n11.ntc2    n11.gnd n11.pressure    n12.ntc1    n12.ntc2    n12.gnd n12.pressure    n13.ntc1    n13.ntc2    n13.gnd n13.pressure    n14.ntc1    n14.ntc2    n14.gnd n14.pressure    n15.ntc1    n15.ntc2    n15.gnd n15.pressure    n16.ntc1    n16.ntc2    n16.gnd n16.pressure    n17.ntc1    n17.ntc2    n17.gnd n17.pressure    n18.ntc1    n18.ntc2    n18.gnd n18.pressure    n19.ntc1    n19.ntc2    n19.gnd n19.pressure    n20.ntc1    n20.ntc2    n20.gnd n20.pressure    n21.ntc1    n21.ntc2    n21.gnd n21.pressure    n22.ntc1    n22.ntc2    n22.gnd n22.pressure    n23.ntc1    n23.ntc2    n23.gnd n23.pressure    n24.ntc1    n24.ntc2    n24.gnd n24.pressure    n25.ntc1    n25.ntc2    n25.gnd n25.pressure    n26.ntc1    n26.ntc2    n26.gnd n26.pressure    n27.ntc1    n27.ntc2    n27.gnd n27.pressure    n28.ntc1    n28.ntc2    n28.gnd n28.pressure    n29.ntc1    n29.ntc2    n29.gnd n29.pressure    n30.ntc1    n30.ntc2    n30.gnd n30.pressure    n31.ntc1    n31.ntc2    n31.gnd n31.pressure    n32.ntc1    n32.ntc2    n32.gnd n32.pressure    n33.ntc1    n33.ntc2    n33.gnd n33.pressure    n34.ntc1    n34.ntc2    n34.gnd n34.pressure    n35.ntc1    n35.ntc2    n35.gnd n35.pressure    battery_mv"</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>schema_head04 <span class="ot">&lt;-</span> <span class="st">"time_unix adc_temp    n1.ntc1 n1.ntc2 n1.testSB   n1.gnd  n2.ntc1 n2.ntc2 n2.testSB   n2.gnd  n3.ntc1 n3.ntc2 n3.testSB   n3.gnd  n4.ntc1 n4.ntc2 n4.testSB   n4.gnd  n5.ntc1 n5.ntc2 n5.testSB   n5.gnd  n6.ntc1 n6.ntc2 n6.testSB   n6.gnd  n7.ntc1 n7.ntc2 n7.testSB   n7.gnd  n8.ntc1 n8.ntc2 n8.testSB   n8.gnd  n9.ntc1 n9.ntc2 n9.testSB   n9.gnd  n10.ntc1    n10.ntc2    n10.testSB  n10.gnd n11.ntc1    n11.ntc2    n11.testSB  n11.gnd n12.ntc1    n12.ntc2    n12.testSB  n12.gnd n13.ntc1    n13.ntc2    n13.testSB  n13.gnd n14.ntc1    n14.ntc2    n14.testSB  n14.gnd n15.ntc1    n15.ntc2    n15.testSB  n15.gnd n16.ntc1    n16.ntc2    n16.testSB  n16.gnd n17.ntc1    n17.ntc2    n17.testSB  n17.gnd n18.ntc1    n18.ntc2    n18.testSB  n18.gnd n19.ntc1    n19.ntc2    n19.testSB  n19.gnd n20.ntc1    n20.ntc2    n20.testSB  n20.gnd n21.ntc1    n21.ntc2    n21.testSB  n21.gnd n22.ntc1    n22.ntc2    n22.testSB  n22.gnd n23.ntc1    n23.ntc2    n23.testSB  n23.gnd n24.ntc1    n24.ntc2    n24.testSB  n24.gnd n25.ntc1    n25.ntc2    n25.testSB  n25.gnd battery_mv"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Use example data (just copied from the rock7 web interface) to test if the encoding works</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>example_head03 <span class="ot">&lt;-</span> <span class="st">"6971e7d236cc371ed93a1ebdd7fccc0a571a48041d47dd5afcf90a5827477e02478b2cfcca0a5c6a47971a476e50fcd10a59cd47e0a847f6c4fcdf0a5ad547f66947ec67fcf40a5c91485b22486be5fcb10a5f8148bfb1489ac2fca60a616b48b7a448d80cfcbc0a624048bc9748e817fced0a658148d6af48fad0fcea0a6b2e48d442491b22fcd10a6faa24d30e24ec91fd240a579c27a7ac27bf89fccc0a56ea2d08f12d0c71fc910a56c9326aa6327c29fd100a567d378ee6378712fcd70a569f3f71f23f5c48fcb20a565c4456e3445c02fccd0a5b2046e0a346df55fcc50a579e47ce0547df41fce90a57c74811bd480d32fcff0a583b47f52347f4a4fce00a57e147c9a947ee7cfcd80a5938479d6547bacdfccf0a595b242bac2445d0fccc0a5743256483256b9bfce80a5657262eb5260830fcdf0a56d2274339272f0cfccc0a56ed29cfc429df8efd0d0a56c52cb2902cb9d2fcee0a572b2ecec42edae5fd170a56ae31009730facdfcaf0a5736340a893420bffcd30a55ef36c87c36b1fcfd0b0a56461a18"</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>decoded <span class="ot">&lt;-</span> <span class="fu">decode_hex_line</span>(schema_head03, example_head03)</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="fu">check_plausibility</span>(decoded)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Plausibility check: OK</code></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">print</span>(decoded)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>$time_unix
+[1] 1769072594
+
+$adc_temp
+[1] 3591223
+
+$n1.ntc1
+[1] 2021690
+
+$n1.ntc2
+[1] 2014679
+
+$n1.gnd
+[1] -820
+
+$n1.pressure
+[1] 677658
+
+$n2.ntc1
+[1] 4719645
+
+$n2.ntc2
+[1] 4709722
+
+$n2.gnd
+[1] -775
+
+$n2.pressure
+[1] 677927
+
+$n3.ntc1
+[1] 4685314
+
+$n3.ntc2
+[1] 4688684
+
+$n3.gnd
+[1] -822
+
+$n3.pressure
+[1] 679018
+
+$n4.ntc1
+[1] 4691738
+
+$n4.ntc2
+[1] 4681296
+
+$n4.gnd
+[1] -815
+
+$n4.pressure
+[1] 678349
+
+$n5.ntc1
+[1] 4710568
+
+$n5.ntc2
+[1] 4716228
+
+$n5.gnd
+[1] -801
+
+$n5.pressure
+[1] 678613
+
+$n6.ntc1
+[1] 4716137
+
+$n6.ntc2
+[1] 4713575
+
+$n6.gnd
+[1] -780
+
+$n6.pressure
+[1] 679057
+
+$n7.ntc1
+[1] 4741922
+
+$n7.ntc2
+[1] 4746213
+
+$n7.gnd
+[1] -847
+
+$n7.pressure
+[1] 679809
+
+$n8.ntc1
+[1] 4767665
+
+$n8.ntc2
+[1] 4758210
+
+$n8.gnd
+[1] -858
+
+$n8.pressure
+[1] 680299
+
+$n9.ntc1
+[1] 4765604
+
+$n9.ntc2
+[1] 4773900
+
+$n9.gnd
+[1] -836
+
+$n9.pressure
+[1] 680512
+
+$n10.ntc1
+[1] 4766871
+
+$n10.ntc2
+[1] 4778007
+
+$n10.gnd
+[1] -787
+
+$n10.pressure
+[1] 681345
+
+$n11.ntc1
+[1] 4773551
+
+$n11.ntc2
+[1] 4782800
+
+$n11.gnd
+[1] -790
+
+$n11.pressure
+[1] 682798
+
+$n12.ntc1
+[1] 4772930
+
+$n12.ntc2
+[1] 4791074
+
+$n12.gnd
+[1] -815
+
+$n12.pressure
+[1] 683946
+
+$n13.ntc1
+[1] 2413326
+
+$n13.ntc2
+[1] 2419857
+
+$n13.gnd
+[1] -732
+
+$n13.pressure
+[1] 677788
+
+$n14.ntc1
+[1] 2598828
+
+$n14.ntc2
+[1] 2604937
+
+$n14.gnd
+[1] -820
+
+$n14.pressure
+[1] 677610
+
+$n15.ntc1
+[1] 2951409
+
+$n15.ntc2
+[1] 2952305
+
+$n15.gnd
+[1] -879
+
+$n15.pressure
+[1] 677577
+
+$n16.ntc1
+[1] 3304102
+
+$n16.ntc2
+[1] 3308585
+
+$n16.gnd
+[1] -752
+
+$n16.pressure
+[1] 677501
+
+$n17.ntc1
+[1] 3641062
+
+$n17.ntc2
+[1] 3639058
+
+$n17.gnd
+[1] -809
+
+$n17.pressure
+[1] 677535
+
+$n18.ntc1
+[1] 4157938
+
+$n18.ntc2
+[1] 4152392
+
+$n18.gnd
+[1] -846
+
+$n18.pressure
+[1] 677468
+
+$n19.ntc1
+[1] 4478691
+
+$n19.ntc2
+[1] 4480002
+
+$n19.gnd
+[1] -819
+
+$n19.pressure
+[1] 678688
+
+$n20.ntc1
+[1] 4645027
+
+$n20.ntc2
+[1] 4644693
+
+$n20.gnd
+[1] -827
+
+$n20.pressure
+[1] 677790
+
+$n21.ntc1
+[1] 4705797
+
+$n21.ntc2
+[1] 4710209
+
+$n21.gnd
+[1] -791
+
+$n21.pressure
+[1] 677831
+
+$n22.ntc1
+[1] 4723133
+
+$n22.ntc2
+[1] 4721970
+
+$n22.gnd
+[1] -769
+
+$n22.pressure
+[1] 677947
+
+$n23.ntc1
+[1] 4715811
+
+$n23.ntc2
+[1] 4715684
+
+$n23.gnd
+[1] -800
+
+$n23.pressure
+[1] 677857
+
+$n24.ntc1
+[1] 4704681
+
+$n24.ntc2
+[1] 4714108
+
+$n24.gnd
+[1] -808
+
+$n24.pressure
+[1] 678200
+
+$n25.ntc1
+[1] 4693349
+
+$n25.ntc2
+[1] 4700877
+
+$n25.gnd
+[1] -817
+
+$n25.pressure
+[1] 678235
+
+$n26.ntc1
+[1] 2370476
+
+$n26.ntc2
+[1] 2377168
+
+$n26.gnd
+[1] -820
+
+$n26.pressure
+[1] 677699
+
+$n27.ntc1
+[1] 2450563
+
+$n27.ntc2
+[1] 2452379
+
+$n27.gnd
+[1] -792
+
+$n27.pressure
+[1] 677463
+
+$n28.ntc1
+[1] 2502325
+
+$n28.ntc2
+[1] 2492464
+
+$n28.gnd
+[1] -801
+
+$n28.pressure
+[1] 677586
+
+$n29.ntc1
+[1] 2573113
+
+$n29.ntc2
+[1] 2567948
+
+$n29.gnd
+[1] -820
+
+$n29.pressure
+[1] 677613
+
+$n30.ntc1
+[1] 2740164
+
+$n30.ntc2
+[1] 2744206
+
+$n30.gnd
+[1] -755
+
+$n30.pressure
+[1] 677573
+
+$n31.ntc1
+[1] 2929296
+
+$n31.ntc2
+[1] 2931154
+
+$n31.gnd
+[1] -786
+
+$n31.pressure
+[1] 677675
+
+$n32.ntc1
+[1] 3067588
+
+$n32.ntc2
+[1] 3070693
+
+$n32.gnd
+[1] -745
+
+$n32.pressure
+[1] 677550
+
+$n33.ntc1
+[1] 3211415
+
+$n33.ntc2
+[1] 3209933
+
+$n33.gnd
+[1] -849
+
+$n33.pressure
+[1] 677686
+
+$n34.ntc1
+[1] 3410569
+
+$n34.ntc2
+[1] 3416255
+
+$n34.gnd
+[1] -813
+
+$n34.pressure
+[1] 677359
+
+$n35.ntc1
+[1] 3590268
+
+$n35.ntc2
+[1] 3584508
+
+$n35.gnd
+[1] -757
+
+$n35.pressure
+[1] 677446
+
+$battery_mv
+[1] 6680</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>data_head04 <span class="ot">&lt;-</span> <span class="st">"69a5cb0a36a52835627235540663d24afcad38f48238ee6b63c79dfc8944f52644e16663bfb5fc9847891e47850663c4dbfc9547a57d47b0f063b71dfc7c479f9247aa7163c8b2fc6c47fc8547f54b63bb43fcb148301848293d63bb57fc3e4874b948604d63bd62fc7848b75948951463bbf3fc5d48de5748c05163b9a8fc5d48dc1348fc7763b76dfc4e490bea490b5e63baebfc6848fd95491e5c63bd17fc6348f59d4907a563c08dfc7a48c85248fff063a956fc4c48cc6748c02663bbedfcbf487d5e4878e763b03cfcbb4827e148165663b5c9fc7148108b480f0663bde5fc7134d94634c7d963bfe9fc8f35fa503601c163cd14fc86382a11381be363b303fc793d07373d2a2663b6e1fc7d45e12f460b6f63b404fc8b1a29"</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>decoded <span class="ot">&lt;-</span> <span class="fu">decode_hex_line</span>(schema_head04, data_head04)</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="fu">check_plausibility</span>(decoded)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Plausibility check: OK</code></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">print</span>(decoded)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>$time_unix
+[1] 1772473098
+
+$adc_temp
+[1] 3581224
+
+$n1.ntc1
+[1] 3498610
+
+$n1.ntc2
+[1] 3494918
+
+$n1.testSB
+[1] 6541898
+
+$n1.gnd
+[1] -851
+
+$n2.ntc1
+[1] 3732610
+
+$n2.ntc2
+[1] 3731051
+
+$n2.testSB
+[1] 6539165
+
+$n2.gnd
+[1] -887
+
+$n3.ntc1
+[1] 4519206
+
+$n3.ntc2
+[1] 4514150
+
+$n3.testSB
+[1] 6537141
+
+$n3.gnd
+[1] -872
+
+$n4.ntc1
+[1] 4688158
+
+$n4.ntc2
+[1] 4687110
+
+$n4.testSB
+[1] 6538459
+
+$n4.gnd
+[1] -875
+
+$n5.ntc1
+[1] 4695421
+
+$n5.ntc2
+[1] 4698352
+
+$n5.testSB
+[1] 6534941
+
+$n5.gnd
+[1] -900
+
+$n6.ntc1
+[1] 4693906
+
+$n6.ntc2
+[1] 4696689
+
+$n6.testSB
+[1] 6539442
+
+$n6.gnd
+[1] -916
+
+$n7.ntc1
+[1] 4717701
+
+$n7.ntc2
+[1] 4715851
+
+$n7.testSB
+[1] 6536003
+
+$n7.gnd
+[1] -847
+
+$n8.ntc1
+[1] 4730904
+
+$n8.ntc2
+[1] 4729149
+
+$n8.testSB
+[1] 6536023
+
+$n8.gnd
+[1] -962
+
+$n9.ntc1
+[1] 4748473
+
+$n9.ntc2
+[1] 4743245
+
+$n9.testSB
+[1] 6536546
+
+$n9.gnd
+[1] -904
+
+$n10.ntc1
+[1] 4765529
+
+$n10.ntc2
+[1] 4756756
+
+$n10.testSB
+[1] 6536179
+
+$n10.gnd
+[1] -931
+
+$n11.ntc1
+[1] 4775511
+
+$n11.ntc2
+[1] 4767825
+
+$n11.testSB
+[1] 6535592
+
+$n11.gnd
+[1] -931
+
+$n12.ntc1
+[1] 4774931
+
+$n12.ntc2
+[1] 4783223
+
+$n12.testSB
+[1] 6535021
+
+$n12.gnd
+[1] -946
+
+$n13.ntc1
+[1] 4787178
+
+$n13.ntc2
+[1] 4787038
+
+$n13.testSB
+[1] 6535915
+
+$n13.gnd
+[1] -920
+
+$n14.ntc1
+[1] 4783509
+
+$n14.ntc2
+[1] 4791900
+
+$n14.testSB
+[1] 6536471
+
+$n14.gnd
+[1] -925
+
+$n15.ntc1
+[1] 4781469
+
+$n15.ntc2
+[1] 4786085
+
+$n15.testSB
+[1] 6537357
+
+$n15.gnd
+[1] -902
+
+$n16.ntc1
+[1] 4769874
+
+$n16.ntc2
+[1] 4784112
+
+$n16.testSB
+[1] 6531414
+
+$n16.gnd
+[1] -948
+
+$n17.ntc1
+[1] 4770919
+
+$n17.ntc2
+[1] 4767782
+
+$n17.testSB
+[1] 6536173
+
+$n17.gnd
+[1] -833
+
+$n18.ntc1
+[1] 4750686
+
+$n18.ntc2
+[1] 4749543
+
+$n18.testSB
+[1] 6533180
+
+$n18.gnd
+[1] -837
+
+$n19.ntc1
+[1] 4728801
+
+$n19.ntc2
+[1] 4724310
+
+$n19.testSB
+[1] 6534601
+
+$n19.gnd
+[1] -911
+
+$n20.ntc1
+[1] 4722827
+
+$n20.ntc2
+[1] 4722438
+
+$n20.testSB
+[1] 6536677
+
+$n20.gnd
+[1] -911
+
+$n21.ntc1
+[1] 3463494
+
+$n21.ntc2
+[1] 3459033
+
+$n21.testSB
+[1] 6537193
+
+$n21.gnd
+[1] -881
+
+$n22.ntc1
+[1] 3537488
+
+$n22.ntc2
+[1] 3539393
+
+$n22.testSB
+[1] 6540564
+
+$n22.gnd
+[1] -890
+
+$n23.ntc1
+[1] 3680785
+
+$n23.ntc2
+[1] 3677155
+
+$n23.testSB
+[1] 6533891
+
+$n23.gnd
+[1] -903
+
+$n24.ntc1
+[1] 3999543
+
+$n24.ntc2
+[1] 4008486
+
+$n24.testSB
+[1] 6534881
+
+$n24.gnd
+[1] -899
+
+$n25.ntc1
+[1] 4579631
+
+$n25.ntc2
+[1] 4590447
+
+$n25.testSB
+[1] 6534148
+
+$n25.gnd
+[1] -885
+
+$battery_mv
+[1] 6697</code></pre>
+</div>
+</div>
+</section>
+<section id="now-read-an-exported-file-from-rockblock-csv-file-with-the-payload-concatenate-the-messages-for-head03-two-messages-are-sent-as-the-data-doesnt-fit-into-one" class="level2">
+<h2 class="anchored" data-anchor-id="now-read-an-exported-file-from-rockblock-csv-file-with-the-payload-concatenate-the-messages-for-head03-two-messages-are-sent-as-the-data-doesnt-fit-into-one">Now read an exported file from Rockblock (csv file with the payload), concatenate the messages (for head03 two messages are sent as the data doesn’t fit into one</h2>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(readr)</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr)</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(lubridate)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>
+Attaching package: 'lubridate'</code></pre>
+</div>
+<div class="cell-output cell-output-stderr">
+<pre><code>The following objects are masked from 'package:base':
+
+    date, intersect, setdiff, union</code></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(purrr)</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyr)</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tibble)</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="co">#Example file for head03</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>df <span class="ot">&lt;-</span> <span class="fu">read_csv</span>(<span class="st">"./data/messages-1772658094615.csv"</span>, <span class="at">show_col_types =</span> <span class="cn">FALSE</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">rename</span>(<span class="at">datetime_utc =</span> <span class="st">`</span><span class="at">Date Time (UTC)</span><span class="st">`</span>,</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>         <span class="at">payload      =</span> Payload,</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>         <span class="at">nbytes       =</span> <span class="st">`</span><span class="at">Length (Bytes)</span><span class="st">`</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">datetime_utc =</span> <span class="fu">dmy_hms</span>(datetime_utc, <span class="at">tz =</span> <span class="st">"UTC"</span>)) <span class="sc">%&gt;%</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(datetime_utc)</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a><span class="co"># ---- 2) 340+54 Paare zu einer hex_data Zeile zusammenfügen ---</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>pairs <span class="ot">&lt;-</span> df <span class="sc">%&gt;%</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>    <span class="at">next_time   =</span> <span class="fu">lead</span>(datetime_utc),</span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    <span class="at">next_nbytes =</span> <span class="fu">lead</span>(nbytes),</span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>    <span class="at">next_pay    =</span> <span class="fu">lead</span>(payload),</span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>    <span class="at">dt_min      =</span> <span class="fu">as.numeric</span>(<span class="fu">difftime</span>(next_time, datetime_utc, <span class="at">units =</span> <span class="st">"mins"</span>))</span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">%&gt;%</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(nbytes <span class="sc">==</span> <span class="dv">340</span>, next_nbytes <span class="sc">==</span> <span class="dv">54</span>, <span class="sc">!</span><span class="fu">is.na</span>(dt_min), dt_min <span class="sc">&lt;=</span> <span class="dv">10</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">transmute</span>(</span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>    <span class="at">recv_time_utc =</span> next_time,                 <span class="co"># Zeitpunkt, wenn komplett</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>    <span class="at">start_time_utc =</span> datetime_utc,             <span class="co"># Zeitpunkt der 340B Nachricht</span></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>    <span class="at">hex_data =</span> <span class="fu">paste0</span>(payload, next_pay)</span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>  )</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>And encode all messages</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>decoded_tbl <span class="ot">&lt;-</span> pairs <span class="sc">%&gt;%</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">decoded =</span> <span class="fu">map</span>(hex_data, <span class="sc">~</span> <span class="fu">decode_hex_line</span>(schema_head03, .x))) <span class="sc">%&gt;%</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">unnest_wider</span>(decoded)</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="co">#Check all messages for plausibility</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>decoded_tbl <span class="sc">%&gt;%</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">rowwise</span>() <span class="sc">%&gt;%</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">.check =</span> <span class="fu">list</span>(<span class="fu">check_plausibility</span>(<span class="fu">as.list</span>(<span class="fu">pick</span>(<span class="fu">starts_with</span>(<span class="st">"n"</span>)))))) <span class="sc">%&gt;%</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ungroup</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK
+Plausibility check: OK</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 89 × 147
+   recv_time_utc       start_time_utc      hex_data   time_unix adc_temp n1.ntc1
+   &lt;dttm&gt;              &lt;dttm&gt;              &lt;chr&gt;          &lt;dbl&gt;    &lt;int&gt;   &lt;int&gt;
+ 1 2026-01-18 14:45:08 2026-01-18 14:44:55 696b9f8a3…    1.77e9  3996954 1889531
+ 2 2026-01-18 16:45:15 2026-01-18 16:45:03 696bbbaa3…    1.77e9  4008610 1844821
+ 3 2026-01-18 18:46:12 2026-01-18 18:46:02 696bd7ca3…    1.77e9  4003125 1852397
+ 4 2026-01-19 09:07:13 2026-01-19 09:07:01 696ca1d23…    1.77e9  3594873 1961143
+ 5 2026-01-19 21:07:06 2026-01-19 21:06:54 696d4a923…    1.77e9  3592220 2129290
+ 6 2026-01-20 09:07:07 2026-01-20 09:06:59 696df3533…    1.77e9  3591702 2111516
+ 7 2026-01-20 21:07:07 2026-01-20 21:07:01 696e9c123…    1.77e9  3591577 2267324
+ 8 2026-01-21 09:07:07 2026-01-21 09:07:02 696f44d23…    1.77e9  3591318 2289560
+ 9 2026-01-21 21:07:07 2026-01-21 21:06:58 696fed923…    1.77e9  3591310 2306979
+10 2026-01-22 09:07:11 2026-01-22 09:06:59 697096523…    1.77e9  3591388 2258289
+# ℹ 79 more rows
+# ℹ 141 more variables: n1.ntc2 &lt;int&gt;, n1.gnd &lt;int&gt;, n1.pressure &lt;int&gt;,
+#   n2.ntc1 &lt;int&gt;, n2.ntc2 &lt;int&gt;, n2.gnd &lt;int&gt;, n2.pressure &lt;int&gt;,
+#   n3.ntc1 &lt;int&gt;, n3.ntc2 &lt;int&gt;, n3.gnd &lt;int&gt;, n3.pressure &lt;int&gt;,
+#   n4.ntc1 &lt;int&gt;, n4.ntc2 &lt;int&gt;, n4.gnd &lt;int&gt;, n4.pressure &lt;int&gt;,
+#   n5.ntc1 &lt;int&gt;, n5.ntc2 &lt;int&gt;, n5.gnd &lt;int&gt;, n5.pressure &lt;int&gt;,
+#   n6.ntc1 &lt;int&gt;, n6.ntc2 &lt;int&gt;, n6.gnd &lt;int&gt;, n6.pressure &lt;int&gt;, …</code></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>decoded_tbl</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 89 × 146
+   recv_time_utc       start_time_utc      hex_data   time_unix adc_temp n1.ntc1
+   &lt;dttm&gt;              &lt;dttm&gt;              &lt;chr&gt;          &lt;dbl&gt;    &lt;int&gt;   &lt;int&gt;
+ 1 2026-01-18 14:45:08 2026-01-18 14:44:55 696b9f8a3…    1.77e9  3996954 1889531
+ 2 2026-01-18 16:45:15 2026-01-18 16:45:03 696bbbaa3…    1.77e9  4008610 1844821
+ 3 2026-01-18 18:46:12 2026-01-18 18:46:02 696bd7ca3…    1.77e9  4003125 1852397
+ 4 2026-01-19 09:07:13 2026-01-19 09:07:01 696ca1d23…    1.77e9  3594873 1961143
+ 5 2026-01-19 21:07:06 2026-01-19 21:06:54 696d4a923…    1.77e9  3592220 2129290
+ 6 2026-01-20 09:07:07 2026-01-20 09:06:59 696df3533…    1.77e9  3591702 2111516
+ 7 2026-01-20 21:07:07 2026-01-20 21:07:01 696e9c123…    1.77e9  3591577 2267324
+ 8 2026-01-21 09:07:07 2026-01-21 09:07:02 696f44d23…    1.77e9  3591318 2289560
+ 9 2026-01-21 21:07:07 2026-01-21 21:06:58 696fed923…    1.77e9  3591310 2306979
+10 2026-01-22 09:07:11 2026-01-22 09:06:59 697096523…    1.77e9  3591388 2258289
+# ℹ 79 more rows
+# ℹ 140 more variables: n1.ntc2 &lt;int&gt;, n1.gnd &lt;int&gt;, n1.pressure &lt;int&gt;,
+#   n2.ntc1 &lt;int&gt;, n2.ntc2 &lt;int&gt;, n2.gnd &lt;int&gt;, n2.pressure &lt;int&gt;,
+#   n3.ntc1 &lt;int&gt;, n3.ntc2 &lt;int&gt;, n3.gnd &lt;int&gt;, n3.pressure &lt;int&gt;,
+#   n4.ntc1 &lt;int&gt;, n4.ntc2 &lt;int&gt;, n4.gnd &lt;int&gt;, n4.pressure &lt;int&gt;,
+#   n5.ntc1 &lt;int&gt;, n5.ntc2 &lt;int&gt;, n5.gnd &lt;int&gt;, n5.pressure &lt;int&gt;,
+#   n6.ntc1 &lt;int&gt;, n6.ntc2 &lt;int&gt;, n6.gnd &lt;int&gt;, n6.pressure &lt;int&gt;, …</code></pre>
+</div>
+</div>
+</section>
+<section id="now-level-2-processing-of-the-raw-data" class="level2">
+<h2 class="anchored" data-anchor-id="now-level-2-processing-of-the-raw-data">Now Level 2, processing of the raw data</h2>
+<p>Conversion codes for the fields</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert ADC counts to temperature</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="co">#' Linear conversion from ADC counts to temperature (°C).</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param count Numeric vector of ADC counts.</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Numeric vector of temperatures in °C.</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>adc2temp <span class="ot">&lt;-</span> <span class="cf">function</span>(count) {</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="fl">6.101e-5</span> <span class="sc">*</span> count <span class="sc">-</span> <span class="fl">256.6</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert NTC ADC counts to uncalibrated temperature</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a><span class="co">#' Converts NTC counts to temperature (°C) using the sensor/resistor model</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a><span class="co">#' implemented in the logger firmware.</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param counts Numeric vector of NTC counts.</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Numeric vector of uncalibrated temperatures in °C.</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>NTCcounts2temp <span class="ot">&lt;-</span> <span class="cf">function</span>(counts) {</span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>  H <span class="ot">&lt;-</span> (<span class="sc">-</span>counts <span class="sc">*</span> <span class="dv">1000000</span>) <span class="sc">/</span> (counts <span class="sc">-</span> <span class="dv">33554432</span>)</span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>  resistance <span class="ot">&lt;-</span> (H <span class="sc">*</span> <span class="dv">499000</span>) <span class="sc">/</span> (<span class="dv">499000</span> <span class="sc">-</span> H)</span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>  temperatures <span class="ot">&lt;-</span> <span class="dv">1</span> <span class="sc">/</span> ((<span class="dv">1</span> <span class="sc">/</span> <span class="dv">3380</span>) <span class="sc">*</span> <span class="fu">log</span>(resistance <span class="sc">/</span> <span class="dv">10000</span>) <span class="sc">+</span> <span class="dv">1</span> <span class="sc">/</span> <span class="fl">298.15</span>)</span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>  temperatures <span class="ot">&lt;-</span> temperatures <span class="sc">-</span> <span class="fl">273.15</span></span>
+<span id="cb27-23"><a href="#cb27-23" aria-hidden="true" tabindex="-1"></a>  temperatures</span>
+<span id="cb27-24"><a href="#cb27-24" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-25"><a href="#cb27-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-26"><a href="#cb27-26" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert pressure counts to hPa</span></span>
+<span id="cb27-27"><a href="#cb27-27" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-28"><a href="#cb27-28" aria-hidden="true" tabindex="-1"></a><span class="co">#' Converts raw pressure values to hectopascal (hPa) by dividing by 10000.</span></span>
+<span id="cb27-29"><a href="#cb27-29" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-30"><a href="#cb27-30" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param pressure Numeric vector of raw pressure values.</span></span>
+<span id="cb27-31"><a href="#cb27-31" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return Numeric vector of pressure in hPa.</span></span>
+<span id="cb27-32"><a href="#cb27-32" aria-hidden="true" tabindex="-1"></a>pressure2hPa <span class="ot">&lt;-</span> <span class="cf">function</span>(pressure) {</span>
+<span id="cb27-33"><a href="#cb27-33" aria-hidden="true" tabindex="-1"></a>  pressure <span class="sc">/</span> <span class="dv">1000</span></span>
+<span id="cb27-34"><a href="#cb27-34" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb27-35"><a href="#cb27-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-36"><a href="#cb27-36" aria-hidden="true" tabindex="-1"></a><span class="co">#' Convert Unix time to POSIXct (UTC)</span></span>
+<span id="cb27-37"><a href="#cb27-37" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-38"><a href="#cb27-38" aria-hidden="true" tabindex="-1"></a><span class="co">#' Converts Unix epoch seconds to a POSIXct timestamp in UTC.</span></span>
+<span id="cb27-39"><a href="#cb27-39" aria-hidden="true" tabindex="-1"></a><span class="co">#'</span></span>
+<span id="cb27-40"><a href="#cb27-40" aria-hidden="true" tabindex="-1"></a><span class="co">#' @param time_unix Numeric vector of Unix time (seconds since 1970-01-01).</span></span>
+<span id="cb27-41"><a href="#cb27-41" aria-hidden="true" tabindex="-1"></a><span class="co">#' @return POSIXct vector in UTC.</span></span>
+<span id="cb27-42"><a href="#cb27-42" aria-hidden="true" tabindex="-1"></a>unix2posix_utc <span class="ot">&lt;-</span> <span class="cf">function</span>(time_unix) {</span>
+<span id="cb27-43"><a href="#cb27-43" aria-hidden="true" tabindex="-1"></a>  <span class="fu">as.POSIXct</span>(time_unix, <span class="at">origin =</span> <span class="st">"1970-01-01"</span>, <span class="at">tz =</span> <span class="st">"UTC"</span>)</span>
+<span id="cb27-44"><a href="#cb27-44" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>And apply the processing</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co"># ---- Apply Level-2 processing to decoded_tbl -----------------</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>decoded_l2 <span class="ot">&lt;-</span> decoded_tbl <span class="sc">%&gt;%</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    <span class="at">time_utc =</span> <span class="fu">unix2posix_utc</span>(time_unix),</span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">adc_temp_C =</span> <span class="fu">adc2temp</span>(adc_temp)</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">%&gt;%</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">across</span>(<span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.ntc[12]$"</span>),</span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>           <span class="sc">~</span> <span class="fu">NTCcounts2temp</span>(.x),</span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>           <span class="at">.names =</span> <span class="st">"{.col}_temp_C"</span>),</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>    <span class="fu">across</span>(<span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.pressure$"</span>),</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>           <span class="sc">~</span> <span class="fu">pressure2hPa</span>(.x),</span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>           <span class="at">.names =</span> <span class="st">"{.col}_hPa"</span>)</span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">%&gt;%</span></span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>  <span class="co"># keep a tidy subset for plotting (adjust as you like)</span></span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(</span>
+<span id="cb28-20"><a href="#cb28-20" aria-hidden="true" tabindex="-1"></a>    recv_time_utc, start_time_utc, time_utc,</span>
+<span id="cb28-21"><a href="#cb28-21" aria-hidden="true" tabindex="-1"></a>    battery_mv, adc_temp_C,</span>
+<span id="cb28-22"><a href="#cb28-22" aria-hidden="true" tabindex="-1"></a>    <span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.ntc[12]_temp_C$"</span>),</span>
+<span id="cb28-23"><a href="#cb28-23" aria-hidden="true" tabindex="-1"></a>    <span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.pressure_hPa$"</span>),</span>
+<span id="cb28-24"><a href="#cb28-24" aria-hidden="true" tabindex="-1"></a>    <span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.gnd$"</span>)</span>
+<span id="cb28-25"><a href="#cb28-25" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb28-26"><a href="#cb28-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-27"><a href="#cb28-27" aria-hidden="true" tabindex="-1"></a>decoded_l2</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output cell-output-stdout">
+<pre><code># A tibble: 89 × 145
+   recv_time_utc       start_time_utc      time_utc            battery_mv
+   &lt;dttm&gt;              &lt;dttm&gt;              &lt;dttm&gt;                   &lt;dbl&gt;
+ 1 2026-01-18 14:45:08 2026-01-18 14:44:55 2026-01-17 14:41:14       6828
+ 2 2026-01-18 16:45:15 2026-01-18 16:45:03 2026-01-17 16:41:14       6819
+ 3 2026-01-18 18:46:12 2026-01-18 18:46:02 2026-01-17 18:41:14       6828
+ 4 2026-01-19 09:07:13 2026-01-19 09:07:01 2026-01-18 09:03:14       6724
+ 5 2026-01-19 21:07:06 2026-01-19 21:06:54 2026-01-18 21:03:14       6706
+ 6 2026-01-20 09:07:07 2026-01-20 09:06:59 2026-01-19 09:03:15       6697
+ 7 2026-01-20 21:07:07 2026-01-20 21:07:01 2026-01-19 21:03:14       6689
+ 8 2026-01-21 09:07:07 2026-01-21 09:07:02 2026-01-20 09:03:14       6671
+ 9 2026-01-21 21:07:07 2026-01-21 21:06:58 2026-01-20 21:03:14       6680
+10 2026-01-22 09:07:11 2026-01-22 09:06:59 2026-01-21 09:03:14       6680
+# ℹ 79 more rows
+# ℹ 141 more variables: adc_temp_C &lt;dbl&gt;, n1.ntc1_temp_C &lt;dbl&gt;,
+#   n1.ntc2_temp_C &lt;dbl&gt;, n2.ntc1_temp_C &lt;dbl&gt;, n2.ntc2_temp_C &lt;dbl&gt;,
+#   n3.ntc1_temp_C &lt;dbl&gt;, n3.ntc2_temp_C &lt;dbl&gt;, n4.ntc1_temp_C &lt;dbl&gt;,
+#   n4.ntc2_temp_C &lt;dbl&gt;, n5.ntc1_temp_C &lt;dbl&gt;, n5.ntc2_temp_C &lt;dbl&gt;,
+#   n6.ntc1_temp_C &lt;dbl&gt;, n6.ntc2_temp_C &lt;dbl&gt;, n7.ntc1_temp_C &lt;dbl&gt;,
+#   n7.ntc2_temp_C &lt;dbl&gt;, n8.ntc1_temp_C &lt;dbl&gt;, n8.ntc2_temp_C &lt;dbl&gt;, …</code></pre>
+</div>
+</div>
+<p>Now some control plots</p>
+<div class="cell">
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb30"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr)</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyr)</span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(ggplot2)</span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(patchwork)</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="co"># ---- Pressure Daten in long format bringen -----------------</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>pressure_long <span class="ot">&lt;-</span> decoded_l2 <span class="sc">%&gt;%</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(time_utc, <span class="fu">matches</span>(<span class="st">"</span><span class="sc">\\</span><span class="st">.pressure_hPa$"</span>)) <span class="sc">%&gt;%</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">pivot_longer</span>(</span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>    <span class="sc">-</span>time_utc,</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">names_to =</span> <span class="st">"sensor"</span>,</span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">values_to =</span> <span class="st">"pressure_hPa"</span></span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a><span class="co"># ---- einzelne Panels ---------------------------------------</span></span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a>p1 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(decoded_l2, <span class="fu">aes</span>(time_utc, n1.ntc1_temp_C)) <span class="sc">+</span></span>
+<span id="cb30-19"><a href="#cb30-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-20"><a href="#cb30-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"NTC1 Temperature (n1)"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"°C"</span>) <span class="sc">+</span></span>
+<span id="cb30-21"><a href="#cb30-21" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span>
+<span id="cb30-22"><a href="#cb30-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-23"><a href="#cb30-23" aria-hidden="true" tabindex="-1"></a>p2 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(pressure_long, <span class="fu">aes</span>(time_utc, pressure_hPa, <span class="at">colour =</span> sensor)) <span class="sc">+</span></span>
+<span id="cb30-24"><a href="#cb30-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-25"><a href="#cb30-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"Pressure (all sensors)"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"hPa"</span>) <span class="sc">+</span></span>
+<span id="cb30-26"><a href="#cb30-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>() <span class="sc">+</span></span>
+<span id="cb30-27"><a href="#cb30-27" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">legend.position =</span> <span class="st">"none"</span>)</span>
+<span id="cb30-28"><a href="#cb30-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-29"><a href="#cb30-29" aria-hidden="true" tabindex="-1"></a>p3 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(decoded_l2, <span class="fu">aes</span>(time_utc, adc_temp_C)) <span class="sc">+</span></span>
+<span id="cb30-30"><a href="#cb30-30" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-31"><a href="#cb30-31" aria-hidden="true" tabindex="-1"></a>  <span class="fu">coord_cartesian</span>(<span class="at">ylim =</span> <span class="fu">c</span>(<span class="sc">-</span><span class="dv">38</span>, <span class="sc">-</span><span class="fl">36.5</span>)) <span class="sc">+</span></span>
+<span id="cb30-32"><a href="#cb30-32" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"ADC Temperature"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"°C"</span>) <span class="sc">+</span></span>
+<span id="cb30-33"><a href="#cb30-33" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span>
+<span id="cb30-34"><a href="#cb30-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-35"><a href="#cb30-35" aria-hidden="true" tabindex="-1"></a>p4 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(decoded_l2, <span class="fu">aes</span>(time_utc, battery_mv)) <span class="sc">+</span></span>
+<span id="cb30-36"><a href="#cb30-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-37"><a href="#cb30-37" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"Battery Voltage"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"mV"</span>) <span class="sc">+</span></span>
+<span id="cb30-38"><a href="#cb30-38" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span>
+<span id="cb30-39"><a href="#cb30-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-40"><a href="#cb30-40" aria-hidden="true" tabindex="-1"></a>p5 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(decoded_l2, <span class="fu">aes</span>(time_utc, n15.ntc1_temp_C)) <span class="sc">+</span></span>
+<span id="cb30-41"><a href="#cb30-41" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-42"><a href="#cb30-42" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"NTC1 Temperature (n15)"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"°C"</span>) <span class="sc">+</span></span>
+<span id="cb30-43"><a href="#cb30-43" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span>
+<span id="cb30-44"><a href="#cb30-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-45"><a href="#cb30-45" aria-hidden="true" tabindex="-1"></a>p6 <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(decoded_l2, <span class="fu">aes</span>(time_utc, n20.ntc1_temp_C)) <span class="sc">+</span></span>
+<span id="cb30-46"><a href="#cb30-46" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb30-47"><a href="#cb30-47" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(<span class="at">title =</span> <span class="st">"NTC1 Temperature (n20)"</span>, <span class="at">x =</span> <span class="st">"Time (UTC)"</span>, <span class="at">y =</span> <span class="st">"°C"</span>) <span class="sc">+</span></span>
+<span id="cb30-48"><a href="#cb30-48" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span>
+<span id="cb30-49"><a href="#cb30-49" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-50"><a href="#cb30-50" aria-hidden="true" tabindex="-1"></a><span class="co"># ---- Layout -------------------------------------------------</span></span>
+<span id="cb30-51"><a href="#cb30-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-52"><a href="#cb30-52" aria-hidden="true" tabindex="-1"></a>(p1 <span class="sc">|</span> p2) <span class="sc">/</span></span>
+<span id="cb30-53"><a href="#cb30-53" aria-hidden="true" tabindex="-1"></a>(p3 <span class="sc">|</span> p4) <span class="sc">/</span></span>
+<span id="cb30-54"><a href="#cb30-54" aria-hidden="true" tabindex="-1"></a>(p5 <span class="sc">|</span> p6)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="EncodingHeads_files/figure-html/unnamed-chunk-10-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

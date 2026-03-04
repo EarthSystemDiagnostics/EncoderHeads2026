@@ -1,0 +1,414 @@
+---
+title: "Encode"
+editor: visual
+---
+
+```{r setup}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+```
+
+## Encoder for the Thermometry chains placed at Kohnen in 2026
+
+The data is a hex-string that has to split up into different blocks and the blocks are than converted to decimal numbers
+
+Code for the encoder:
+
+```{r}
+
+#' Extract a substring block from a hex string
+#'
+#' @param s Character scalar. Full hex string.
+#' @param pos Integer. 1-based start position in `s`.
+#' @param n Integer. Number of characters to extract.
+#' @return Character scalar of length `n` (or shorter if `s` ends early).
+hex_block <- function(s, pos, n) substr(s, pos, pos + n - 1L)
+
+
+#' Convert hexadecimal string to an unsigned number (robust)
+#'
+#' Robustly converts a hexadecimal string to a numeric value.
+#' This avoids potential overflow issues of `strtoi()` for unsigned 32-bit values
+#' (e.g., Unix time encoded as 8 hex chars).
+#'
+#' @param h Character scalar. Hex string (e.g., "1A18", "FFFFFFFF").
+#' @return Numeric scalar (or `NA_real_` if parsing fails).
+#' @examples
+#' hex_to_uint("1a18")     # 6680
+#' hex_to_uint("FFFFFFFF") # 4294967295
+hex_to_uint <- function(h) {
+  if (is.na(h) || h == "" || nchar(h) == 0L) return(NA_real_)
+  h <- toupper(h)
+
+  chars <- strsplit(h, "", fixed = TRUE)[[1]]
+  # Map '0'..'9','A'..'F' -> 0..15
+  nibble <- match(chars, c(as.character(0:9), LETTERS[1:6])) - 1L
+  if (any(is.na(nibble))) return(NA_real_)
+
+  # Accumulate in base-16 (numeric is exact up to 2^53)
+  v <- 0
+  for (d in nibble) v <- v * 16 + d
+  v
+}
+
+
+#' Convert hexadecimal string to signed integer (two's complement)
+#'
+#' Interprets an unsigned hex value as a signed two's-complement integer
+#' of given bit width.
+#'
+#' @param h Character scalar. Hex string.
+#' @param bits Integer. Bit width (e.g., 16, 24).
+#' @return Integer scalar (or `NA_integer_` if parsing fails).
+#' @examples
+#' hex_to_int("FF", 8)     # -1
+#' hex_to_int("8000", 16)  # -32768
+hex_to_int <- function(h, bits) {
+  v <- hex_to_uint(h)
+  if (is.na(v)) return(NA_integer_)
+
+  sign_bit <- 2^(bits - 1L)
+  if (v >= sign_bit) v <- v - 2^bits
+
+  as.integer(v)
+}
+
+
+#' Get decoding specification for a field name
+#'
+#' Returns the number of hex characters (`n_hex`) and a decoding function
+#' to convert the corresponding block into a value.
+#'
+#' Rules implemented:
+#' - `time_unix`: 8 hex chars, unsigned
+#' - `adc_temp`: 6 hex chars, signed 24-bit
+#' - `battery_mv`: 4 hex chars, unsigned (uint16)
+#' - `*.gnd`: 4 hex chars, signed 16-bit
+#' - `*.ntc1`, `*.ntc2`, `*.pressure`: 6 hex chars, signed 24-bit
+#'
+#' @param name Character scalar. Field name from the schema.
+#' @return List with elements `n_hex` (integer) and `decode` (function).
+field_spec <- function(name) {
+  if (name == "time_unix") {
+    return(list(n_hex = 8L, decode = hex_to_uint))
+  }
+  if (name == "adc_temp") {
+    return(list(n_hex = 6L, decode = function(h) hex_to_int(h, bits = 24L)))
+  }
+  if (name == "battery_mv") {
+    return(list(n_hex = 4L, decode = hex_to_uint))
+  }
+
+  if (grepl("\\.gnd$", name)) {
+    return(list(n_hex = 4L, decode = function(h) hex_to_int(h, bits = 16L)))
+  }
+  if (grepl("\\.(ntc1|ntc2|pressure|testSB)$", name)) {
+    return(list(n_hex = 6L, decode = function(h) hex_to_int(h, bits = 24L)))
+  }
+
+  stop("No decoding rule for field: ", name)
+}
+
+
+#' Decode a hex-encoded record according to a schema
+#'
+#' Decodes a single hex string into named values according to a schema that
+#' specifies the order and names of fields. Fields are separated by whitespace.
+#'
+#' @param schema Character scalar. Whitespace-separated field names.
+#'   Example: `"time_unix adc_temp n1.ntc1 n1.ntc2 n1.gnd n1.pressure battery_mv"`.
+#' @param hex_string Character scalar. The full hex payload to decode.
+#' @return Named list with one element per schema field.
+#' @examples
+#' schema <- "time_unix adc_temp n1.ntc1 n1.ntc2 n1.gnd n1.pressure battery_mv"
+#' # decoded <- decode_hex_line(schema, "6971e7d2...1a18")
+decode_hex_line <- function(schema, hex_string) {
+  fields <- strsplit(trimws(schema), "\\s+")[[1]]
+  out <- vector("list", length(fields))
+  names(out) <- fields
+
+  pos <- 1L
+  for (i in seq_along(fields)) {
+    sp <- field_spec(fields[i])
+    block <- hex_block(hex_string, pos, sp$n_hex)
+
+    out[[i]] <- if (nchar(block) == sp$n_hex) sp$decode(block) else NA
+    pos <- pos + sp$n_hex
+  }
+
+  # Warn if extra characters remain (usually indicates schema mismatch)
+  if (pos <= nchar(hex_string)) {
+    leftover <- substr(hex_string, pos, nchar(hex_string))
+    if (nchar(trimws(leftover)) > 0L) {
+      warning("Unused trailing hex characters: ", leftover)
+    }
+  }
+
+  out
+}
+```
+
+Code for plausibility check of the data (are the outputs reasonable); If e.g. a byte is shifted, usually this will fail and is thus a useful check of the integrity
+
+```{r}
+#' Check plausibility of decoded sensor values
+#'
+#' Performs a simple plausibility check on decoded sensor data.
+#' Ground reference values (`*.gnd`) must lie between -1000 and -500,
+#' and pressure values (`*.pressure`) between 620000 and 740000.
+#'
+#' If all values fall within the expected ranges, a message "Plausibility check: OK"
+#' is printed. Otherwise a warning is issued.
+#'
+#' @param decoded Named list returned by `decode_hex_line()`.
+#'
+#' @return Invisibly returns `NULL`. The function is intended for quick validation.
+#'
+#' @examples
+#' decoded <- decode_hex_line(schema, hex_string)
+#' check_plausibility(decoded)
+check_plausibility <- function(decoded) {
+  gnd  <- unlist(decoded[grep("\\.gnd$", names(decoded))])
+  pres <- unlist(decoded[grep("\\.pressure$", names(decoded))])
+
+  if (all(gnd >= -1000 & gnd <= -500, na.rm = TRUE) &&
+      all(pres >= 620000 & pres <= 740000, na.rm = TRUE)) {
+    message("Plausibility check: OK")
+  } else {
+    warning("Plausibility check failed")
+  }
+}
+```
+
+Define the schema (= what is sent); This is a configuration programmed on the field and will stay all the time like this. It differs for each head = for each measurement device and is therefore hardcoded here.
+
+```{r}
+schema_head03 <- "time_unix	adc_temp	n1.ntc1	n1.ntc2	n1.gnd	n1.pressure	n2.ntc1	n2.ntc2	n2.gnd	n2.pressure	n3.ntc1	n3.ntc2	n3.gnd	n3.pressure	n4.ntc1	n4.ntc2	n4.gnd	n4.pressure	n5.ntc1	n5.ntc2	n5.gnd	n5.pressure	n6.ntc1	n6.ntc2	n6.gnd	n6.pressure	n7.ntc1	n7.ntc2	n7.gnd	n7.pressure	n8.ntc1	n8.ntc2	n8.gnd	n8.pressure	n9.ntc1	n9.ntc2	n9.gnd	n9.pressure	n10.ntc1	n10.ntc2	n10.gnd	n10.pressure	n11.ntc1	n11.ntc2	n11.gnd	n11.pressure	n12.ntc1	n12.ntc2	n12.gnd	n12.pressure	n13.ntc1	n13.ntc2	n13.gnd	n13.pressure	n14.ntc1	n14.ntc2	n14.gnd	n14.pressure	n15.ntc1	n15.ntc2	n15.gnd	n15.pressure	n16.ntc1	n16.ntc2	n16.gnd	n16.pressure	n17.ntc1	n17.ntc2	n17.gnd	n17.pressure	n18.ntc1	n18.ntc2	n18.gnd	n18.pressure	n19.ntc1	n19.ntc2	n19.gnd	n19.pressure	n20.ntc1	n20.ntc2	n20.gnd	n20.pressure	n21.ntc1	n21.ntc2	n21.gnd	n21.pressure	n22.ntc1	n22.ntc2	n22.gnd	n22.pressure	n23.ntc1	n23.ntc2	n23.gnd	n23.pressure	n24.ntc1	n24.ntc2	n24.gnd	n24.pressure	n25.ntc1	n25.ntc2	n25.gnd	n25.pressure	n26.ntc1	n26.ntc2	n26.gnd	n26.pressure	n27.ntc1	n27.ntc2	n27.gnd	n27.pressure	n28.ntc1	n28.ntc2	n28.gnd	n28.pressure	n29.ntc1	n29.ntc2	n29.gnd	n29.pressure	n30.ntc1	n30.ntc2	n30.gnd	n30.pressure	n31.ntc1	n31.ntc2	n31.gnd	n31.pressure	n32.ntc1	n32.ntc2	n32.gnd	n32.pressure	n33.ntc1	n33.ntc2	n33.gnd	n33.pressure	n34.ntc1	n34.ntc2	n34.gnd	n34.pressure	n35.ntc1	n35.ntc2	n35.gnd	n35.pressure	battery_mv"
+
+schema_head04 <- "time_unix	adc_temp	n1.ntc1	n1.ntc2	n1.testSB	n1.gnd	n2.ntc1	n2.ntc2	n2.testSB	n2.gnd	n3.ntc1	n3.ntc2	n3.testSB	n3.gnd	n4.ntc1	n4.ntc2	n4.testSB	n4.gnd	n5.ntc1	n5.ntc2	n5.testSB	n5.gnd	n6.ntc1	n6.ntc2	n6.testSB	n6.gnd	n7.ntc1	n7.ntc2	n7.testSB	n7.gnd	n8.ntc1	n8.ntc2	n8.testSB	n8.gnd	n9.ntc1	n9.ntc2	n9.testSB	n9.gnd	n10.ntc1	n10.ntc2	n10.testSB	n10.gnd	n11.ntc1	n11.ntc2	n11.testSB	n11.gnd	n12.ntc1	n12.ntc2	n12.testSB	n12.gnd	n13.ntc1	n13.ntc2	n13.testSB	n13.gnd	n14.ntc1	n14.ntc2	n14.testSB	n14.gnd	n15.ntc1	n15.ntc2	n15.testSB	n15.gnd	n16.ntc1	n16.ntc2	n16.testSB	n16.gnd	n17.ntc1	n17.ntc2	n17.testSB	n17.gnd	n18.ntc1	n18.ntc2	n18.testSB	n18.gnd	n19.ntc1	n19.ntc2	n19.testSB	n19.gnd	n20.ntc1	n20.ntc2	n20.testSB	n20.gnd	n21.ntc1	n21.ntc2	n21.testSB	n21.gnd	n22.ntc1	n22.ntc2	n22.testSB	n22.gnd	n23.ntc1	n23.ntc2	n23.testSB	n23.gnd	n24.ntc1	n24.ntc2	n24.testSB	n24.gnd	n25.ntc1	n25.ntc2	n25.testSB	n25.gnd	battery_mv"
+
+
+```
+
+Use example data (just copied from the rock7 web interface) to test if the encoding works
+
+```{r}
+
+example_head03 <- "6971e7d236cc371ed93a1ebdd7fccc0a571a48041d47dd5afcf90a5827477e02478b2cfcca0a5c6a47971a476e50fcd10a59cd47e0a847f6c4fcdf0a5ad547f66947ec67fcf40a5c91485b22486be5fcb10a5f8148bfb1489ac2fca60a616b48b7a448d80cfcbc0a624048bc9748e817fced0a658148d6af48fad0fcea0a6b2e48d442491b22fcd10a6faa24d30e24ec91fd240a579c27a7ac27bf89fccc0a56ea2d08f12d0c71fc910a56c9326aa6327c29fd100a567d378ee6378712fcd70a569f3f71f23f5c48fcb20a565c4456e3445c02fccd0a5b2046e0a346df55fcc50a579e47ce0547df41fce90a57c74811bd480d32fcff0a583b47f52347f4a4fce00a57e147c9a947ee7cfcd80a5938479d6547bacdfccf0a595b242bac2445d0fccc0a5743256483256b9bfce80a5657262eb5260830fcdf0a56d2274339272f0cfccc0a56ed29cfc429df8efd0d0a56c52cb2902cb9d2fcee0a572b2ecec42edae5fd170a56ae31009730facdfcaf0a5736340a893420bffcd30a55ef36c87c36b1fcfd0b0a56461a18"
+
+
+decoded <- decode_hex_line(schema_head03, example_head03)
+check_plausibility(decoded)
+print(decoded)
+```
+
+```{r}
+
+
+data_head04 <- "69a5cb0a36a52835627235540663d24afcad38f48238ee6b63c79dfc8944f52644e16663bfb5fc9847891e47850663c4dbfc9547a57d47b0f063b71dfc7c479f9247aa7163c8b2fc6c47fc8547f54b63bb43fcb148301848293d63bb57fc3e4874b948604d63bd62fc7848b75948951463bbf3fc5d48de5748c05163b9a8fc5d48dc1348fc7763b76dfc4e490bea490b5e63baebfc6848fd95491e5c63bd17fc6348f59d4907a563c08dfc7a48c85248fff063a956fc4c48cc6748c02663bbedfcbf487d5e4878e763b03cfcbb4827e148165663b5c9fc7148108b480f0663bde5fc7134d94634c7d963bfe9fc8f35fa503601c163cd14fc86382a11381be363b303fc793d07373d2a2663b6e1fc7d45e12f460b6f63b404fc8b1a29"
+
+decoded <- decode_hex_line(schema_head04, data_head04)
+check_plausibility(decoded)
+print(decoded)
+```
+
+## Now read an exported file from Rockblock (csv file with the payload), concatenate the messages (for head03 two messages are sent as the data doesn't fit into one
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(purrr)
+library(tidyr)
+library(tibble)
+
+#Example file for head03
+df <- read_csv("./data/messages-1772658094615.csv", show_col_types = FALSE) %>%
+  rename(datetime_utc = `Date Time (UTC)`,
+         payload      = Payload,
+         nbytes       = `Length (Bytes)`) %>%
+  mutate(datetime_utc = dmy_hms(datetime_utc, tz = "UTC")) %>%
+  arrange(datetime_utc)
+
+# ---- 2) 340+54 Paare zu einer hex_data Zeile zusammenfügen ---
+pairs <- df %>%
+  mutate(
+    next_time   = lead(datetime_utc),
+    next_nbytes = lead(nbytes),
+    next_pay    = lead(payload),
+    dt_min      = as.numeric(difftime(next_time, datetime_utc, units = "mins"))
+  ) %>%
+  filter(nbytes == 340, next_nbytes == 54, !is.na(dt_min), dt_min <= 10) %>%
+  transmute(
+    recv_time_utc = next_time,                 # Zeitpunkt, wenn komplett
+    start_time_utc = datetime_utc,             # Zeitpunkt der 340B Nachricht
+    hex_data = paste0(payload, next_pay)
+  )
+
+```
+
+And encode all messages
+
+```{r}
+
+decoded_tbl <- pairs %>%
+  mutate(decoded = map(hex_data, ~ decode_hex_line(schema_head03, .x))) %>%
+  unnest_wider(decoded)
+
+
+#Check all messages for plausibility
+decoded_tbl %>%
+  rowwise() %>%
+  mutate(.check = list(check_plausibility(as.list(pick(starts_with("n")))))) %>%
+  ungroup()
+
+
+decoded_tbl
+
+```
+
+## Now Level 2, processing of the raw data
+
+Conversion codes for the fields
+
+```{r}
+#' Convert ADC counts to temperature
+#'
+#' Linear conversion from ADC counts to temperature (°C).
+#'
+#' @param count Numeric vector of ADC counts.
+#' @return Numeric vector of temperatures in °C.
+adc2temp <- function(count) {
+  6.101e-5 * count - 256.6
+}
+
+#' Convert NTC ADC counts to uncalibrated temperature
+#'
+#' Converts NTC counts to temperature (°C) using the sensor/resistor model
+#' implemented in the logger firmware.
+#'
+#' @param counts Numeric vector of NTC counts.
+#' @return Numeric vector of uncalibrated temperatures in °C.
+NTCcounts2temp <- function(counts) {
+  H <- (-counts * 1000000) / (counts - 33554432)
+  resistance <- (H * 499000) / (499000 - H)
+  temperatures <- 1 / ((1 / 3380) * log(resistance / 10000) + 1 / 298.15)
+  temperatures <- temperatures - 273.15
+  temperatures
+}
+
+#' Convert pressure counts to hPa
+#'
+#' Converts raw pressure values to hectopascal (hPa) by dividing by 10000.
+#'
+#' @param pressure Numeric vector of raw pressure values.
+#' @return Numeric vector of pressure in hPa.
+pressure2hPa <- function(pressure) {
+  pressure / 1000
+}
+
+#' Convert Unix time to POSIXct (UTC)
+#'
+#' Converts Unix epoch seconds to a POSIXct timestamp in UTC.
+#'
+#' @param time_unix Numeric vector of Unix time (seconds since 1970-01-01).
+#' @return POSIXct vector in UTC.
+unix2posix_utc <- function(time_unix) {
+  as.POSIXct(time_unix, origin = "1970-01-01", tz = "UTC")
+}
+
+```
+
+And apply the processing
+
+```{r}
+
+# ---- Apply Level-2 processing to decoded_tbl -----------------
+
+
+
+decoded_l2 <- decoded_tbl %>%
+  mutate(
+    time_utc = unix2posix_utc(time_unix),
+    adc_temp_C = adc2temp(adc_temp)
+  ) %>%
+  mutate(
+    across(matches("\\.ntc[12]$"),
+           ~ NTCcounts2temp(.x),
+           .names = "{.col}_temp_C"),
+    across(matches("\\.pressure$"),
+           ~ pressure2hPa(.x),
+           .names = "{.col}_hPa")
+  ) %>%
+  # keep a tidy subset for plotting (adjust as you like)
+  select(
+    recv_time_utc, start_time_utc, time_utc,
+    battery_mv, adc_temp_C,
+    matches("\\.ntc[12]_temp_C$"),
+    matches("\\.pressure_hPa$"),
+    matches("\\.gnd$")
+  )
+
+decoded_l2
+```
+
+Now some control plots
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+
+# ---- Pressure Daten in long format bringen -----------------
+
+pressure_long <- decoded_l2 %>%
+  select(time_utc, matches("\\.pressure_hPa$")) %>%
+  pivot_longer(
+    -time_utc,
+    names_to = "sensor",
+    values_to = "pressure_hPa"
+  )
+
+# ---- einzelne Panels ---------------------------------------
+
+p1 <- ggplot(decoded_l2, aes(time_utc, n1.ntc1_temp_C)) +
+  geom_line() +
+  labs(title = "NTC1 Temperature (n1)", x = "Time (UTC)", y = "°C") +
+  theme_minimal()
+
+p2 <- ggplot(pressure_long, aes(time_utc, pressure_hPa, colour = sensor)) +
+  geom_line() +
+  labs(title = "Pressure (all sensors)", x = "Time (UTC)", y = "hPa") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p3 <- ggplot(decoded_l2, aes(time_utc, adc_temp_C)) +
+  geom_line() +
+  coord_cartesian(ylim = c(-38, -36.5)) +
+  labs(title = "ADC Temperature", x = "Time (UTC)", y = "°C") +
+  theme_minimal()
+
+p4 <- ggplot(decoded_l2, aes(time_utc, battery_mv)) +
+  geom_line() +
+  labs(title = "Battery Voltage", x = "Time (UTC)", y = "mV") +
+  theme_minimal()
+
+p5 <- ggplot(decoded_l2, aes(time_utc, n15.ntc1_temp_C)) +
+  geom_line() +
+  labs(title = "NTC1 Temperature (n15)", x = "Time (UTC)", y = "°C") +
+  theme_minimal()
+
+p6 <- ggplot(decoded_l2, aes(time_utc, n20.ntc1_temp_C)) +
+  geom_line() +
+  labs(title = "NTC1 Temperature (n20)", x = "Time (UTC)", y = "°C") +
+  theme_minimal()
+
+# ---- Layout -------------------------------------------------
+
+(p1 | p2) /
+(p3 | p4) /
+(p5 | p6)
+```
