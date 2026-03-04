@@ -411,4 +411,32 @@ p6 <- ggplot(decoded_l2, aes(time_utc, n20.ntc1_temp_C)) +
 (p1 | p2) /
 (p3 | p4) /
 (p5 | p6)
+
+
+#pressure only
+p2
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+ntc_long <- decoded_l2 %>%
+  select(time_utc, matches("\\.ntc1_temp_C$")) %>%
+  pivot_longer(
+    -time_utc,
+    names_to = "sensor",
+    values_to = "temperature_C"
+  )
+
+ggplot(ntc_long, aes(time_utc, temperature_C, colour = sensor)) +
+  geom_line() +
+  labs(
+    title = "All NTC1 Sensors",
+    x = "Time (UTC)",
+    y = "Temperature (°C)",
+    colour = "Sensor"
+  ) +
+  theme_minimal()
 ```
