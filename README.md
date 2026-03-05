@@ -159,7 +159,7 @@ These can be converted to physical units using calibration functions:
 |------|------|
 | ADC temperature | `adc2temp(count)` |
 | NTC temperature | `NTCcounts2temp(count)` |
-| pressure | `pressure_counts / 10000` → hPa |
+| pressure | `pressure_counts / 1000` → hPa |
 | timestamp | `as.POSIXct(time_unix, origin="1970-01-01", tz="UTC")` |
 
 ---
