@@ -1,4 +1,4 @@
-# Data Encoding and Transmission Format
+# Data Encoding and Transmission Format of the thermometry chain heads from SchwaRTech 
 
 ## Transmission via Iridium RockBLOCK (SBD)
 
