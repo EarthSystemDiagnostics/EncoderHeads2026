@@ -1,0 +1,381 @@
+---
+title: "EncoderHead – Übertragungsrechner"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    theme: flatly
+    fig-width: 7
+    fig-height: 4
+params:
+  # --- Konfiguration ---
+  n_nodes:       24      # Anzahl Nodes
+  ntc1:          true    # NTC1 messen?
+  ntc2:          true    # NTC2 messen?
+  gnd:           false    # GND messen?
+  druck:         false    # Druck messen?
+  testsb:        true   # Referenzwiderstand (testSB) messen?
+
+  # --- Zeitmodell ---
+  t_kanal_s:     2.29    # X: Sekunden pro Einzelmessung (Kanal × Node)
+                         #    Head03 (35N, 4K→320s): 2.29 s | Head04 (25N, 4K→204s): 2.04 s
+  t_umschalt_s:  0       # Y: Umschaltzeit pro Node (s); nicht kalibriert, Standard 0
+  t_sbd_s:       30      # Übertragungszeit pro Iridium SBD-Paket (s)
+
+  # --- Batteriekonfiguration ---
+  zelle_mah:      2600   # Nennkapazität pro Zelle (mAh)
+  reserve_kaelte:    2   # Kälte-Reservefaktor (100% Reserve → Faktor 2; halbiert nutzbare Kapazität)
+  p_head:           28   # Zellen parallel, Head-Pack  (z.B. P28 → 28 × 1.3 Ah = 36.4 Ah)
+  p_modem:          14   # Zellen parallel, Modem-Pack (z.B. P14S2 → 14 × 1.3 Ah = 18.2 Ah)
+                         # Serielle Zellen (S) erhöhen nur die Spannung, nicht die Ah-Kapazität
+
+  # --- Akkulebensdauer Head ---
+  strom_mA:      12      # Mittlerer Stromverbrauch während aktiver Messzeit (mA)
+  mess_int_min:  30      # Messintervall (Minuten)
+
+  # --- Akkulebensdauer Modem (Iridium) ---
+  reserve_modem:       2    # Reservefaktor Iridium-Formel (empirisch aus Excel, typisch 2)
+  energie_modem_ah:  2.2    # Ah pro Jahr pro Sendung/Tag (empirisch, ~6 mAh/Sendung)
+  sende_int_min:     240    # Sendeintervall (Minuten); jede 4h = 240 min
+---
+
+```{r}
+#| include: false
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gt)
+
+p <- params
+
+# Kanalkonfiguration
+kanaele <- tribble(
+  ~Kanal,                       ~aktiv,    ~Bits, ~Bytes,
+  "NTC1",                        p$ntc1,    24L,    3L,
+  "NTC2",                        p$ntc2,    24L,    3L,
+  "GND",                         p$gnd,     16L,    2L,
+  "Druck",                       p$druck,   24L,    3L,
+  "Referenzwiderstand (testSB)", p$testsb,  24L,    3L
+) |> filter(aktiv)
+
+n_kanaele    <- nrow(kanaele)
+bytes_node   <- sum(kanaele$Bytes)
+OVERHEAD     <- 9L    # time_unix(4) + adc_temp(3) + battery_mv(2)
+SBD_MAX      <- 340L  # Iridium SBD MO-Limit
+total_bytes  <- OVERHEAD + p$n_nodes * bytes_node
+n_pakete     <- ceiling(total_bytes / SBD_MAX)
+
+# Zeitbedarf
+t_mess_s  <- p$n_nodes * n_kanaele * p$t_kanal_s + p$n_nodes * p$t_umschalt_s
+t_tx_s    <- n_pakete * p$t_sbd_s
+t_total_s <- t_mess_s + t_tx_s
+
+fmt_time <- function(s) {
+  if (s < 60) return(sprintf("%d s", round(s)))
+  sprintf("%d:%02d min", floor(s / 60), round(s %% 60))
+}
+
+# Batteriekapazität aus Packconfig
+# Serielle Zellen (S) erhöhen nur die Spannung, Ah-Kapazität hängt nur von P ab
+zelle_ah_kalt <- p$zelle_mah / p$reserve_kaelte / 1000
+akku_ah       <- p$p_head  * zelle_ah_kalt   # Head-Pack
+akku_modem_ah <- p$p_modem * zelle_ah_kalt   # Modem-Pack
+
+# Akkulebensdauer Head
+mess_pro_tag  <- 24 * 60 / p$mess_int_min
+lz_h          <- akku_ah * 1000 / p$strom_mA
+lz_mess       <- floor(lz_h * 3600 / t_total_s)
+lz_tage       <- lz_mess / mess_pro_tag
+lz_jahre_head <- lz_tage / 365
+
+# Akkulebensdauer Modem (Iridium)
+# Formel: lz = akku_modem × reserve / (energie_modem × sends_pro_tag)
+# Verifiziert: Head2 (6×/Tag) → 13×2/(2.2×6) = 1.97 Jahre (Excel: ~2) ✓
+sends_pro_tag  <- 24 * 60 / p$sende_int_min
+lz_jahre_modem <- akku_modem_ah * p$reserve_modem / (p$energie_modem_ah * sends_pro_tag)
+
+# Gesamtlebensdauer = begrenzender Akku
+lz_jahre <- min(lz_jahre_head, lz_jahre_modem)
+limit_by <- if (lz_jahre_head <= lz_jahre_modem) "Head-Akku" else "Modem-Akku (Iridium)"
+```
+
+## Konfiguration
+
+```{r}
+#| echo: false
+tribble(
+  ~Parameter,                          ~Wert,
+  "Anzahl Nodes",                      as.character(p$n_nodes),
+  "Aktive Kanäle",
+    paste(kanaele$Kanal, collapse = ", "),
+  "Zeit pro Einzelmessung X",
+    sprintf("%.2f s", p$t_kanal_s),
+  "Umschaltzeit pro Node Y",
+    sprintf("%.1f s", p$t_umschalt_s),
+  "Übertragungszeit pro SBD-Paket",
+    sprintf("%d s", p$t_sbd_s),
+  "Head-Pack",
+    sprintf("P%d  →  %d × %.1f Ah = %.1f Ah", p$p_head, p$p_head, zelle_ah_kalt, akku_ah),
+  "Modem-Pack",
+    sprintf("P%dS2  →  %d × %.1f Ah = %.1f Ah", p$p_modem, p$p_modem, zelle_ah_kalt, akku_modem_ah),
+  "Zelle (Kälte-Reserve ×2)",
+    sprintf("%d mAh / %d = %.0f mAh = %.1f Ah", p$zelle_mah, p$reserve_kaelte,
+            p$zelle_mah / p$reserve_kaelte, zelle_ah_kalt),
+  "Stromverbrauch",
+    sprintf("%d mA", p$strom_mA),
+  "Messintervall",
+    sprintf("%d min", p$mess_int_min),
+  "Sendeintervall",
+    sprintf("%d min  →  %.1f× täglich", p$sende_int_min, sends_pro_tag)
+) |>
+  gt() |>
+  cols_label(Parameter = "Parameter", Wert = "Wert") |>
+  tab_options(table.font.size = 14)
+```
+
+---
+
+## Payload-Grösse
+
+Jedes Paket enthält einen fixen Header/Footer (9 B) sowie die Node-Daten.
+GND wird als 16-bit (2 B) übertragen, alle anderen Kanäle als 24-bit (3 B).
+
+```{r}
+#| echo: false
+kanaele |>
+  mutate(
+    `B × Nodes` = Bytes * p$n_nodes,
+    Bits = paste0(Bits, " bit"),
+    Bytes = paste0(Bytes, " B")
+  ) |>
+  rename(`B / Node` = Bytes, `B gesamt` = `B × Nodes`) |>
+  select(Kanal, Bits, `B / Node`, `B gesamt`) |>
+  gt() |>
+  grand_summary_rows(
+    columns = `B gesamt`,
+    fns = list(Summe = ~sum(.)),
+    fmt = ~fmt_integer(.)
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+```{r}
+#| echo: false
+pkt_farbe <- if (n_pakete == 1) "#d4edda" else "#fff3cd"
+
+tribble(
+  ~Posten,                                            ~Bytes,
+  "Overhead (Header + Footer)",                       OVERHEAD,
+  sprintf("Node-Daten  (%d × %d B)", p$n_nodes, bytes_node),
+                                                      p$n_nodes * bytes_node,
+  "Payload gesamt",                                   total_bytes
+) |>
+  gt() |>
+  cols_label(Posten = "", Bytes = "Bytes") |>
+  tab_row_group(label = "", rows = 1:2) |>
+  tab_style(
+    style = cell_fill(color = "#cce5ff"),
+    locations = cells_body(rows = 3)
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(rows = 3)
+  ) |>
+  tab_footnote(
+    footnote = sprintf(
+      "%d Iridium SBD-Paket%s benötigt (Limit %d B/Paket)",
+      n_pakete, if (n_pakete == 1) "" else "e", SBD_MAX
+    )
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+---
+
+## Zeitbedarf
+
+**Modell:**
+
+$$t_\text{mess} = N \times K \times X \;+\; N \times Y$$
+
+$N$ = Nodes, $K$ = aktive Kanäle, $X$ = Zeit/Einzelmessung, $Y$ = Umschaltzeit/Node.
+
+> **Kalibrierung:** Head 03 (35 N, 4 K → 320 s) ergibt $X \approx 2.29$ s;
+> Head 04 (25 N, 4 K → 204 s) ergibt $X \approx 2.04$ s. Da beide Heads $K = 4$
+> haben, lassen sich $X$ und $Y$ nicht trennen — dafür wären Messungen mit
+> unterschiedlicher Kanalzahl nötig. Standard: $Y = 0$.
+
+```{r}
+#| echo: false
+tribble(
+  ~Posten, ~Zeit,
+  sprintf("Messzeit  (%d × %d × %.2f s%s)",
+    p$n_nodes, n_kanaele, p$t_kanal_s,
+    if (p$t_umschalt_s > 0) sprintf(" + %d × %.1f s", p$n_nodes, p$t_umschalt_s) else ""),
+    fmt_time(t_mess_s),
+  sprintf("Übertragungszeit  (%d × %d s)", n_pakete, p$t_sbd_s),
+    fmt_time(t_tx_s),
+  "Gesamtzeit pro Zyklus",
+    fmt_time(t_total_s)
+) |>
+  gt() |>
+  cols_label(Posten = "", Zeit = "Zeit") |>
+  tab_style(
+    style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
+    locations = cells_body(rows = 3)
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+---
+
+## Akkulebensdauer
+
+### Head-Akku
+
+Modell: Der Strom $I$ fließt nur während der aktiven Messzeit; die Gerätelektronik
+schläft dazwischen. Aktive Sekunden gesamt = $C_\text{Ah} \times 1000 \,/\, I_\text{mA} \times 3600$.
+
+$$t_\text{aktiv, gesamt} = \frac{C_\text{Head} \times 1000}{I_\text{mA}} \times 3600 \;\text{s}$$
+
+$$N_\text{Messungen} = \frac{t_\text{aktiv, gesamt}}{t_\text{Zyklus}} \qquad
+  \text{Lebensdauer} = \frac{N_\text{Messungen}}{N_\text{pro Tag} \times 365}$$
+
+```{r}
+#| echo: false
+tribble(
+  ~Grösse, ~Wert,
+  "Akkukapazität Head",   sprintf("P%d × %.1f Ah = %.1f Ah", p$p_head, zelle_ah_kalt, akku_ah),
+  "Aktive Betriebszeit",  sprintf("%s h", format(round(lz_h), big.mark = "'")),
+  "Messintervall",        sprintf("alle %d min  →  %.1f× täglich",
+                            p$mess_int_min, mess_pro_tag),
+  "Messungen gesamt",     format(lz_mess, big.mark = "'"),
+  "Lebensdauer Head",     sprintf("%s Tage  ≈  %.1f Jahre",
+                            format(round(lz_tage), big.mark = "'"), lz_jahre_head)
+) |>
+  gt() |>
+  cols_label(Grösse = "", Wert = "Wert") |>
+  tab_style(
+    style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
+    locations = cells_body(rows = 5)
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+### Modem-Akku (Iridium SBD)
+
+Empirische Formel aus dem Excel, verifiziert an Head 2/3/4:
+
+$$\text{Lebensdauer}_\text{Modem} = \frac{C_\text{Modem} \times R}{E_\text{ref} \times N_\text{Sendungen/Tag}}$$
+
+- $C_\text{Modem}$ = `r sprintf("P%dS2 × %.1f Ah = %.1f Ah", p$p_modem, zelle_ah_kalt, akku_modem_ah)`
+- $R = `r p$reserve_modem`$ (Reservefaktor Iridium-Energiemodell)
+- $E_\text{ref} = `r p$energie_modem_ah`$ Ah/Jahr pro Sendung/Tag
+  $\;(\approx `r round(p$energie_modem_ah * 1000 / 365, 1)`$ mAh pro SBD-Session inkl. Wake-up-Overhead)
+
+```{r}
+#| echo: false
+tribble(
+  ~Grösse, ~Wert,
+  "Akkukapazität Modem",  sprintf("P%dS2 × %.1f Ah = %.1f Ah", p$p_modem, zelle_ah_kalt, akku_modem_ah),
+  "Reservefaktor",        as.character(p$reserve_modem),
+  "Sendeintervall",       sprintf("alle %d min  →  %.1f× täglich",
+                            p$sende_int_min, sends_pro_tag),
+  "Lebensdauer Modem",    sprintf("%.1f Jahre", lz_jahre_modem)
+) |>
+  gt() |>
+  cols_label(Grösse = "", Wert = "Wert") |>
+  tab_style(
+    style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
+    locations = cells_body(rows = 4)
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+### Gesamte Lebensdauer
+
+```{r}
+#| echo: false
+lim_row <- if (lz_jahre_head <= lz_jahre_modem) 1L else 2L
+
+tribble(
+  ~Akku,           ~`Lebensdauer (Jahre)`,
+  "Head-Akku",     round(lz_jahre_head, 1),
+  "Modem-Akku",    round(lz_jahre_modem, 1),
+  "Gesamt (min)",  round(lz_jahre, 1)
+) |>
+  gt() |>
+  tab_style(style = list(cell_fill(color = "#ffe0cc"), cell_text(weight = "bold")),
+            locations = cells_body(rows = lim_row)) |>
+  tab_style(style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
+            locations = cells_body(rows = 3)) |>
+  tab_footnote(sprintf("Limitierender Faktor: %s", limit_by)) |>
+  tab_options(table.font.size = 14)
+```
+
+### Lebensdauer vs. Messintervall
+
+```{r}
+#| echo: false
+#| fig-alt: "Lebensdauer in Jahren als Funktion des Messintervalls für Head- und Modem-Akku"
+intervalle <- tibble(
+  min       = seq(5, 240, by = 5),
+  mpd       = 24 * 60 / min,
+  head      = lz_mess / mpd / 365,
+  modem     = lz_jahre_modem,            # unabhängig vom Messintervall
+  gesamt    = pmin(head, modem)
+) |>
+  tidyr::pivot_longer(c(head, modem, gesamt),
+                      names_to = "Akku", values_to = "jahre") |>
+  mutate(Akku = factor(Akku,
+    levels = c("head", "modem", "gesamt"),
+    labels = c("Head-Akku", "Modem-Akku", "Gesamt (min)")))
+
+ggplot(intervalle, aes(x = min, y = jahre, colour = Akku, linetype = Akku)) +
+  geom_line(linewidth = 1) +
+  geom_point(
+    data = tibble(min = p$mess_int_min, jahre = lz_jahre,
+                  Akku = factor("Gesamt (min)", levels = levels(intervalle$Akku))),
+    size = 4
+  ) +
+  geom_vline(xintercept = p$mess_int_min, colour = "grey50",
+             linetype = "dashed", linewidth = 0.5) +
+  geom_hline(yintercept = lz_jahre, colour = "grey50",
+             linetype = "dashed", linewidth = 0.5) +
+  annotate("label",
+    x = p$mess_int_min + 5, y = lz_jahre,
+    label = sprintf("%.1f Jahre\n(%d min)", lz_jahre, p$mess_int_min),
+    hjust = 0, size = 3.2, colour = "grey30"
+  ) +
+  scale_colour_manual(values = c("Head-Akku" = "steelblue",
+                                 "Modem-Akku" = "darkorange",
+                                 "Gesamt (min)" = "tomato")) +
+  scale_linetype_manual(values = c("Head-Akku" = "solid",
+                                   "Modem-Akku" = "dashed",
+                                   "Gesamt (min)" = "solid")) +
+  scale_x_continuous(breaks = seq(0, 240, 30)) +
+  labs(x = "Messintervall (Minuten)", y = "Lebensdauer (Jahre)",
+       colour = NULL, linetype = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "top")
+```
+
+---
+
+## Referenzwerte (aus Excel)
+
+```{r}
+#| echo: false
+tribble(
+  ~Head, ~Nodes, ~Kanäle, ~`Strom (mA)`,
+    ~`Messzeit (ohne Senden)`, ~`Messzeit (mit Senden)`,
+    ~`Akku Head (Ah)`, ~Lebensdauer,
+  "2", "–", "NTC1, GND, Druck",       16, "~3:00 min", "~4:00 min", 57.2, "~2 Jahre",
+  "3", "35","NTC1, NTC2, GND, Druck", 12, "5:20 min",  "6:07 min",  57.2, "~3 Jahre",
+  "4", "25","NTC1, NTC2, GND, testSB", 8, "3:24 min",  "4:21 min",  57.2, "~4 Jahre"
+) |>
+  gt() |>
+  tab_footnote("Lebensdauer bei Messung alle 30 min.") |>
+  tab_options(table.font.size = 13)
+```

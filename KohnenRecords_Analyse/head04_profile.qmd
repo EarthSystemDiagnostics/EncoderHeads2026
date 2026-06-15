@@ -1,0 +1,318 @@
+---
+title: "head04 — Borehole Temperature Profile (Kohnen 2026)"
+subtitle: "Modem 231710 | Sensors at 5–200 m depth | Decoded from Rockblock SBD"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    fig-width: 11
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(patchwork)
+
+d <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALSE) |>
+  mutate(
+    time_utc = as_datetime(time_utc),
+    t_days   = as.numeric(difftime(time_utc, min(time_utc), units = "days"))
+  )
+```
+
+## Overview
+
+Modem **231710** (head04) transmits once daily (~17:38 UTC). The chain carries
+NTC thermistors at 5–200 m depth in the firn/ice at Kohnen station, Antarctica.
+Due to a 128-byte payload truncation in the Rockblock CSV export, only nodes
+**n1–n11** are reliably decoded from the current dataset; nodes n12–n25 require
+the full payload via the Cloudloop API.
+
+**Data range:** `r format(min(d$time_utc), "%d %b %Y")` – `r format(max(d$time_utc), "%d %b %Y")`
+(`r nrow(d)` daily observations)
+
+```{r node-metadata}
+# Placeholder depths: evenly spaced 5–200 m across 25 total nodes
+# Adjust node_depths once true installation depths are available
+depth_step <- (200 - 5) / (25 - 1)
+node_depths <- tibble(
+  node  = 1:11,
+  depth = round(5 + (0:10) * depth_step, 1)
+)
+knitr::kable(node_depths, col.names = c("Node", "Depth (m) [placeholder]"),
+             caption = "Assumed sensor depths — replace with true values")
+```
+
+---
+
+## Temperature time series
+
+```{r timeseries}
+ntc_long <- d |>
+  select(time_utc, matches("^n[0-9]+\\.ntc1_temp_C$")) |>
+  pivot_longer(-time_utc, names_to = "sensor", values_to = "temp_C") |>
+  mutate(node = as.integer(sub("n(\\d+)\\..*", "\\1", sensor))) |>
+  left_join(node_depths, by = "node")
+
+ggplot(ntc_long, aes(time_utc, temp_C, colour = depth, group = node)) +
+  geom_line(linewidth = 0.8) +
+  scale_colour_viridis_c(option = "plasma", direction = -1,
+                         name = "Tiefe (m)\n[Platzhalter]") +
+  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(
+    title    = "NTC1 temperatures by depth — head04 (modem 231710)",
+    subtitle = "Shallow nodes (n1, n2): strong seasonal signal  |  Deep nodes (n9–n11): quasi-constant",
+    x = NULL, y = "Temperature (°C)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+The near-surface nodes (n1, n2) cool rapidly as the Antarctic winter sets in.
+Below ~21 m (n3 onward) the amplitude decreases sharply and the signal becomes
+quasi-stationary, reflecting the thermal diffusion length-scale in firn.
+
+---
+
+## Depth profiles at selected dates
+
+```{r profiles}
+profile_dates <- d |>
+  pull(time_utc) |> as.Date() |> unique() |>
+  (\(x) x[seq(1, length(x), length.out = 6)])() |>
+  as.character()
+
+profiles <- ntc_long |>
+  mutate(date = as.character(as.Date(time_utc))) |>
+  filter(date %in% profile_dates)
+
+ggplot(profiles, aes(temp_C, depth, colour = date, group = date)) +
+  geom_path(linewidth = 1, alpha = 0.9) +
+  geom_point(size = 2.5) +
+  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_colour_viridis_d(option = "turbo", name = "Date") +
+  labs(
+    title    = "Temperature–depth profiles at selected dates",
+    subtitle = "Cooling progresses from the surface downward; deep nodes remain stable",
+    x = "Temperature (°C)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+The profiles show the seasonal cooling wave propagating downward from March to
+June. The profile shape is convex near the surface (strong gradient) and
+asymptotically flat at depth, consistent with thermal diffusion in firn.
+
+---
+
+## Variability vs. depth
+
+```{r variability}
+node_stats <- ntc_long |>
+  group_by(node, depth) |>
+  summarise(
+    mean_T  = mean(temp_C, na.rm = TRUE),
+    sd_T    = sd(temp_C,   na.rm = TRUE),
+    range_T = max(temp_C, na.rm = TRUE) - min(temp_C, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p_sd <- ggplot(node_stats, aes(sd_T, depth)) +
+  geom_path(colour = "grey60", linewidth = 0.6) +
+  geom_point(aes(colour = sd_T), size = 4) +
+  geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
+  scale_colour_viridis_c(option = "plasma", direction = -1, guide = "none") +
+  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_x_log10() +
+  labs(title = "Temperature variability vs. depth",
+       subtitle = "Log scale: each additional ~8 m reduces SD by ~50%",
+       x = "Standard deviation (°C, log scale)") +
+  theme_minimal(base_size = 13)
+
+p_mean <- ggplot(node_stats, aes(mean_T, depth)) +
+  geom_path(colour = "grey60", linewidth = 0.6) +
+  geom_point(aes(colour = depth), size = 4, show.legend = FALSE) +
+  scale_colour_viridis_c(option = "plasma", direction = -1) +
+  geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
+  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  labs(title = "Mean temperature vs. depth",
+       subtitle = sprintf("Deep mean annual temperature: ~%.2f°C (n11)",
+                          node_stats$mean_T[node_stats$node == 11]),
+       x = "Mean temperature (°C)") +
+  theme_minimal(base_size = 13)
+
+p_mean | p_sd
+```
+
+```{r variability-table}
+node_stats |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+  knitr::kable(
+    col.names = c("Node", "Depth (m)", "Mean T (°C)", "SD (°C)", "Range (°C)"),
+    caption   = "Temperature statistics per node"
+  )
+```
+
+---
+
+## Linear trends and thermal diffusion
+
+The 98-day record is long enough to reveal the phase structure of the seasonal
+wave in the firn.
+
+```{r trends}
+ntc_cols <- grep("^n[0-9]+\\.ntc1_temp_C$", names(d), value = TRUE)
+
+trends <- lapply(ntc_cols, function(col) {
+  node <- as.integer(sub("n(\\d+)\\..*", "\\1", col))
+  dat  <- data.frame(t = d$t_days, y = d[[col]]) |> na.omit()
+  m    <- lm(y ~ t, data = dat)
+  s    <- summary(m)
+  tibble(node            = node,
+         slope_mK_month  = coef(m)[2] * 30 * 1000,
+         se_mK_month     = s$coefficients[2, 2] * 30 * 1000,
+         pval            = s$coefficients[2, 4],
+         mean_T          = mean(dat$y),
+         sd_T            = sd(dat$y))
+}) |>
+  bind_rows() |>
+  left_join(node_depths, by = "node") |>
+  mutate(sig = pval < 0.05,
+         sig_label = case_when(pval < 0.001 ~ "***",
+                               pval < 0.01  ~ "**",
+                               pval < 0.05  ~ "*",
+                               TRUE         ~ "n.s."))
+
+ggplot(trends, aes(slope_mK_month, depth)) +
+  geom_vline(xintercept = 0, colour = "grey50", linetype = "dashed") +
+  geom_errorbarh(aes(xmin = slope_mK_month - se_mK_month,
+                     xmax = slope_mK_month + se_mK_month),
+                 height = 2, colour = "grey60") +
+  geom_point(aes(colour = sig, size = log10(abs(slope_mK_month) + 1))) +
+  geom_text(aes(label = paste0("n", node, "  ", sig_label)),
+            hjust = -0.15, size = 3.2) +
+  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "firebrick"),
+                      labels = c("n.s. (p ≥ 0.05)", "p < 0.05"), name = NULL) +
+  scale_size_continuous(range = c(2, 7), guide = "none") +
+  labs(
+    title    = "Linear trend per node (mK / month)",
+    subtitle = "Negative = cooling (winter onset)  |  Positive = delayed summer diffusion",
+    x        = "Trend (mK / month)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+```{r trend-table}
+trends |>
+  mutate(across(c(slope_mK_month, se_mK_month, mean_T, sd_T), \(x) round(x, 2)),
+         pval = formatC(pval, digits = 3, format = "g")) |>
+  select(node, depth, mean_T, sd_T, slope_mK_month, se_mK_month, pval, sig_label) |>
+  knitr::kable(
+    col.names = c("Node", "Depth (m)", "Mean T", "SD", "Trend (mK/mon)", "SE", "p-value", ""),
+    caption   = "Linear trend results. Positive trend in n4–n6 reflects phase-lagged downward diffusion of summer warmth."
+  )
+```
+
+### Phase lag: mid-depth nodes warming while surface cools
+
+```{r phase-lag}
+mid_cols <- grep("^n[3456]\\.ntc1_temp_C$", names(d), value = TRUE)
+d_mid <- d |>
+  select(time_utc, all_of(mid_cols)) |>
+  pivot_longer(-time_utc, names_to = "sensor", values_to = "temp_C") |>
+  mutate(node = as.integer(sub("n(\\d+)\\..*", "\\1", sensor))) |>
+  left_join(node_depths, by = "node")
+
+ggplot(d_mid, aes(time_utc, temp_C, colour = factor(node), group = node)) +
+  geom_line(linewidth = 0.8, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.1, linewidth = 0.6) +
+  scale_colour_brewer(palette = "Set1", name = "Node",
+                      labels = paste0("n", 3:6)) +
+  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(
+    title    = "Nodes n3–n6: phase-lagged warming trend",
+    subtitle = "Summer warmth still diffusing downward while the surface (n1, n2) cools toward winter",
+    x = NULL, y = "Temperature (°C)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+### Deep nodes (n7–n11): quasi-constant
+
+```{r deep-nodes}
+deep_cols <- grep("^n([7-9]|1[01])\\.ntc1_temp_C$", names(d), value = TRUE)
+d_deep <- d |>
+  select(time_utc, all_of(deep_cols)) |>
+  pivot_longer(-time_utc, names_to = "sensor", values_to = "temp_C") |>
+  mutate(node = as.integer(sub("n(\\d+)\\..*", "\\1", sensor))) |>
+  left_join(node_depths, by = "node")
+
+ggplot(d_deep, aes(time_utc, temp_C, colour = factor(node), group = node)) +
+  geom_line(linewidth = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed",
+              linewidth = 0.4, alpha = 0.6) +
+  scale_colour_viridis_d(option = "viridis", direction = -1,
+                          name = "Node", labels = paste0("n", 7:11)) +
+  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(
+    title    = "Deep nodes n7–n11 (zoomed)",
+    subtitle = sprintf("Total range < 0.1°C  |  n11 SD = %.4f°C  |  No significant trend detectable",
+                       node_stats$sd_T[node_stats$node == 11]),
+    x = NULL, y = "Temperature (°C)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+No statistically significant trend is detectable in nodes n7–n11 within the
+98-day window. The estimated trends are < 5 mK/month with p > 0.05. Detecting
+a geothermal baseline trend of ~0.1 mK/month would require at least ~1 year of
+continuous data.
+
+---
+
+## testSB channel (calibration reference)
+
+The `testSB` field is a firmware calibration reference — it should be constant
+per node. The values (~6535–6542) show no temporal drift, confirming sensor
+stability.
+
+```{r testsb}
+sb_long <- d |>
+  select(time_utc, matches("testSB")) |>
+  pivot_longer(-time_utc, names_to = "sensor", values_to = "value") |>
+  mutate(node = as.integer(sub("n(\\d+)\\..*", "\\1", sensor)))
+
+ggplot(sb_long, aes(time_utc, value, colour = factor(node), group = node)) +
+  geom_line(linewidth = 0.5, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(
+    title    = "testSB channel — calibration reference",
+    subtitle = "Values constant over time per node → no sensor drift",
+    x = NULL, y = "Value (counts / 1000)", colour = "Node"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+---
+
+## Notes and caveats
+
+- **Depth values are placeholders** — replace `node_depths` in the setup chunk
+  with true installation depths once available.
+- **Only n1–n11 decoded** — the Rockblock CSV export truncates payloads at
+  128 bytes; full data (n1–n25 + battery_mv) requires the Cloudloop API.
+- **Once-daily sampling** — one measurement per day (~17:38 UTC) gives no
+  information on the diurnal cycle at depth, but at these depths the diurnal
+  signal is negligible.
