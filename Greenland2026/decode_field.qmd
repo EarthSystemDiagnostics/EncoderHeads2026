@@ -22,8 +22,8 @@ execute:
 Edit this block, then re-render (`Ctrl+Shift+K`).
 
 ```{r params}
-# Which head? -----------------------------------------------------------------
-HEAD_ID <- "26-02"   # "26-02" | "26-03" | "26-04" | "26-05"
+# Which head? — always required, sets modem, n_nodes, type, spacing -----------
+HEAD_ID <- "test"  # "test" | "26-02" | "26-03" | "26-04" | "26-05"
 
 # Paste hex payload(s) from email ---------------------------------------------
 # SnowMelt heads (26-02, 26-03): one message  → fill MSG1, leave MSG2 = ""
@@ -31,10 +31,18 @@ HEAD_ID <- "26-02"   # "26-02" | "26-03" | "26-04" | "26-05"
 # If the head sends two messages per measurement, paste both.
 MSG1 <- ""
 MSG2 <- ""
+
+# OR: path to .bin attachment from the Cloudloop email (overrides MSG1/MSG2) -
+# Format: 4-byte timestamp + [0x7C | 3-byte value] × N + [0x7C | 2-byte battery]
+# Modem / n_nodes / spacing come from head_config[[HEAD_ID]], not the file.
+BIN_FILE <- "../testdata/301434062008130-138.bin"
 ```
 
 ```{r head-config}
 head_config <- list(
+  "test" = list(modem = 9999L, n_nodes = 3L,
+                 fields = c("ntc1", "ntc2", "testSB"),
+                 type = "snowmelt", spacing_cm = 4L),
   "26-02" = list(modem = 228680L, n_nodes = 24L,
                  fields = c("ntc1", "ntc2", "testSB"),
                  type = "snowmelt", spacing_cm = 4L),
@@ -53,9 +61,16 @@ cfg     <- head_config[[HEAD_ID]]
 n_nodes <- cfg$n_nodes
 fields  <- cfg$fields
 
-# Expected hex length
-n_hex_node <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB"), 6L, 4L))
-expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
+if (BIN_FILE == "") {
+  n_hex_node   <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB"), 6L, 4L))
+  expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
+} else {
+  n_file     <- file.info(BIN_FILE)$size
+  n_detected <- (n_file - 11L) %/% 12L
+  if (n_detected != n_nodes)
+    warning(sprintf("File implies %d nodes but Head_%s config has %d — check HEAD_ID",
+                    n_detected, HEAD_ID, n_nodes))
+}
 ```
 
 ---
@@ -120,6 +135,50 @@ NTCcounts2temp <- function(c) {
 }
 pressure2hPa   <- function(p) p / 1000
 unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
+
+# Binary snowchain decoder: 4-byte timestamp + [0x7C | value]* + [0x7C | uint16 battery]
+# Each sensor value is a 3-byte big-endian signed int24, preceded by 0x7C.
+# Battery is a 2-byte big-endian uint16, preceded by 0x7C.
+# Expected file size: 11 + 12 * n_nodes (validated against head_config).
+read_snowchain_bin <- function(path) {
+  raw   <- readBin(path, what = "raw", n = file.info(path)$size)
+  n     <- length(raw)
+  if ((n - 11L) %% 12L != 0L)
+    stop(sprintf("Unexpected file size %d B — expected 11 + 12×N bytes", n))
+  n_nd  <- (n - 11L) %/% 12L
+
+  be_uint32 <- function(b) sum(as.integer(b) * c(16777216, 65536, 256, 1))
+  be_int24  <- function(b) {
+    v <- sum(as.integer(b) * c(65536L, 256L, 1L))
+    if (v >= 8388608L) v - 16777216L else as.integer(v)
+  }
+  be_uint16 <- function(b) sum(as.integer(b) * c(256, 1))
+
+  time_unix <- be_uint32(raw[1:4])
+  pos <- 5L
+
+  read3 <- function() {
+    if (as.integer(raw[pos]) != 0x7CL)
+      warning(sprintf("Expected 0x7C at byte %d, got 0x%02X", pos, as.integer(raw[pos])))
+    v <- be_int24(raw[(pos + 1L):(pos + 3L)])
+    pos <<- pos + 4L; v
+  }
+  read2 <- function() {
+    if (as.integer(raw[pos]) != 0x7CL)
+      warning(sprintf("Expected 0x7C at byte %d, got 0x%02X", pos, as.integer(raw[pos])))
+    v <- be_uint16(raw[(pos + 1L):(pos + 2L)])
+    pos <<- pos + 3L; v
+  }
+
+  adc_temp   <- read3()
+  nodes_raw  <- lapply(seq_len(n_nd), function(i)
+    list(ntc1 = read3(), ntc2 = read3(), testSB = read3()))
+  battery_mv <- read2()
+
+  list(time_unix = time_unix, adc_temp = adc_temp,
+       nodes = nodes_raw, battery_mv = as.integer(battery_mv),
+       n_nodes = n_nd)
+}
 ```
 
 ---
@@ -132,26 +191,41 @@ library(tidyr)
 library(ggplot2)
 library(patchwork)
 
-hex <- toupper(trimws(paste0(MSG1, MSG2)))
+if (BIN_FILE != "") {
+  # ---- Binary snowchain path ------------------------------------------------
+  bin        <- read_snowchain_bin(BIN_FILE)
+  time_utc   <- unix2utc(bin$time_unix)
+  adc_temp_C <- adc2temp(bin$adc_temp)
+  battery_mv <- bin$battery_mv
 
-if (nchar(hex) == 0) {
-  cat("No payload — paste hex string(s) into MSG1 / MSG2 above and re-render.\n")
-  knitr::knit_exit()
+  nodes <- data.frame(node = seq_len(n_nodes))
+  nodes$ntc1_C   <- sapply(bin$nodes, function(nd) NTCcounts2temp(nd$ntc1))
+  nodes$ntc2_C   <- sapply(bin$nodes, function(nd) NTCcounts2temp(nd$ntc2))
+  nodes$testSB_C <- sapply(bin$nodes, function(nd) NTCcounts2temp(nd$testSB))
+
+} else {
+  # ---- Hex email path -------------------------------------------------------
+  hex <- toupper(trimws(paste0(MSG1, MSG2)))
+
+  if (nchar(hex) == 0) {
+    cat("No payload — set BIN_FILE or paste hex into MSG1 / MSG2 above and re-render.\n")
+    knitr::knit_exit()
+  }
+
+  if (nchar(hex) != expected_hex) {
+    warning(sprintf(
+      "Expected %d hex chars (%d bytes) for Head_%s, got %d. Payload may be incomplete.",
+      expected_hex, expected_hex %/% 2L, HEAD_ID, nchar(hex)
+    ))
+  }
+
+  schema <- build_schema(n_nodes, fields)
+  raw    <- decode_hex(schema, hex)
+
+  time_utc   <- unix2utc(raw$time_unix)
+  adc_temp_C <- adc2temp(raw$adc_temp)
+  battery_mv <- as.integer(raw$battery_mv)
 }
-
-if (nchar(hex) != expected_hex) {
-  warning(sprintf(
-    "Expected %d hex chars (%d bytes) for Head_%s, got %d. Payload may be incomplete.",
-    expected_hex, expected_hex %/% 2L, HEAD_ID, nchar(hex)
-  ))
-}
-
-schema <- build_schema(n_nodes, fields)
-raw    <- decode_hex(schema, hex)
-
-time_utc   <- unix2utc(raw$time_unix)
-adc_temp_C <- adc2temp(raw$adc_temp)
-battery_mv <- as.integer(raw$battery_mv)
 ```
 
 ---
@@ -176,12 +250,12 @@ check <- function(val, lo, hi, label, unit) {
 | **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
 | **Battery** | `r battery_mv` mV |
 | **ADC temp** | `r round(adc_temp_C, 2)` °C |
-| **Hex length** | `r nchar(hex)` chars (`r nchar(hex) %/% 2` bytes) |
+| **Source** | `r if (BIN_FILE != "") paste0("binary: ", basename(BIN_FILE)) else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
 :::
 
 ```{r diag-checks, results='asis'}
 check(battery_mv,  5500, 7200, "Battery",  "mV")
-check(adc_temp_C, -60,    5,   "ADC temp", "°C")
+check(adc_temp_C, -60,   40,   "ADC temp", "°C")
 ```
 
 ---
@@ -189,29 +263,30 @@ check(adc_temp_C, -60,    5,   "ADC temp", "°C")
 ## Node data
 
 ```{r node-table}
-ntc_fields <- fields[fields != "gnd"]
-gnd_field  <- if ("gnd" %in% fields) "gnd" else NULL
+if (BIN_FILE == "") {
+  # Build nodes dataframe from hex-decoded raw list
+  ntc_fields <- fields[fields != "gnd"]
+  gnd_field  <- if ("gnd" %in% fields) "gnd" else NULL
 
-nodes <- data.frame(node = seq_len(n_nodes))
+  nodes <- data.frame(node = seq_len(n_nodes))
 
-for (f in ntc_fields) {
-  col_raw  <- paste0("n", nodes$node, ".", f)
-  col_name <- paste0(f, "_C")
-  nodes[[col_name]] <- sapply(col_raw, function(nm) NTCcounts2temp(raw[[nm]]))
+  for (f in ntc_fields) {
+    col_raw  <- paste0("n", nodes$node, ".", f)
+    col_name <- paste0(f, "_C")
+    nodes[[col_name]] <- sapply(col_raw, function(nm) NTCcounts2temp(raw[[nm]]))
+  }
+
+  if (!is.null(gnd_field)) {
+    col_raw <- paste0("n", nodes$node, ".gnd")
+    nodes$gnd <- sapply(col_raw, function(nm) raw[[nm]])
+  }
+
 }
 
-if (!is.null(gnd_field)) {
-  col_raw <- paste0("n", nodes$node, ".gnd")
-  nodes$gnd <- sapply(col_raw, function(nm) raw[[nm]])
-}
-
-if (cfg$type == "snowmelt") {
-  nodes$depth_cm <- (n_nodes + 1L - nodes$node) * cfg$spacing_cm
-}
-
+src_label <- if (BIN_FILE != "") basename(BIN_FILE) else paste0("Head_", HEAD_ID)
 knitr::kable(nodes, digits = 2,
-             caption = sprintf("All nodes — Head_%s | %s UTC",
-                               HEAD_ID, format(time_utc, "%Y-%m-%d %H:%M")))
+             caption = sprintf("All nodes — %s | %s UTC",
+                               src_label, format(time_utc, "%Y-%m-%d %H:%M")))
 ```
 
 ---
@@ -219,26 +294,33 @@ knitr::kable(nodes, digits = 2,
 ## Plots
 
 ```{r plot-snowmelt, eval=(cfg$type == "snowmelt"), fig.height=8, fig.width=6}
+# NTC rank within node: NTC1=1, NTC2=2, TestSB=3; height = (node-1)*3*s + rank*s
+s <- cfg$spacing_cm
 long <- nodes |>
-  select(node, depth_cm, ends_with("_C")) |>
+  select(node, ends_with("_C")) |>
   pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
-  mutate(sensor = recode(sensor,
-    ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"))
+  mutate(
+    sensor   = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
+    ntc_rank = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
+    hoehe_cm = (node - 1L) * 3L * s + ntc_rank * s
+  )
 
-ggplot(long, aes(x = temp_C, y = depth_cm, colour = sensor, shape = sensor)) +
-  geom_path(linewidth = 0.7, alpha = 0.6) +
-  geom_point(size = 2.5) +
-  scale_y_reverse(
-    name   = "Depth from surface (cm)",
-    breaks = seq(0, n_nodes * cfg$spacing_cm, by = 8)
+max_h <- n_nodes * 3L * s
+ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
+  geom_path(data = arrange(long, hoehe_cm), colour = "grey65", linewidth = 0.4) +
+  geom_point(aes(colour = sensor, shape = sensor), size = 2.5) +
+  scale_y_continuous(
+    name   = "Höhe (cm)",
+    limits = c(0, max_h),
+    breaks = seq(0, max_h, by = max(s, 8L))
   ) +
-  scale_x_continuous(name = "Temperature (°C)") +
+  scale_x_continuous(name = "Temperatur (°C)") +
   scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c",
                                  "NTC3 (TestSB)" = "#27ae60")) +
   labs(
-    title   = sprintf("Temperature profile — Head_%s", HEAD_ID),
-    subtitle = sprintf("%s UTC  |  modem %d", format(time_utc, "%Y-%m-%d %H:%M"), cfg$modem),
-    colour  = NULL, shape = NULL
+    title    = sprintf("Temperaturprofil — Head_%s", HEAD_ID),
+    subtitle = sprintf("%s UTC  |  Modem %d", format(time_utc, "%Y-%m-%d %H:%M"), cfg$modem),
+    colour   = NULL, shape = NULL
   ) +
   theme_bw(base_size = 13) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank())
@@ -274,8 +356,8 @@ p1 / p2 + plot_layout(heights = c(3, 1))
 ## Save result
 
 ```{r save}
-outfile <- sprintf("data/decoded_field_head%s_%s.csv",
-                   HEAD_ID, format(time_utc, "%Y%m%d_%H%M%S"))
+slug    <- if (BIN_FILE != "") tools::file_path_sans_ext(basename(BIN_FILE)) else paste0("head", HEAD_ID)
+outfile <- sprintf("data/decoded_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
 write.csv(nodes, outfile, row.names = FALSE)
 cat("Saved:", outfile, "\n")
 ```

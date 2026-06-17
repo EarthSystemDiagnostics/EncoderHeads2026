@@ -9,6 +9,7 @@ format:
     fig-width: 7
     fig-height: 4
 params:
+  name:         "Greenland Snow Setup jede 3h"   # Setup-Name (erscheint in Kurzübersicht)
   # --- Konfiguration ---
   n_nodes:       24      # Anzahl Nodes
   ntc1:          true    # NTC1 messen?
@@ -26,8 +27,8 @@ params:
   # --- Batteriekonfiguration ---
   zelle_mah:      2600   # Nennkapazität pro Zelle (mAh)
   reserve_kaelte:    2   # Kälte-Reservefaktor (100% Reserve → Faktor 2; halbiert nutzbare Kapazität)
-  p_head:           28   # Zellen parallel, Head-Pack  (z.B. P28 → 28 × 1.3 Ah = 36.4 Ah)
-  p_modem:          14   # Zellen parallel, Modem-Pack (z.B. P14S2 → 14 × 1.3 Ah = 18.2 Ah)
+  p_head:           40   # Zellen parallel, Head-Pack  (z.B. P28 → 28 × 1.3 Ah = 36.4 Ah)
+  p_modem:          20   # Zellen parallel, Modem-Pack (z.B. P14S2 → 14 × 1.3 Ah = 18.2 Ah)
                          # Serielle Zellen (S) erhöhen nur die Spannung, nicht die Ah-Kapazität
 
   # --- Akkulebensdauer Head ---
@@ -35,9 +36,13 @@ params:
   mess_int_min:  30      # Messintervall (Minuten)
 
   # --- Akkulebensdauer Modem (Iridium) ---
-  reserve_modem:       2    # Reservefaktor Iridium-Formel (empirisch aus Excel, typisch 2)
-  energie_modem_ah:  2.2    # Ah pro Jahr pro Sendung/Tag (empirisch, ~6 mAh/Sendung)
-  sende_int_min:     240    # Sendeintervall (Minuten); jede 4h = 240 min
+  # Empirisches Modell (aus Excel, kalibriert an N=2/Tag → 2.2 Ah/Jahr):
+  reserve_modem:       2    # Kalibrierungsfaktor (beinhaltet Cold-Derate-Korrektur; bei N=2 exakt)
+  energie_modem_ah:  2.2    # Ah/Jahr pro Sendung/Tag; proportional → konservativ bei N>2
+  # Datenblatt-Modell (RockBLOCK 9603, Fit an 3 Datenpunkten aus Doku):
+  e_sleep_ah:        0.88   # Jahres-Grundverbrauch Schlafmodus (Ah/Jahr, konst.)
+  e_session_mah:     1.79   # Energie pro SBD-Session (mAh; inkl. Aufwach-Overhead)
+  sende_int_min:     180    # Sendeintervall (Minuten); jede 4h = 240 min
 ---
 
 ```{r}
@@ -90,14 +95,37 @@ lz_tage       <- lz_mess / mess_pro_tag
 lz_jahre_head <- lz_tage / 365
 
 # Akkulebensdauer Modem (Iridium)
-# Formel: lz = akku_modem × reserve / (energie_modem × sends_pro_tag)
-# Verifiziert: Head2 (6×/Tag) → 13×2/(2.2×6) = 1.97 Jahre (Excel: ~2) ✓
-sends_pro_tag  <- 24 * 60 / p$sende_int_min
-lz_jahre_modem <- akku_modem_ah * p$reserve_modem / (p$energie_modem_ah * sends_pro_tag)
+sends_pro_tag <- 24 * 60 / p$sende_int_min
+
+# Empirisches Modell (Excel): lz = akku × reserve / (2.2 × N)
+# Kalibriert an N=2/Tag → 2.2 Ah/Jahr (Datenblatt-Beispiel); konservativ für N>2
+lz_jahre_modem_emp <- akku_modem_ah * p$reserve_modem / (p$energie_modem_ah * sends_pro_tag)
+
+# Datenblatt-Modell (RockBLOCK 9603):
+# Ah/Jahr = E_sleep + N × (E_session_mAh × 365/1000)
+# Fit an 3 Datenblatt-Beispielen: 2, 4, 24 Sendungen/Tag
+e_sess_per_day_ah <- p$e_session_mah * 365 / 1000
+lz_jahre_modem_dbl <- akku_modem_ah / (p$e_sleep_ah + sends_pro_tag * e_sess_per_day_ah)
+
+# Konservative Schätzung: empirisch; optimistische: Datenblatt
+lz_jahre_modem <- lz_jahre_modem_emp
 
 # Gesamtlebensdauer = begrenzender Akku
 lz_jahre <- min(lz_jahre_head, lz_jahre_modem)
 limit_by <- if (lz_jahre_head <= lz_jahre_modem) "Head-Akku" else "Modem-Akku (Iridium)"
+
+# Jede wievielte Messung gesendet wird (für Firmware-Konfiguration)
+nth_messung <- round(p$sende_int_min / p$mess_int_min)
+
+# Kanalbezeichnungen Englisch
+ch_en <- c(
+  "NTC1"                       = "NTC1",
+  "NTC2"                       = "NTC2",
+  "GND"                        = "GND",
+  "Druck"                      = "Pressure",
+  "Referenzwiderstand (testSB)"= "Ref. Resistor (testSB)"
+)
+kanaele_en <- ch_en[kanaele$Kanal]
 ```
 
 ## Konfiguration
@@ -106,6 +134,7 @@ limit_by <- if (lz_jahre_head <= lz_jahre_modem) "Head-Akku" else "Modem-Akku (I
 #| echo: false
 tribble(
   ~Parameter,                          ~Wert,
+  "Setup-Name",                        p$name,
   "Anzahl Nodes",                      as.character(p$n_nodes),
   "Aktive Kanäle",
     paste(kanaele$Kanal, collapse = ", "),
@@ -173,13 +202,8 @@ tribble(
 ) |>
   gt() |>
   cols_label(Posten = "", Bytes = "Bytes") |>
-  tab_row_group(label = "", rows = 1:2) |>
   tab_style(
-    style = cell_fill(color = "#cce5ff"),
-    locations = cells_body(rows = 3)
-  ) |>
-  tab_style(
-    style = cell_text(weight = "bold"),
+    style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
     locations = cells_body(rows = 3)
   ) |>
   tab_footnote(
@@ -230,6 +254,86 @@ tribble(
 
 ---
 
+## Datenvolumen & Tarifplan
+
+```{r}
+#| echo: false
+# Monatliches Datenvolumen
+tage_monat <- 365.25 / 12
+kb_monat   <- total_bytes * sends_pro_tag * tage_monat / 1024
+
+tribble(
+  ~Grösse, ~Wert,
+  "Bytes pro Sendung",   sprintf("%d B", total_bytes),
+  "Sendungen pro Tag",   sprintf("%.1f  (alle %d min)", sends_pro_tag, p$sende_int_min),
+  "Sendungen pro Monat", sprintf("%.0f", sends_pro_tag * tage_monat),
+  "Datenvolumen",        sprintf("%.1f kB / Monat", kb_monat)
+) |>
+  gt() |>
+  cols_label(Grösse = "", Wert = "Wert") |>
+  tab_style(
+    style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
+    locations = cells_body(rows = 4)
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+Vergleich mit Iridium SBD Serviceplänen (AT-SBD, Groundcontrol):
+
+```{r}
+#| echo: false
+plans <- tribble(
+  ~`Plan (kB/Monat)`, ~`Monthly Fee ($)`, ~`Overage ($/kB)`,
+   0,    7.09, 3.68,
+   2.5, 10.50, 3.15,
+   5,   15.75, 3.15,
+  10,   21.00, 2.31,
+  15,   25.20, 2.10,
+  20,   31.50, 1.89,
+  25,   36.75, 1.68,
+  35,   47.25, 1.47,
+  50,   63.00, 1.26,
+ 100,   89.25, 0.79,
+ 250,  147.00, 0.79,
+ 300,  168.00, 0.79
+) |>
+  mutate(
+    overage_kb      = pmax(0, kb_monat - `Plan (kB/Monat)`),
+    overage_cost    = overage_kb * `Overage ($/kB)`,
+    `Gesamt ($/Mon)` = `Monthly Fee ($)` + overage_cost,
+    optimal         = `Gesamt ($/Mon)` == min(`Gesamt ($/Mon)`)
+  )
+
+best_row      <- which(plans$optimal)
+kb_plan_opt   <- plans$`Plan (kB/Monat)`[best_row]   # Schwelle für Gelb-Markierung
+yellow_rows   <- which(plans$`Plan (kB/Monat)` >= kb_monat &
+                       plans$`Plan (kB/Monat)` <  kb_plan_opt)
+
+plans |>
+  select(`Plan (kB/Monat)`, `Monthly Fee ($)`, `Overage ($/kB)`,
+         `Overage kB` = overage_kb, `Gesamt ($/Mon)`) |>
+  mutate(`Overage kB` = round(`Overage kB`, 1),
+         `Gesamt ($/Mon)` = round(`Gesamt ($/Mon)`, 2)) |>
+  gt() |>
+  tab_style(
+    style = list(cell_fill(color = "#d4edda"), cell_text(weight = "bold")),
+    locations = cells_body(rows = best_row)
+  ) |>
+  tab_style(
+    style = cell_fill(color = "#fff3cd"),
+    locations = cells_body(rows = yellow_rows)
+  ) |>
+  tab_footnote(
+    sprintf("Aktuelles Volumen: %.1f kB/Monat  |  Günstigster Plan: %g kB ($%.2f/Mon)",
+            kb_monat,
+            plans$`Plan (kB/Monat)`[best_row],
+            min(plans$`Gesamt ($/Mon)`))
+  ) |>
+  tab_options(table.font.size = 13)
+```
+
+---
+
 ## Akkulebensdauer
 
 ### Head-Akku
@@ -265,33 +369,56 @@ tribble(
 
 ### Modem-Akku (Iridium SBD)
 
-Empirische Formel aus dem Excel, verifiziert an Head 2/3/4:
-
-$$\text{Lebensdauer}_\text{Modem} = \frac{C_\text{Modem} \times R}{E_\text{ref} \times N_\text{Sendungen/Tag}}$$
-
-- $C_\text{Modem}$ = `r sprintf("P%dS2 × %.1f Ah = %.1f Ah", p$p_modem, zelle_ah_kalt, akku_modem_ah)`
-- $R = `r p$reserve_modem`$ (Reservefaktor Iridium-Energiemodell)
-- $E_\text{ref} = `r p$energie_modem_ah`$ Ah/Jahr pro Sendung/Tag
-  $\;(\approx `r round(p$energie_modem_ah * 1000 / 365, 1)`$ mAh pro SBD-Session inkl. Wake-up-Overhead)
+**RockBLOCK 9603 Kennwerte** (aus Datenblatt):
 
 ```{r}
 #| echo: false
 tribble(
-  ~Grösse, ~Wert,
-  "Akkukapazität Modem",  sprintf("P%dS2 × %.1f Ah = %.1f Ah", p$p_modem, zelle_ah_kalt, akku_modem_ah),
-  "Reservefaktor",        as.character(p$reserve_modem),
-  "Sendeintervall",       sprintf("alle %d min  →  %.1f× täglich",
-                            p$sende_int_min, sends_pro_tag),
-  "Lebensdauer Modem",    sprintf("%.1f Jahre", lz_jahre_modem)
+  ~Modus, ~Strom, ~Energie,
+  "Schlaf (Sleep)",         "73 µA",      "0.64 Ah/Jahr (konst.)",
+  "Aktiv / Warten (Idle)",  "40–50 mA",   "dominiert bei langer Wachzeit",
+  "SBD-Session (Erfolg)",   "45–50 mA",   "2.8 A·s ≈ 0.78 mAh pro Session",
+  "SBD-Session (Fehlschl.)", "60–65 mA",  "3.8 A·s ≈ 1.06 mAh",
+  "Übergangsphase (Schlaf→Aktiv)", "–",   "~4 A·s pro Stunde"
 ) |>
   gt() |>
-  cols_label(Grösse = "", Wert = "Wert") |>
+  cols_label(Modus = "Modus", Strom = "Strom", Energie = "Energie") |>
+  tab_options(table.font.size = 13)
+```
+
+Aus den drei Jahres-Beispielen im Datenblatt (2×, 4×, 24×/Tag) folgt per linearem Fit:
+
+$$\text{Ah/Jahr} = \underbrace{0.88}_{\text{Schlaf}} + N \times \underbrace{0.65}_{\text{pro Sendung/Tag}}$$
+
+Eine Session verbraucht inkl. Aufwach-Overhead ~**1.8 mAh** (≈ 6.4 A·s, ~8 min Idle bei 45 mA).
+
+**Zwei Modelle im Vergleich:**
+
+```{r}
+#| echo: false
+tribble(
+  ~Modell, ~Formel, ~`Grönland (N=6)`,
+  "Empirisch (Excel)",
+    "akku × 2 / (2.2 × N)  [konservativ bei N > 2]",
+    sprintf("%.1f Jahre", lz_jahre_modem_emp),
+  "Datenblatt (RockBLOCK)",
+    "akku / (0.88 + N × 0.65)  [physikalisch]",
+    sprintf("%.1f Jahre", lz_jahre_modem_dbl)
+) |>
+  gt() |>
+  cols_label(Modell = "Modell", Formel = "Formel", `Grönland (N=6)` = "Grönland (N=6/Tag)") |>
+  tab_footnote(
+    sprintf("Akku Modem: P%dS2 = %.1f Ah (kaltgederat)",
+            p$p_modem, akku_modem_ah)
+  ) |>
   tab_style(
     style = list(cell_fill(color = "#cce5ff"), cell_text(weight = "bold")),
-    locations = cells_body(rows = 4)
+    locations = cells_body(rows = 1)
   ) |>
-  tab_options(table.font.size = 14)
+  tab_options(table.font.size = 13)
 ```
+
+*Der Rechner verwendet das konservativere empirische Modell.*
 
 ### Gesamte Lebensdauer
 
@@ -320,17 +447,18 @@ tribble(
 #| echo: false
 #| fig-alt: "Lebensdauer in Jahren als Funktion des Messintervalls für Head- und Modem-Akku"
 intervalle <- tibble(
-  min       = seq(5, 240, by = 5),
-  mpd       = 24 * 60 / min,
-  head      = lz_mess / mpd / 365,
-  modem     = lz_jahre_modem,            # unabhängig vom Messintervall
-  gesamt    = pmin(head, modem)
+  min        = seq(5, 240, by = 5),
+  mpd        = 24 * 60 / min,
+  head       = lz_mess / mpd / 365,
+  modem_emp  = lz_jahre_modem_emp,        # unabhängig vom Messintervall
+  modem_dbl  = lz_jahre_modem_dbl,
+  gesamt     = pmin(head, modem_emp)
 ) |>
-  tidyr::pivot_longer(c(head, modem, gesamt),
+  tidyr::pivot_longer(c(head, modem_emp, modem_dbl, gesamt),
                       names_to = "Akku", values_to = "jahre") |>
   mutate(Akku = factor(Akku,
-    levels = c("head", "modem", "gesamt"),
-    labels = c("Head-Akku", "Modem-Akku", "Gesamt (min)")))
+    levels = c("head", "modem_emp", "modem_dbl", "gesamt"),
+    labels = c("Head-Akku", "Modem (empirisch)", "Modem (Datenblatt)", "Gesamt (min)")))
 
 ggplot(intervalle, aes(x = min, y = jahre, colour = Akku, linetype = Akku)) +
   geom_line(linewidth = 1) +
@@ -348,12 +476,14 @@ ggplot(intervalle, aes(x = min, y = jahre, colour = Akku, linetype = Akku)) +
     label = sprintf("%.1f Jahre\n(%d min)", lz_jahre, p$mess_int_min),
     hjust = 0, size = 3.2, colour = "grey30"
   ) +
-  scale_colour_manual(values = c("Head-Akku" = "steelblue",
-                                 "Modem-Akku" = "darkorange",
-                                 "Gesamt (min)" = "tomato")) +
-  scale_linetype_manual(values = c("Head-Akku" = "solid",
-                                   "Modem-Akku" = "dashed",
-                                   "Gesamt (min)" = "solid")) +
+  scale_colour_manual(values = c("Head-Akku"          = "steelblue",
+                                 "Modem (empirisch)"  = "darkorange",
+                                 "Modem (Datenblatt)" = "darkgreen",
+                                 "Gesamt (min)"       = "tomato")) +
+  scale_linetype_manual(values = c("Head-Akku"          = "solid",
+                                   "Modem (empirisch)"  = "dashed",
+                                   "Modem (Datenblatt)" = "dotted",
+                                   "Gesamt (min)"       = "solid")) +
   scale_x_continuous(breaks = seq(0, 240, 30)) +
   labs(x = "Messintervall (Minuten)", y = "Lebensdauer (Jahre)",
        colour = NULL, linetype = NULL) +
@@ -379,3 +509,90 @@ tribble(
   tab_footnote("Lebensdauer bei Messung alle 30 min.") |>
   tab_options(table.font.size = 13)
 ```
+
+---
+
+## Setup Summary {#summary}
+
+```{r}
+#| echo: false
+kb_monat_val  <- total_bytes * sends_pro_tag * (365.25 / 12) / 1024
+kanaele_sum   <- kanaele_en[!grepl("testSB|Ref\\.", kanaele_en)]
+
+ord_sfx <- function(n) {
+  switch(as.character(n %% 10),
+    "1" = if (n != 11) "st" else "th",
+    "2" = if (n != 12) "nd" else "th",
+    "3" = if (n != 13) "rd" else "th", "th")
+}
+
+tbl_config <- data.frame(
+  Parameter = c(
+    "Name", "Head battery", "Modem battery",
+    "Nodes", "Active channels",
+    "Meas. interval", "Send interval"
+  ),
+  Value = c(
+    p$name,
+    sprintf("P%d – %.1f Ah  (%d × %.1f Ah, cold-derated)", p$p_head, akku_ah, p$p_head, zelle_ah_kalt),
+    sprintf("P%dS2 – %.1f Ah  (%d × %.1f Ah, cold-derated)", p$p_modem, akku_modem_ah, p$p_modem, zelle_ah_kalt),
+    as.character(p$n_nodes),
+    paste(kanaele_sum, collapse = ", "),
+    sprintf("%d min", p$mess_int_min),
+    sprintf("%d min  (every %d%s measurement)", p$sende_int_min, nth_messung, ord_sfx(nth_messung))
+  ),
+  stringsAsFactors = FALSE
+)
+
+tbl_results <- data.frame(
+  Parameter = c(
+    "Payload / SBD packet", "Cycle time", "Data volume / month",
+    "Head battery life",
+    "Modem life (conservative)", "Modem life (datasheet)",
+    "Limiting factor"
+  ),
+  Value = c(
+    sprintf("%d B  (%d packet%s, max %d B)", total_bytes, n_pakete, if (n_pakete == 1) "" else "s", SBD_MAX),
+    sprintf("%s meas. + %s TX = %s total", fmt_time(t_mess_s), fmt_time(t_tx_s), fmt_time(t_total_s)),
+    sprintf("%.1f kB", kb_monat_val),
+    sprintf("%.1f years", lz_jahre_head),
+    sprintf("%.1f years  (empirical)", lz_jahre_modem_emp),
+    sprintf("%.1f years  (RockBLOCK 9603 datasheet)", lz_jahre_modem_dbl),
+    limit_by
+  ),
+  stringsAsFactors = FALSE
+)
+```
+
+*`r p$name` · EncoderHead Setup Summary · generated `r format(Sys.Date(), "%Y-%m-%d")`*
+
+::: {layout-ncol=2}
+
+```{r}
+#| echo: false
+tbl_config |>
+  gt() |>
+  tab_header(title = "Configuration") |>
+  cols_label(Parameter = "", Value = "") |>
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_body(columns = Value)) |>
+  tab_options(table.font.size = 13, table.width = pct(100),
+              heading.title.font.size = 14, heading.align = "left",
+              column_labels.hidden = TRUE)
+```
+
+```{r}
+#| echo: false
+tbl_results |>
+  gt() |>
+  tab_header(title = "Results") |>
+  cols_label(Parameter = "", Value = "") |>
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_body(columns = Value)) |>
+  tab_options(table.font.size = 13, table.width = pct(100),
+              heading.title.font.size = 14, heading.align = "left",
+              column_labels.hidden = TRUE)
+```
+
+:::
+
