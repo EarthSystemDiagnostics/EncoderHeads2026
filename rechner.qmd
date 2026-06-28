@@ -15,8 +15,10 @@ params:
   ntc1:          true    # NTC1 messen?
   ntc2:          true    # NTC2 messen?
   gnd:           true   # GND messen?
-  druck:         false    # Druck messen?
-  testsb:        true   # Referenzwiderstand (testSB) messen?
+  druck:         true    # Druck messen?
+  testsb:        false   # Referenzwiderstand (testSB) messen?
+  separatoren:   false   # 0x7C-Trennbyte vor jedem Wert? (sep-Format = +1 B/Feld)
+                         # false = nosep (z.B. ...-141.bin, 229 B), true = sep (...-139/-140, 311 B)
 
   # --- Zeitmodell ---
   t_kanal_s:     2.29    # X: Sekunden pro Einzelmessung (Kanal × Node)
@@ -65,8 +67,12 @@ kanaele <- tribble(
 ) |> filter(aktiv)
 
 n_kanaele    <- nrow(kanaele)
-bytes_node   <- sum(kanaele$Bytes)
-OVERHEAD     <- 9L    # time_unix(4) + adc_temp(3) + battery_mv(2)
+# Firmware-Variante: im sep-Format steht vor jedem Wert ein 0x7C-Trennbyte
+# (je Kanal/Node +1 B; adc_temp und battery_mv ebenfalls je +1 B). Muss zum
+# Decoder passen: nosep = bin_expected nosep, sep = bin_expected sep.
+sep          <- isTRUE(p$separatoren)
+bytes_node   <- sum(kanaele$Bytes) + if (sep) n_kanaele else 0L
+OVERHEAD     <- if (sep) 11L else 9L   # time_unix(4) + adc(3) + battery(2) [+ 2 Separatoren]
 SBD_MAX      <- 340L  # Iridium SBD MO-Limit
 total_bytes  <- OVERHEAD + p$n_nodes * bytes_node
 n_pakete     <- ceiling(total_bytes / SBD_MAX)
@@ -518,7 +524,8 @@ tribble(
 #| echo: false
 kb_monat_val  <- total_bytes * sends_pro_tag * (365.25 / 12) / 1024
 kanaele_sum   <- kanaele_en
-overhead_lbl  <- "time_unix, adc_temp, battery_mv"   # immer an (Header/Footer, 9 B)
+overhead_lbl  <- "time_unix, adc_temp, battery_mv"   # immer an (Header/Footer)
+fmt_lbl       <- if (sep) "0x7C-separated" else "no separators"
 
 ord_sfx <- function(n) {
   switch(as.character(n %% 10),
@@ -553,7 +560,7 @@ tbl_results <- data.frame(
     "Limiting factor"
   ),
   Value = c(
-    sprintf("%d B  (%d packet%s, max %d B)", total_bytes, n_pakete, if (n_pakete == 1) "" else "s", SBD_MAX),
+    sprintf("%d B, %s  (%d packet%s, max %d B)", total_bytes, fmt_lbl, n_pakete, if (n_pakete == 1) "" else "s", SBD_MAX),
     sprintf("%s meas. + %s TX = %s total", fmt_time(t_mess_s), fmt_time(t_tx_s), fmt_time(t_total_s)),
     sprintf("%.1f kB", kb_monat_val),
     sprintf("%.1f years", lz_jahre_head),
