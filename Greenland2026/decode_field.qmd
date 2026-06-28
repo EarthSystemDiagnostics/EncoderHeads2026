@@ -26,7 +26,7 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 #  path to .bin attachment from the Cloudloop email (overrides MSG1/MSG2) -
 # Format: 4-byte timestamp + [0x7C | value] × fields × N + [0x7C | 2-byte battery]
 # IMEI / n_nodes / fields / spacing come from head_config, not the file content.
-BIN_FILE <- "../testdata/301434062008130-140.bin"
+BIN_FILE <- "../testdata/301434062008130-141.bin"
 
 
 
@@ -99,19 +99,26 @@ bin_field_bytes <- function(f) {
   stop("Unknown field: ", f)
 }
 
+# Expected binary file size for N nodes with these fields, in two firmware
+# variants: each field is either preceded by a 0x7C separator byte ("sep") or
+# the fields are concatenated directly ("nosep"). Layout in both cases:
+#   4 B timestamp + adc(3) + N × node + battery(2), separators add +1 B/field.
+bin_expected_len <- function(n_nodes, fields) {
+  w <- sapply(fields, bin_field_bytes)
+  list(sep   = 4L + (1L + 3L) + n_nodes * sum(1L + w) + (1L + 2L),
+       nosep = 4L +        3L  + n_nodes * sum(w)       +        2L)
+}
+
 if (BIN_FILE == "") {
   n_hex_node   <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB", "pressure"), 6L, 4L))
   expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
 } else {
-  # Each binary field is preceded by a 0x7C separator (1 B).
-  # Layout: 4 B time + (1+3) adc + N × node_bytes + (1+2) battery.
-  node_bytes   <- sum(1L + sapply(fields, bin_field_bytes))
-  n_file       <- file.info(BIN_FILE)$size
-  expected_len <- 4L + 4L + n_nodes * node_bytes + 3L
-  n_detected   <- (n_file - 11L) %/% node_bytes
-  if (n_file != expected_len)
-    warning(sprintf("File is %d B but Head_%s (%s) implies %d B (%d nodes) — check HEAD_ID",
-                    n_file, HEAD_ID, paste(fields, collapse = "/"), expected_len, n_nodes))
+  exp_len <- bin_expected_len(n_nodes, fields)
+  n_file  <- file.info(BIN_FILE)$size
+  if (!n_file %in% c(exp_len$sep, exp_len$nosep))
+    warning(sprintf("File is %d B but Head_%s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check HEAD_ID",
+                    n_file, HEAD_ID, paste(fields, collapse = "/"),
+                    exp_len$sep, exp_len$nosep, n_nodes))
 }
 ```
 
@@ -181,19 +188,23 @@ pressure2hPa   <- function(p) p / 1000
 unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
 
 # Binary snowchain/snowmelt decoder — field-driven by `fields`:
-#   4-byte BE timestamp + (0x7C | int24 adc) + N × node + (0x7C | uint16 battery)
-# Each node holds one value per entry of `fields`, in order, each preceded by 0x7C:
+#   4-byte BE timestamp + adc(int24) + N × node + battery(uint16)
+# Each node holds one value per entry of `fields`, in order:
 #   ntc1/ntc2/testSB → 3-byte signed int24, gnd → 2-byte signed int16,
 #   pressure → 3-byte unsigned uint24.
-read_snowchain_bin <- function(path, fields) {
-  raw  <- readBin(path, what = "raw", n = file.info(path)$size)
-  n    <- length(raw)
+# Two firmware variants, auto-detected from the file size: every value is either
+# preceded by a 0x7C separator byte ("sep") or the values are concatenated
+# directly ("nosep"). n_nodes comes from head_config (authoritative).
+read_snowchain_bin <- function(path, fields, n_nodes) {
+  raw <- readBin(path, what = "raw", n = file.info(path)$size)
+  n   <- length(raw)
 
-  node_bytes <- sum(1L + sapply(fields, bin_field_bytes))
-  if ((n - 11L) %% node_bytes != 0L)
-    stop(sprintf("File size %d B not consistent with 11 + %d×N (%s)",
-                 n, node_bytes, paste(fields, collapse = "/")))
-  n_nd <- (n - 11L) %/% node_bytes
+  exp     <- bin_expected_len(n_nodes, fields)
+  has_sep <- if (n == exp$sep) TRUE
+             else if (n == exp$nosep) FALSE
+             else stop(sprintf(
+               "File size %d B matches neither %d (with) nor %d (without separators) for %d nodes (%s)",
+               n, exp$sep, exp$nosep, n_nodes, paste(fields, collapse = "/")))
 
   be_uint <- function(b) sum(as.integer(b) * 256^rev(seq_along(b) - 1L))
   be_sint <- function(b) {
@@ -201,25 +212,28 @@ read_snowchain_bin <- function(path, fields) {
     if (v >= 2^(bits - 1L)) v - 2^bits else v
   }
 
-  pos <- 5L
+  pos <- 5L                                   # after 4-byte timestamp
   read_field <- function(w, signed) {
-    if (as.integer(raw[pos]) != 0x7CL)
-      warning(sprintf("Expected 0x7C at byte %d, got 0x%02X", pos, as.integer(raw[pos])))
-    b <- raw[(pos + 1L):(pos + w)]
+    if (has_sep) {
+      if (as.integer(raw[pos]) != 0x7CL)
+        warning(sprintf("Expected 0x7C at byte %d, got 0x%02X", pos, as.integer(raw[pos])))
+      pos <<- pos + 1L
+    }
+    b <- raw[pos:(pos + w - 1L)]
     v <- if (signed) be_sint(b) else be_uint(b)
-    pos <<- pos + 1L + w; v
+    pos <<- pos + w; v
   }
 
   time_unix  <- be_uint(raw[1:4])
   adc_temp   <- read_field(3L, TRUE)
-  nodes_raw  <- lapply(seq_len(n_nd), function(i)
+  nodes_raw  <- lapply(seq_len(n_nodes), function(i)
     setNames(lapply(fields, function(f)
       read_field(bin_field_bytes(f), f != "pressure")), fields))
   battery_mv <- read_field(2L, FALSE)
 
   list(time_unix = time_unix, adc_temp = adc_temp,
        nodes = nodes_raw, battery_mv = as.integer(battery_mv),
-       n_nodes = n_nd)
+       n_nodes = n_nodes, has_sep = has_sep)
 }
 ```
 
@@ -235,10 +249,11 @@ library(patchwork)
 
 if (BIN_FILE != "") {
   # ---- Binary snowchain path ------------------------------------------------
-  bin        <- read_snowchain_bin(BIN_FILE, fields)
+  bin        <- read_snowchain_bin(BIN_FILE, fields, n_nodes)
   time_utc   <- unix2utc(bin$time_unix)
   adc_temp_C <- adc2temp(bin$adc_temp)
   battery_mv <- bin$battery_mv
+  bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
 
   nodes <- data.frame(node = seq_len(n_nodes))
   for (f in fields) {
@@ -299,7 +314,7 @@ check <- function(val, lo, hi, label, unit) {
 | **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
 | **Battery** | `r battery_mv` mV |
 | **ADC temp** | `r round(adc_temp_C, 2)` °C |
-| **Source** | `r if (BIN_FILE != "") paste0("binary: ", basename(BIN_FILE)) else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
+| **Source** | `r if (BIN_FILE != "") paste0("binary: ", basename(BIN_FILE), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
 :::
 
 ```{r diag-checks, results='asis'}
