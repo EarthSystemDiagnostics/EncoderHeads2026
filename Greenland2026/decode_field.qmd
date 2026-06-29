@@ -29,7 +29,7 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 
 # Path to the .bin attachment from the Cloudloop email ------------------------
-BIN_FILE <- "../testdata/300434065508020-3.bin"
+BIN_FILE <- "../testdata/300434065508020-4.bin"
 
 # OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
 # If the head sends two messages per measurement, paste both.
@@ -206,7 +206,8 @@ read_snowchain_bin <- function(path, fields, n_nodes) {
     if (sgn) be_sint(b) else be_uint(b)
   }
 
-  time_unix <- be_uint(raw[1:4])
+  time_unix   <- be_uint(raw[1:4])
+  bat_lo <- NA_integer_; bat_hi <- NA_integer_; bat_partial <- FALSE
 
   if (has_sep) {
     sep_pos <- which(ints == 0x7CL); sep_pos <- sep_pos[sep_pos >= 5L]
@@ -218,21 +219,42 @@ read_snowchain_bin <- function(path, fields, n_nodes) {
     vals   <- lapply(seq_len(min(length(sep_pos), n_val)), function(i)
       decode_one(raw[fstart[i]:fend[i]], widths[i], signed[i]))
   } else {
+    # nosep is fixed-width, BUT a defective sensor emits the overflow sentinel
+    # 0x01000000, which needs 4 bytes in a 3-byte field. Detect it by signature
+    # and consume the extra byte to re-align the rest of the stream.
     pos  <- 5L
     vals <- vector("list", n_val)
     for (i in seq_len(n_val)) {
-      vals[[i]] <- decode_one(raw[pos:(pos + widths[i] - 1L)], widths[i], signed[i])
-      pos <- pos + widths[i]
+      w <- widths[i]
+      if (w == 3L && pos + 3L <= n && all(ints[pos:(pos + 3L)] == c(1L, 0L, 0L, 0L))) {
+        vals[[i]] <- NA_real_                       # defective sensor → NA, skip 4 B
+        pos <- pos + 4L
+      } else if (i == n_val && pos + w - 1L > n && pos <= n) {
+        # battery low byte(s) lost to a sentinel shift: only the high byte(s)
+        # survived → reconstruct a 256-mV range from what is left.
+        navail <- n - pos + 1L
+        hb     <- be_uint(raw[pos:n]) * 256L^(w - navail)
+        bat_lo <- as.integer(hb)
+        bat_hi <- as.integer(hb + 256L^(w - navail) - 1L)
+        bat_partial <- TRUE
+        vals[[i]] <- hb
+        pos <- n + 1L
+      } else {
+        vals[[i]] <- decode_one(raw[pos:(pos + w - 1L)], w, signed[i])
+        pos <- pos + w
+      }
     }
   }
 
-  node_vals <- vals[2:(1L + n_nodes * nf)]
-  nodes_raw <- lapply(seq_len(n_nodes), function(i)
+  node_vals  <- vals[2:(1L + n_nodes * nf)]
+  nodes_raw  <- lapply(seq_len(n_nodes), function(i)
     setNames(node_vals[((i - 1L) * nf + 1L):(i * nf)], fields))
+  battery_mv <- as.integer(vals[[n_val]])
+  if (!bat_partial) { bat_lo <- battery_mv; bat_hi <- battery_mv }
 
-  list(time_unix = time_unix, adc_temp = vals[[1]],
-       nodes = nodes_raw, battery_mv = as.integer(vals[[n_val]]),
-       n_nodes = n_nodes, has_sep = has_sep)
+  list(time_unix = time_unix, adc_temp = vals[[1]], nodes = nodes_raw,
+       battery_mv = battery_mv, battery_lo = bat_lo, battery_hi = bat_hi,
+       battery_partial = bat_partial, n_nodes = n_nodes, has_sep = has_sep)
 }
 ```
 
@@ -252,6 +274,9 @@ if (BIN_FILE != "") {
   time_utc   <- unix2utc(bin$time_unix)
   adc_temp_C <- adc2temp(bin$adc_temp)
   battery_mv <- bin$battery_mv
+  battery_lo <- bin$battery_lo
+  battery_hi <- bin$battery_hi
+  battery_partial <- bin$battery_partial
   bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
 
   nodes <- data.frame(node = seq_len(n_nodes))
@@ -288,6 +313,7 @@ if (BIN_FILE != "") {
   time_utc   <- unix2utc(raw$time_unix)
   adc_temp_C <- adc2temp(raw$adc_temp)
   battery_mv <- as.integer(raw$battery_mv)
+  battery_lo <- battery_mv; battery_hi <- battery_mv; battery_partial <- FALSE
 }
 ```
 
@@ -311,7 +337,7 @@ check <- function(val, lo, hi, label, unit) {
 | | |
 |---|---|
 | **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
-| **Battery** | `r battery_mv` mV |
+| **Battery** | `r if (battery_partial) sprintf("%d–%d mV (low byte lost — defective-sensor shift)", battery_lo, battery_hi) else paste0(battery_mv, " mV")` |
 | **ADC temp** | `r round(adc_temp_C, 2)` °C |
 | **Source** | `r if (BIN_FILE != "") paste0("binary: ", basename(BIN_FILE), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
 :::
@@ -362,7 +388,7 @@ s <- cfg$spacing_cm
 long <- nodes |>
   select(node, ends_with("_C")) |>
   pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
-  filter(!is.na(temp_C)) |>          # drop defective sensors (e.g. topmost NTC3)
+  filter(!is.na(temp_C)) |>          # drop defective sensors (sentinel → NA, e.g. topmost NTC3)
   mutate(
     sensor   = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
     ntc_rank = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
