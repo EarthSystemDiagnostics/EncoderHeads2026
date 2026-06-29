@@ -22,73 +22,48 @@ execute:
 Edit this block, then re-render (`Ctrl+Shift+K`).
 
 ```{r params}
+# Identification is purely by IMEI — the "IMEI: <id>" line in the Cloudloop mail,
+# which is also the .bin filename prefix (e.g. 300434065508020-2.bin). For a .bin
+# attachment the IMEI is auto-detected from the filename; the head's n_nodes /
+# fields / type / spacing then come from head_config[[IMEI]].
+IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 
-#  path to .bin attachment from the Cloudloop email (overrides MSG1/MSG2) -
-# Format: 4-byte timestamp + [0x7C | value] × fields × N + [0x7C | 2-byte battery]
-# IMEI / n_nodes / fields / spacing come from head_config, not the file content.
-BIN_FILE <- "../testdata/301434062008130-141.bin"
+# Path to the .bin attachment from the Cloudloop email ------------------------
+BIN_FILE <- "../testdata/300434065508020-2.bin"
 
-
-
-# Identification is by IMEI — the "IMEI: <id>" line in the Cloudloop mail, which
-# is also the .bin filename prefix (e.g. 301434062008130-140.bin). The IMEI is
-# auto-detected from BIN_FILE below and selects the head from head_config.
-# Set HEAD_ID manually only for a pasted hex payload, or to override detection.
-HEAD_ID <- "chain"  # "test" | "26-02" | "26-03" | "26-04" | "26-05" | "chain"
-
-# Paste hex payload(s) from email ---------------------------------------------
-# SnowMelt heads (26-02, 26-03): one message  → fill MSG1, leave MSG2 = ""
-# Other heads    (26-04, 26-05): one message  → fill MSG1, leave MSG2 = ""
+# OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
 # If the head sends two messages per measurement, paste both.
 MSG1 <- ""
 MSG2 <- ""
-
-
 ```
 
 ```{r head-config}
 head_config <- list(
-  # imei = Iridium IMEI from the Cloudloop mail / .bin filename prefix (primary ID).
-  # Fill in the IMEI for each deployed head as it becomes known.
-  "test" = list(imei = NA_character_, n_nodes = 3L,
-                 fields = c("ntc1", "ntc2", "testSB"),
-                 type = "snowmelt", spacing_cm = 4L),
-  "26-02" = list(imei = NA_character_, n_nodes = 24L,
-                 fields = c("ntc1", "ntc2", "testSB"),
-                 type = "snowmelt", spacing_cm = 4L),
-  "26-03" = list(imei = NA_character_, n_nodes = 24L,
-                 fields = c("ntc1", "ntc2", "testSB"),
-                 type = "snowmelt", spacing_cm = 4L),
-  "26-04" = list(imei = NA_character_, n_nodes = 20L,
-                 fields = c("ntc1", "ntc2", "gnd"),
-                 type = "standard", spacing_cm = NA_integer_),
-  "26-05" = list(imei = NA_character_, n_nodes = 20L,
-                 fields = c("ntc1", "ntc2", "gnd"),
-                 type = "standard", spacing_cm = NA_integer_),
-  # Chain ("Kette") with barometric pressure channel — IMEI confirmed 2026-06-28.
-  "chain" = list(imei = "301434062008130", n_nodes = 20L,
+  # One entry per deployed head, KEYED BY IMEI. `label` is just a human name;
+  # n_nodes / fields / type / spacing_cm are authoritative for decoding & plots.
+  "301434062008130" = list(label = "Kette (chain)", n_nodes = 20L,
                  fields = c("ntc1", "ntc2", "gnd", "pressure"),
-                 type = "standard", spacing_cm = NA_integer_)
+                 type = "standard", spacing_cm = NA_integer_),
+  "300434065508020" = list(label = "Snowmelt 24N", n_nodes = 24L,
+                 fields = c("ntc1", "ntc2", "testSB"),
+                 type = "snowmelt", spacing_cm = 4L)
+  # Add further heads here, one per IMEI.
 )
 
 # --- Identify head by IMEI ---------------------------------------------------
-# For a .bin attachment, the IMEI is the filename prefix; look it up in
-# head_config and use that head. Falls back to the manual HEAD_ID otherwise.
-file_imei <- if (BIN_FILE != "") sub("-.*$", "", basename(BIN_FILE)) else NA_character_
-if (!is.na(file_imei)) {
-  match_id <- names(Filter(function(h) isTRUE(h$imei == file_imei), head_config))
-  if (length(match_id) == 1L) {
-    if (HEAD_ID != match_id)
-      message(sprintf("IMEI %s → head '%s' (overriding HEAD_ID '%s')",
-                      file_imei, match_id, HEAD_ID))
-    HEAD_ID <- match_id
-  } else {
-    warning(sprintf("IMEI %s not found in head_config — using manual HEAD_ID '%s'. Add its IMEI.",
-                    file_imei, HEAD_ID))
-  }
+# For a .bin attachment the IMEI is the filename prefix; for a hex payload set
+# IMEI manually above. The IMEI is the sole selector into head_config.
+imei <- if (IMEI != "") {
+  IMEI
+} else if (BIN_FILE != "") {
+  sub("-.*$", "", basename(BIN_FILE))
+} else {
+  stop("Set IMEI (hex payload) or BIN_FILE (.bin attachment).")
 }
+cfg  <- head_config[[imei]]
+if (is.null(cfg))
+  stop(sprintf("IMEI '%s' is not in head_config — add an entry for this device.", imei))
 
-cfg     <- head_config[[HEAD_ID]]
 n_nodes <- cfg$n_nodes
 fields  <- cfg$fields
 
@@ -115,10 +90,17 @@ if (BIN_FILE == "") {
 } else {
   exp_len <- bin_expected_len(n_nodes, fields)
   n_file  <- file.info(BIN_FILE)$size
-  if (!n_file %in% c(exp_len$sep, exp_len$nosep))
-    warning(sprintf("File is %d B but Head_%s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check HEAD_ID",
-                    n_file, HEAD_ID, paste(fields, collapse = "/"),
+  # A defective sensor can emit an out-of-range value needing >3 B, so a sep file
+  # may be a few bytes LARGER than exp_len$sep — tolerate small positive surplus.
+  surplus <- n_file - exp_len$sep
+  ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
+  if (!ok)
+    warning(sprintf("File is %d B but IMEI %s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check head_config",
+                    n_file, imei, paste(fields, collapse = "/"),
                     exp_len$sep, exp_len$nosep, n_nodes))
+  else if (surplus > 0L)
+    message(sprintf("File is %d B (+%d over %d) — likely a defective sensor sending an oversized value; affected field(s) will read NA.",
+                    n_file, surplus, exp_len$sep))
 }
 ```
 
@@ -192,19 +174,20 @@ unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
 # Each node holds one value per entry of `fields`, in order:
 #   ntc1/ntc2/testSB → 3-byte signed int24, gnd → 2-byte signed int16,
 #   pressure → 3-byte unsigned uint24.
-# Two firmware variants, auto-detected from the file size: every value is either
-# preceded by a 0x7C separator byte ("sep") or the values are concatenated
-# directly ("nosep"). n_nodes comes from head_config (authoritative).
+# Two firmware variants:
+#   sep   — every value is preceded by a 0x7C separator byte. Fields are read
+#           BETWEEN separators (variable length): a defective sensor can emit an
+#           out-of-range value that needs >3 bytes; such wrong-width fields are
+#           returned as NA so the rest stays aligned.
+#   nosep — values concatenated directly, fixed width (no recovery possible).
+# Detected from byte 5 (== 0x7C ⇒ sep), since a sentinel/defective field shifts
+# the file size. n_nodes comes from head_config (authoritative).
 read_snowchain_bin <- function(path, fields, n_nodes) {
-  raw <- readBin(path, what = "raw", n = file.info(path)$size)
-  n   <- length(raw)
+  raw  <- readBin(path, what = "raw", n = file.info(path)$size)
+  n    <- length(raw)
+  ints <- as.integer(raw)
 
-  exp     <- bin_expected_len(n_nodes, fields)
-  has_sep <- if (n == exp$sep) TRUE
-             else if (n == exp$nosep) FALSE
-             else stop(sprintf(
-               "File size %d B matches neither %d (with) nor %d (without separators) for %d nodes (%s)",
-               n, exp$sep, exp$nosep, n_nodes, paste(fields, collapse = "/")))
+  has_sep <- ints[5] == 0x7CL
 
   be_uint <- function(b) sum(as.integer(b) * 256^rev(seq_along(b) - 1L))
   be_sint <- function(b) {
@@ -212,27 +195,43 @@ read_snowchain_bin <- function(path, fields, n_nodes) {
     if (v >= 2^(bits - 1L)) v - 2^bits else v
   }
 
-  pos <- 5L                                   # after 4-byte timestamp
-  read_field <- function(w, signed) {
-    if (has_sep) {
-      if (as.integer(raw[pos]) != 0x7CL)
-        warning(sprintf("Expected 0x7C at byte %d, got 0x%02X", pos, as.integer(raw[pos])))
-      pos <<- pos + 1L
-    }
-    b <- raw[pos:(pos + w - 1L)]
-    v <- if (signed) be_sint(b) else be_uint(b)
-    pos <<- pos + w; v
+  nf     <- length(fields)
+  widths <- c(3L, rep(sapply(fields, bin_field_bytes), n_nodes), 2L)  # adc, nodes…, battery
+  signed <- c(TRUE, rep(fields != "pressure", n_nodes), FALSE)
+  n_val  <- length(widths)
+
+  # Decode one field's bytes; wrong length (defective sensor / sentinel) → NA.
+  decode_one <- function(b, w, sgn) {
+    if (length(b) != w) return(NA_real_)
+    if (sgn) be_sint(b) else be_uint(b)
   }
 
-  time_unix  <- be_uint(raw[1:4])
-  adc_temp   <- read_field(3L, TRUE)
-  nodes_raw  <- lapply(seq_len(n_nodes), function(i)
-    setNames(lapply(fields, function(f)
-      read_field(bin_field_bytes(f), f != "pressure")), fields))
-  battery_mv <- read_field(2L, FALSE)
+  time_unix <- be_uint(raw[1:4])
 
-  list(time_unix = time_unix, adc_temp = adc_temp,
-       nodes = nodes_raw, battery_mv = as.integer(battery_mv),
+  if (has_sep) {
+    sep_pos <- which(ints == 0x7CL); sep_pos <- sep_pos[sep_pos >= 5L]
+    if (length(sep_pos) != n_val)
+      warning(sprintf("Found %d separators, expected %d (adc + %d×%d fields + battery) — alignment may be off (0x7C in data?)",
+                      length(sep_pos), n_val, n_nodes, nf))
+    fstart <- sep_pos + 1L
+    fend   <- c(sep_pos[-1] - 1L, n)
+    vals   <- lapply(seq_len(min(length(sep_pos), n_val)), function(i)
+      decode_one(raw[fstart[i]:fend[i]], widths[i], signed[i]))
+  } else {
+    pos  <- 5L
+    vals <- vector("list", n_val)
+    for (i in seq_len(n_val)) {
+      vals[[i]] <- decode_one(raw[pos:(pos + widths[i] - 1L)], widths[i], signed[i])
+      pos <- pos + widths[i]
+    }
+  }
+
+  node_vals <- vals[2:(1L + n_nodes * nf)]
+  nodes_raw <- lapply(seq_len(n_nodes), function(i)
+    setNames(node_vals[((i - 1L) * nf + 1L):(i * nf)], fields))
+
+  list(time_unix = time_unix, adc_temp = vals[[1]],
+       nodes = nodes_raw, battery_mv = as.integer(vals[[n_val]]),
        n_nodes = n_nodes, has_sep = has_sep)
 }
 ```
@@ -278,8 +277,8 @@ if (BIN_FILE != "") {
 
   if (nchar(hex) != expected_hex) {
     warning(sprintf(
-      "Expected %d hex chars (%d bytes) for Head_%s, got %d. Payload may be incomplete.",
-      expected_hex, expected_hex %/% 2L, HEAD_ID, nchar(hex)
+      "Expected %d hex chars (%d bytes) for IMEI %s, got %d. Payload may be incomplete.",
+      expected_hex, expected_hex %/% 2L, imei, nchar(hex)
     ))
   }
 
@@ -307,7 +306,7 @@ check <- function(val, lo, hi, label, unit) {
 ```
 
 ::: {.callout-note}
-## Message summary — Head_`r HEAD_ID` (IMEI `r cfg$imei`)
+## Message summary — `r cfg$label` (IMEI `r imei`)
 
 | | |
 |---|---|
@@ -347,7 +346,7 @@ if (BIN_FILE == "") {
 
 }
 
-src_label <- if (BIN_FILE != "") basename(BIN_FILE) else paste0("Head_", HEAD_ID)
+src_label <- if (BIN_FILE != "") basename(BIN_FILE) else cfg$label
 knitr::kable(nodes, digits = 2,
              caption = sprintf("All nodes — %s | %s UTC",
                                src_label, format(time_utc, "%Y-%m-%d %H:%M")))
@@ -382,8 +381,8 @@ ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
   scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c",
                                  "NTC3 (TestSB)" = "#27ae60")) +
   labs(
-    title    = sprintf("Temperaturprofil — Head_%s", HEAD_ID),
-    subtitle = sprintf("%s UTC  |  IMEI %s", format(time_utc, "%Y-%m-%d %H:%M"), cfg$imei),
+    title    = sprintf("Temperaturprofil — %s", cfg$label),
+    subtitle = sprintf("%s UTC  |  IMEI %s", format(time_utc, "%Y-%m-%d %H:%M"), imei),
     colour   = NULL, shape = NULL
   ) +
   theme_bw(base_size = 13) +
@@ -400,9 +399,9 @@ p1 <- ggplot(long_ntc, aes(x = node, y = temp_C, colour = sensor)) +
   geom_line(linewidth = 0.7, alpha = 0.6) +
   geom_point(size = 2) +
   scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c")) +
-  labs(title = sprintf("Temperatures — Head_%s", HEAD_ID),
+  labs(title = sprintf("Temperatures — %s", cfg$label),
        subtitle = sprintf("%s UTC  |  IMEI %s",
-                          format(time_utc, "%Y-%m-%d %H:%M"), cfg$imei),
+                          format(time_utc, "%Y-%m-%d %H:%M"), imei),
        x = "Node", y = "Temperature (°C)", colour = NULL) +
   theme_bw(base_size = 13) +
   theme(legend.position = "bottom")
@@ -429,7 +428,7 @@ if ("pressure_hPa" %in% names(nodes)) {
 ## Save result
 
 ```{r save}
-slug    <- if (BIN_FILE != "") tools::file_path_sans_ext(basename(BIN_FILE)) else paste0("head", HEAD_ID)
+slug    <- if (BIN_FILE != "") tools::file_path_sans_ext(basename(BIN_FILE)) else paste0("imei", imei)
 outfile <- sprintf("data/decoded_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
 write.csv(nodes, outfile, row.names = FALSE)
 cat("Saved:", outfile, "\n")
