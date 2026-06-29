@@ -11,13 +11,13 @@ format:
 params:
   name:         "Greenland 2026 Thermochain 2x10 upper 30m, reduced Iridium Battery"   # Setup-Name (erscheint in Kurzübersicht)
   # --- Konfiguration ---
-  n_nodes:       20      # Anzahl Nodes
+  n_nodes:       24      # Anzahl Nodes
   ntc1:          true    # NTC1 messen?
   ntc2:          true    # NTC2 messen?
-  gnd:           true   # GND messen?
-  druck:         true    # Druck messen?
-  testsb:        false   # Referenzwiderstand (testSB) messen?
-  separatoren:   false   # 0x7C-Trennbyte vor jedem Wert? (sep-Format = +1 B/Feld)
+  gnd:           false   # GND messen?
+  druck:         false   # Druck messen?
+  testsb:        true   # Referenzwiderstand (testSB) messen?
+  separatoren:   true   # 0x7C-Trennbyte vor jedem Wert? (sep-Format = +1 B/Feld)
                          # false = nosep (z.B. ...-141.bin, 229 B), true = sep (...-139/-140, 311 B)
 
   # --- Zeitmodell ---
@@ -29,13 +29,13 @@ params:
   # --- Batteriekonfiguration ---
   zelle_mah:      2600   # Nennkapazität pro Zelle (mAh)
   reserve_kaelte:    2   # Kälte-Reservefaktor (100% Reserve → Faktor 2; halbiert nutzbare Kapazität)
-  p_head:           20   # Zellen parallel, Head-Pack  (z.B. P28 → 28 × 1.3 Ah = 36.4 Ah)
-  p_modem:          10   # Zellen parallel, Modem-Pack (z.B. P14S2 → 14 × 1.3 Ah = 18.2 Ah)
+  p_head:           40   # Zellen parallel, Head-Pack  (z.B. P28 → 28 × 1.3 Ah = 36.4 Ah)
+  p_modem:          20   # Zellen parallel, Modem-Pack (z.B. P14S2 → 14 × 1.3 Ah = 18.2 Ah)
                          # Serielle Zellen (S) erhöhen nur die Spannung, nicht die Ah-Kapazität
 
   # --- Akkulebensdauer Head ---
   strom_mA:      12      # Mittlerer Stromverbrauch während aktiver Messzeit (mA)
-  mess_int_min:  60      # Messintervall (Minuten)
+  mess_int_min:  30      # Messintervall (Minuten)
 
   # --- Akkulebensdauer Modem (Iridium) ---
   # Empirisches Modell (aus Excel, kalibriert an N=2/Tag → 2.2 Ah/Jahr):
@@ -44,7 +44,7 @@ params:
   # Datenblatt-Modell (RockBLOCK 9603, Fit an 3 Datenpunkten aus Doku):
   e_sleep_ah:        0.88   # Jahres-Grundverbrauch Schlafmodus (Ah/Jahr, konst.)
   e_session_mah:     1.79   # Energie pro SBD-Session (mAh; inkl. Aufwach-Overhead)
-  sende_int_min:     1440    # Sendeintervall (Minuten); jede 4h = 240 min
+  sende_int_min:     240    # Sendeintervall (Minuten); jede 4h = 240 min
 ---
 
 ```{r}
