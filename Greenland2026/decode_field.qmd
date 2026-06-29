@@ -29,7 +29,7 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 
 # Path to the .bin attachment from the Cloudloop email ------------------------
-BIN_FILE <- "../testdata/300434065508020-2.bin"
+BIN_FILE <- "../testdata/300434065508020-3.bin"
 
 # OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
 # If the head sends two messages per measurement, paste both.
