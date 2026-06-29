@@ -44,7 +44,7 @@ head_config <- list(
   "301434062008130" = list(label = "Kette (chain)", n_nodes = 20L,
                  fields = c("ntc1", "ntc2", "gnd", "pressure"),
                  type = "standard", spacing_cm = NA_integer_),
-  "300434065508020" = list(label = "Snowmelt 24N", n_nodes = 24L,
+  "300434065508020" = list(label = "Snowmelt NEWGRIP", n_nodes = 24L,
                  fields = c("ntc1", "ntc2", "testSB"),
                  type = "snowmelt", spacing_cm = 4L)
   # Add further heads here, one per IMEI.
@@ -362,6 +362,7 @@ s <- cfg$spacing_cm
 long <- nodes |>
   select(node, ends_with("_C")) |>
   pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
+  filter(!is.na(temp_C)) |>          # drop defective sensors (e.g. topmost NTC3)
   mutate(
     sensor   = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
     ntc_rank = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
@@ -393,6 +394,7 @@ ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
 long_ntc <- nodes |>
   select(node, ends_with("_C")) |>
   pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
+  filter(!is.na(temp_C)) |>          # drop defective sensors
   mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2"))
 
 p1 <- ggplot(long_ntc, aes(x = node, y = temp_C, colour = sensor)) +
