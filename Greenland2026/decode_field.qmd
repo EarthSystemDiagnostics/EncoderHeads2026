@@ -28,8 +28,14 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 # fields / type / spacing then come from head_config[[IMEI]].
 IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 
-# Path to the .bin attachment from the Cloudloop email ------------------------
-BIN_FILE <- "../testdata/300434065508020-4.bin"
+# Path(s) to the .bin attachment(s) from the Cloudloop email ------------------
+# One file → single decode as before. A VECTOR of files → a time series: the
+# newest message drives the single-message sections (summary, table, profile),
+# and ALL files feed the extra "Zeitlicher Verlauf" plot. All files must be the
+# same head (same IMEI). Use Sys.glob() to pick up every file for one device.
+# -2 excluded: head was not yet erected at that time, so its profile is invalid.
+BIN_FILE <- setdiff(Sys.glob("../testdata/300434065508020-*.bin"),
+                    "../testdata/300434065508020-2.bin")
 
 # OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
 # If the head sends two messages per measurement, paste both.
@@ -53,10 +59,18 @@ head_config <- list(
 # --- Identify head by IMEI ---------------------------------------------------
 # For a .bin attachment the IMEI is the filename prefix; for a hex payload set
 # IMEI manually above. The IMEI is the sole selector into head_config.
+# BIN_FILE may be a vector (time series); keep only the non-empty paths.
+bin_files <- BIN_FILE[nzchar(BIN_FILE)]
+use_bin   <- length(bin_files) > 0L
+
 imei <- if (IMEI != "") {
   IMEI
-} else if (BIN_FILE != "") {
-  sub("-.*$", "", basename(BIN_FILE))
+} else if (use_bin) {
+  imeis <- unique(sub("-.*$", "", basename(bin_files)))
+  if (length(imeis) > 1L)
+    stop("BIN_FILE mixes IMEIs (", paste(imeis, collapse = ", "),
+         ") — a time series must be one head.")
+  imeis
 } else {
   stop("Set IMEI (hex payload) or BIN_FILE (.bin attachment).")
 }
@@ -84,23 +98,25 @@ bin_expected_len <- function(n_nodes, fields) {
        nosep = 4L +        3L  + n_nodes * sum(w)       +        2L)
 }
 
-if (BIN_FILE == "") {
+if (!use_bin) {
   n_hex_node   <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB", "pressure"), 6L, 4L))
   expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
 } else {
   exp_len <- bin_expected_len(n_nodes, fields)
-  n_file  <- file.info(BIN_FILE)$size
-  # A defective sensor can emit an out-of-range value needing >3 B, so a sep file
-  # may be a few bytes LARGER than exp_len$sep — tolerate small positive surplus.
-  surplus <- n_file - exp_len$sep
-  ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
-  if (!ok)
-    warning(sprintf("File is %d B but IMEI %s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check head_config",
-                    n_file, imei, paste(fields, collapse = "/"),
-                    exp_len$sep, exp_len$nosep, n_nodes))
-  else if (surplus > 0L)
-    message(sprintf("File is %d B (+%d over %d) — likely a defective sensor sending an oversized value; affected field(s) will read NA.",
-                    n_file, surplus, exp_len$sep))
+  for (bf in bin_files) {
+    n_file  <- file.info(bf)$size
+    # A defective sensor can emit an out-of-range value needing >3 B, so a sep
+    # file may be a few bytes LARGER than exp_len$sep — tolerate small surplus.
+    surplus <- n_file - exp_len$sep
+    ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
+    if (!ok)
+      warning(sprintf("%s is %d B but IMEI %s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check head_config",
+                      basename(bf), n_file, imei, paste(fields, collapse = "/"),
+                      exp_len$sep, exp_len$nosep, n_nodes))
+    else if (surplus > 0L)
+      message(sprintf("%s is %d B (+%d over %d) — likely a defective sensor sending an oversized value; affected field(s) will read NA.",
+                      basename(bf), n_file, surplus, exp_len$sep))
+  }
 }
 ```
 
@@ -268,9 +284,35 @@ library(tidyr)
 library(ggplot2)
 library(patchwork)
 
-if (BIN_FILE != "") {
+# Turn one decoded message into a tidy per-node data.frame (engineering units).
+bin_to_nodes <- function(b) {
+  df <- data.frame(node = seq_len(n_nodes))
+  for (f in fields) {
+    vals <- sapply(b$nodes, function(nd) nd[[f]])
+    if (f %in% c("ntc1", "ntc2", "testSB")) {
+      df[[paste0(f, "_C")]] <- NTCcounts2temp(vals)
+    } else if (f == "pressure") {
+      df$pressure_hPa <- pressure2hPa(vals)
+    } else {                       # gnd → raw counts
+      df[[f]] <- vals
+    }
+  }
+  df
+}
+
+if (use_bin) {
   # ---- Binary snowchain path ------------------------------------------------
-  bin        <- read_snowchain_bin(BIN_FILE, fields, n_nodes)
+  # Decode every file, then order oldest → newest by timestamp. The NEWEST
+  # message is the "primary" one shown in the single-message sections below;
+  # all of them feed the "Zeitlicher Verlauf" plot.
+  all_bin <- lapply(bin_files, read_snowchain_bin, fields = fields, n_nodes = n_nodes)
+  ord       <- order(sapply(all_bin, `[[`, "time_unix"))
+  all_bin   <- all_bin[ord]
+  bin_files <- bin_files[ord]
+  n_msg     <- length(all_bin)
+
+  bin          <- all_bin[[n_msg]]
+  primary_file <- bin_files[n_msg]
   time_utc   <- unix2utc(bin$time_unix)
   adc_temp_C <- adc2temp(bin$adc_temp)
   battery_mv <- bin$battery_mv
@@ -279,17 +321,7 @@ if (BIN_FILE != "") {
   battery_partial <- bin$battery_partial
   bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
 
-  nodes <- data.frame(node = seq_len(n_nodes))
-  for (f in fields) {
-    vals <- sapply(bin$nodes, function(nd) nd[[f]])
-    if (f %in% c("ntc1", "ntc2", "testSB")) {
-      nodes[[paste0(f, "_C")]] <- NTCcounts2temp(vals)
-    } else if (f == "pressure") {
-      nodes$pressure_hPa <- pressure2hPa(vals)
-    } else {                       # gnd → raw counts
-      nodes[[f]] <- vals
-    }
-  }
+  nodes <- bin_to_nodes(bin)
 
 } else {
   # ---- Hex email path -------------------------------------------------------
@@ -339,7 +371,8 @@ check <- function(val, lo, hi, label, unit) {
 | **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
 | **Battery** | `r if (battery_partial) sprintf("%d–%d mV (low byte lost — defective-sensor shift)", battery_lo, battery_hi) else paste0(battery_mv, " mV")` |
 | **ADC temp** | `r round(adc_temp_C, 2)` °C |
-| **Source** | `r if (BIN_FILE != "") paste0("binary: ", basename(BIN_FILE), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
+| **Source** | `r if (use_bin) paste0("binary: ", basename(primary_file), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
+| **Messages loaded** | `r if (use_bin) sprintf("%d file(s)%s", n_msg, if (n_msg > 1) " — newest shown below; see Zeitlicher Verlauf for the series" else "") else "1 (hex)"` |
 :::
 
 ```{r diag-checks, results='asis'}
@@ -352,7 +385,7 @@ check(adc_temp_C, -60,   40,   "ADC temp", "°C")
 ## Node data
 
 ```{r node-table}
-if (BIN_FILE == "") {
+if (!use_bin) {
   # Build nodes dataframe from hex-decoded raw list
   ntc_fields <- fields[fields != "gnd"]
   gnd_field  <- if ("gnd" %in% fields) "gnd" else NULL
@@ -372,7 +405,7 @@ if (BIN_FILE == "") {
 
 }
 
-src_label <- if (BIN_FILE != "") basename(BIN_FILE) else cfg$label
+src_label <- if (use_bin) basename(primary_file) else cfg$label
 knitr::kable(nodes, digits = 2,
              caption = sprintf("All nodes — %s | %s UTC",
                                src_label, format(time_utc, "%Y-%m-%d %H:%M")))
@@ -453,11 +486,188 @@ if ("pressure_hPa" %in% names(nodes)) {
 
 ---
 
+## Zeitlicher Verlauf
+
+Only shown when more than one `.bin` file is loaded (a time series). Every message
+contributes; the single-message sections above show the newest one.
+
+```{r ts-flag}
+multi <- use_bin && exists("all_bin") && n_msg > 1L
+```
+
+```{r ts-build, eval=multi}
+# Long table across all messages: one row per (time, node, sensor).
+series_long <- bind_rows(lapply(all_bin, function(b)
+  bin_to_nodes(b) |>
+    select(node, ends_with("_C")) |>
+    mutate(time = unix2utc(b$time_unix)))) |>
+  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
+  filter(!is.na(temp_C))
+```
+
+```{r ts-snowmelt, eval=(multi && cfg$type == "snowmelt"), fig.height=11, fig.width=8}
+# Two stacked panels over the same time series:
+#  (top)    Hovmöller heatmap — Höhe (same axis as the profile plot) × time,
+#           fill = temperature. Each measurement is one evenly-spaced column.
+#  (bottom) Line plot — temperature vs real time, one line per sensor height,
+#           coloured by Höhe; reads the diurnal cooling directly.
+s   <- cfg$spacing_cm
+ts  <- series_long |>
+  mutate(
+    sensor    = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
+    ntc_rank  = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
+    hoehe_cm  = (node - 1L) * 3L * s + ntc_rank * s,
+    height_id = paste(node, sensor)
+  )
+tlevels <- format(sort(unique(ts$time)), "%m-%d %H:%M")
+ts  <- ts |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels))
+max_h <- n_nodes * 3L * s
+
+p_heat <- ggplot(ts, aes(x = tlab, y = hoehe_cm, fill = temp_C)) +
+  geom_tile() +
+  scale_fill_distiller(palette = "RdYlBu", direction = -1, name = "T (°C)") +
+  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  labs(title    = sprintf("Zeitlicher Verlauf — %s", cfg$label),
+       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, imei),
+       x = NULL) +
+  theme_bw(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid  = element_blank())
+
+p_line <- ggplot(ts, aes(x = time, y = temp_C,
+                         group = height_id, colour = hoehe_cm)) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1) +
+  scale_colour_viridis_c(name = "Höhe (cm)") +
+  labs(x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 13)
+
+p_heat / p_line + plot_layout(heights = c(3, 2))
+```
+
+```{r ts-standard, eval=(multi && cfg$type == "standard"), fig.height=6, fig.width=9}
+ts <- series_long |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2"))
+
+ggplot(ts, aes(x = time, y = temp_C, colour = node, group = interaction(node, sensor))) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1) +
+  scale_colour_viridis_c(name = "Node") +
+  labs(title    = sprintf("Zeitlicher Verlauf — %s", cfg$label),
+       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, imei),
+       x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 13)
+```
+
+---
+
+## NTC2-Diagnose
+
+NTC1 / NTC2 / NTC3 sind je Node quasi am selben Ort, sollten also denselben
+Tagesgang sehen. Hier wird geprüft, ob **NTC2 systematisch einen stärkeren
+Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten). Zwei
+Maße, jeweils paarweise je Node ausgewertet:
+
+* **Amplitude** = max − min der Temperatur über die geladenen Messungen.
+* **Sensitivität** = Regressions-Slope des Sensors gegen das gemeinsame Signal
+  (Mittel aller Sensoren pro Zeit); > 1 ⇒ reagiert stärker als der Durchschnitt.
+
+Läuft nur für Snowmelt-Köpfe mit NTC1/NTC2/NTC3 und mehreren Messungen.
+
+```{r ntc2-diag, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields))}
+safe_amp <- function(x) { x <- x[is.finite(x)]; if (length(x) < 2L) NA_real_ else diff(range(x)) }
+
+diag_long <- series_long |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3"))
+
+# Common diurnal forcing = mean over all sensors at each time.
+common_df <- diag_long |> group_by(time) |>
+  summarise(common = mean(temp_C, na.rm = TRUE), .groups = "drop")
+
+# Per node × sensor: amplitude and sensitivity (slope vs common forcing).
+per_node <- diag_long |>
+  left_join(common_df, by = "time") |>
+  group_by(node, sensor) |>
+  summarise(
+    amp   = safe_amp(temp_C),
+    slope = if (sum(is.finite(temp_C)) >= 2L)
+              cov(temp_C, common, use = "complete.obs") / var(common) else NA_real_,
+    .groups = "drop"
+  )
+
+# Wide per node to compare NTC2 against the mean of NTC1 & NTC3 (paired).
+amp_w <- per_node |> select(node, sensor, amp) |>
+  pivot_wider(names_from = sensor, values_from = amp) |>
+  mutate(ref = (NTC1 + NTC3) / 2, d = NTC2 - ref)
+
+summary_tab <- per_node |> group_by(sensor) |>
+  summarise(`Amplitude ⌀ (°C)` = mean(amp,   na.rm = TRUE),
+            `Slope ⌀`          = mean(slope, na.rm = TRUE),
+            `n Nodes`          = sum(!is.na(amp)), .groups = "drop")
+
+n_ok       <- sum(!is.na(amp_w$d))
+n_strong   <- sum(amp_w$NTC2 > amp_w$NTC1 & amp_w$NTC2 > amp_w$NTC3, na.rm = TRUE)
+amp_diff   <- mean(amp_w$d, na.rm = TRUE)
+pval       <- tryCatch(t.test(amp_w$NTC2, amp_w$ref, paired = TRUE)$p.value,
+                       error = function(e) NA_real_)
+ntc2_amp   <- summary_tab$`Amplitude ⌀ (°C)`[summary_tab$sensor == "NTC2"]
+others_amp <- max(summary_tab$`Amplitude ⌀ (°C)`[summary_tab$sensor != "NTC2"])
+ntc2_stronger <- isTRUE(ntc2_amp > others_amp) && isTRUE(!is.na(pval) && pval < 0.05)
+```
+
+```{r ntc2-table, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields))}
+knitr::kable(summary_tab, digits = c(0, 2, 3, 0),
+             caption = sprintf("Pro-Sensor-Mittel über %d Messungen", n_msg))
+```
+
+```{r ntc2-verdict, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
+col <- if (ntc2_stronger) "#e67e22" else "#2ecc71"
+tag <- if (ntc2_stronger) "AUFFÄLLIG" else "unauffällig"
+cat(sprintf(
+  '<span style="color:%s">**%s**</span> — NTC2 vs. Mittel(NTC1, NTC3), paarweise je Node:\n\n',
+  col, tag))
+cat(sprintf("- Amplitude im Mittel **%+.2f °C** stärker als NTC1/NTC3.\n", amp_diff))
+cat(sprintf("- NTC2 am stärksten in **%d / %d** Nodes.\n", n_strong, n_ok))
+cat(sprintf("- Paired t-Test (Amplitude): **p = %s**.\n",
+            if (is.na(pval)) "n/a" else formatC(pval, format = "g", digits = 2)))
+cat(sprintf("\n%s\n",
+  if (ntc2_stronger)
+    "→ NTC2 zeigt einen systematisch stärkeren Tagesgang (wahrscheinlich Kanal-/Sensor-Effekt). Mit mehr vollen Tageszyklen bestätigen."
+  else
+    "→ Kein systematischer Mehr-Tagesgang von NTC2 in diesen Daten."))
+```
+
+```{r ntc2-plot, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.5, fig.width=9}
+ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
+  geom_line(alpha = 0.6, linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_hline(data = summary_tab,
+             aes(yintercept = `Amplitude ⌀ (°C)`, colour = sensor),
+             linetype = "dashed", linewidth = 0.4, show.legend = FALSE) +
+  scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c", NTC3 = "#27ae60")) +
+  labs(title = "Tagesgang-Amplitude je Node und Sensor",
+       subtitle = "gestrichelt: Sensor-Mittel — NTC2 (rot) liegt systematisch leicht höher",
+       x = "Node", y = "Amplitude max−min (°C)", colour = NULL) +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
 ## Save result
 
 ```{r save}
-slug    <- if (BIN_FILE != "") tools::file_path_sans_ext(basename(BIN_FILE)) else paste0("imei", imei)
+# Newest message → per-node table (as before).
+slug    <- if (use_bin) tools::file_path_sans_ext(basename(primary_file)) else paste0("imei", imei)
 outfile <- sprintf("data/decoded_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
 write.csv(nodes, outfile, row.names = FALSE)
 cat("Saved:", outfile, "\n")
+
+# Whole time series → one long CSV (time, node, sensor, temp_C).
+if (exists("multi") && multi) {
+  ts_file <- sprintf("data/series_imei%s_%s.csv", imei, format(time_utc, "%Y%m%d_%H%M%S"))
+  write.csv(series_long, ts_file, row.names = FALSE)
+  cat("Saved series:", ts_file, "\n")
+}
 ```
