@@ -284,16 +284,19 @@ library(tidyr)
 library(ggplot2)
 library(patchwork)
 
-# Turn one decoded message into a tidy per-node data.frame (engineering units).
+# Turn one decoded message into a tidy per-node data.frame. Both the raw counts
+# (before calibration, *_counts) and the calibrated value are kept.
 bin_to_nodes <- function(b) {
   df <- data.frame(node = seq_len(n_nodes))
   for (f in fields) {
     vals <- sapply(b$nodes, function(nd) nd[[f]])
     if (f %in% c("ntc1", "ntc2", "testSB")) {
-      df[[paste0(f, "_C")]] <- NTCcounts2temp(vals)
+      df[[paste0(f, "_counts")]] <- vals
+      df[[paste0(f, "_C")]]      <- NTCcounts2temp(vals)
     } else if (f == "pressure") {
-      df$pressure_hPa <- pressure2hPa(vals)
-    } else {                       # gnd → raw counts
+      df$pressure_counts <- vals
+      df$pressure_hPa    <- pressure2hPa(vals)
+    } else {                       # gnd → raw counts (already uncalibrated)
       df[[f]] <- vals
     }
   }
@@ -393,9 +396,11 @@ if (!use_bin) {
   nodes <- data.frame(node = seq_len(n_nodes))
 
   for (f in ntc_fields) {
-    col_raw  <- paste0("n", nodes$node, ".", f)
-    col_name <- paste0(f, "_C")
-    nodes[[col_name]] <- sapply(col_raw, function(nm) NTCcounts2temp(raw[[nm]]))
+    col_raw <- paste0("n", nodes$node, ".", f)
+    cnts    <- sapply(col_raw, function(nm) raw[[nm]])
+    nodes[[paste0(f, "_counts")]] <- cnts          # raw counts (pre-calibration)
+    if (f == "pressure") nodes$pressure_hPa  <- pressure2hPa(cnts)
+    else                 nodes[[paste0(f, "_C")]] <- NTCcounts2temp(cnts)
   }
 
   if (!is.null(gnd_field)) {
@@ -405,8 +410,9 @@ if (!use_bin) {
 
 }
 
+# CSV gets the raw counts too; the on-page table stays calibrated for readability.
 src_label <- if (use_bin) basename(primary_file) else cfg$label
-knitr::kable(nodes, digits = 2,
+knitr::kable(nodes |> select(-ends_with("_counts")), digits = 2,
              caption = sprintf("All nodes — %s | %s UTC",
                                src_label, format(time_utc, "%Y-%m-%d %H:%M")))
 ```
@@ -496,12 +502,19 @@ multi <- use_bin && exists("all_bin") && n_msg > 1L
 ```
 
 ```{r ts-build, eval=multi}
-# Long table across all messages: one row per (time, node, sensor).
-series_long <- bind_rows(lapply(all_bin, function(b)
-  bin_to_nodes(b) |>
-    select(node, ends_with("_C")) |>
-    mutate(time = unix2utc(b$time_unix)))) |>
-  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
+# Long table across all messages: one row per (time, node, sensor), carrying
+# both the calibrated temperature and the raw counts (pre-calibration). The
+# `sensor` key keeps the *_C name so the plots/diagnostics below are unchanged.
+series_wide <- bind_rows(lapply(all_bin, function(b)
+  bin_to_nodes(b) |> mutate(time = unix2utc(b$time_unix))))
+
+temp_l <- series_wide |> select(node, time, ends_with("_C")) |>
+  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C")
+cnt_l  <- series_wide |> select(node, time, ends_with("_counts")) |>
+  pivot_longer(ends_with("_counts"), names_to = "sensor", values_to = "counts") |>
+  mutate(sensor = sub("_counts$", "_C", sensor))
+
+series_long <- left_join(temp_l, cnt_l, by = c("node", "time", "sensor")) |>
   filter(!is.na(temp_C))
 ```
 
