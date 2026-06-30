@@ -5,9 +5,10 @@
 
 # Generated files
 *.html
+!Greenland2026/decode_field.html
 *_files/
 Rplots.pdf
 .DS_Store
 
-# Field decode outputs (generated in Greenland2026/data/)
-Greenland2026/data/
+# Field decode outputs (Greenland2026/data/) are tracked — filenames are keyed
+# by measurement time, so they stay stable per message/dataset.
