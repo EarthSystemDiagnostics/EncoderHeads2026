@@ -1,0 +1,315 @@
+---
+title: "Experiment — Per-Node NTC2/NTC3 → NTC1 Calibration"
+subtitle: "Fit on the first four messages, test on the fifth"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+## Idea
+
+The three NTCs of a snowmelt node sit ~4 cm apart and should see almost the same
+temperature, yet NTC2 (and to a lesser degree NTC3) show a systematic gain/offset
+relative to NTC1 (see the NTC2-Diagnose in `decode_field.qmd`). Here we **treat
+NTC1 as truth** and, *per node separately*, fit a linear calibration
+
+$$\widehat{\text{NTC1}} = a + b \cdot \text{NTC}_k \qquad (k = 2, 3)$$
+
+on the **first four** messages. We then apply it to the **fifth, held-out**
+message to see whether the calibration generalises (out-of-sample).
+
+This is purely an experiment — it does not change the field decoder.
+
+```{r setup}
+library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
+
+IMEI    <- "300434065508020"   # snowmelt NEWGRIP (ntc1/ntc2/testSB)
+fields  <- c("ntc1", "ntc2", "testSB")
+n_nodes <- 24L
+spacing <- 4L                  # cm between NTCs within a node
+N_TRAIN <- 4L                  # fit on the first four messages, test on the rest
+```
+
+## Decode the messages
+
+```{r decode-fns}
+# Self-contained snowchain/snowmelt binary reader (same logic as decode_field.qmd).
+bin_field_bytes <- function(f) {
+  if (f %in% c("ntc1", "ntc2", "testSB", "pressure")) return(3L)
+  if (f == "gnd") return(2L); stop("Unknown field: ", f)
+}
+read_snowchain_bin <- function(path, fields, n_nodes) {
+  raw <- readBin(path, what = "raw", n = file.info(path)$size)
+  n <- length(raw); ints <- as.integer(raw); has_sep <- ints[5] == 0x7CL
+  be_uint <- function(b) sum(as.integer(b) * 256^rev(seq_along(b) - 1L))
+  be_sint <- function(b) { v <- be_uint(b); bits <- 8L * length(b)
+    if (v >= 2^(bits - 1L)) v - 2^bits else v }
+  nf <- length(fields)
+  widths <- c(3L, rep(sapply(fields, bin_field_bytes), n_nodes), 2L)
+  signed <- c(TRUE, rep(fields != "pressure", n_nodes), FALSE); n_val <- length(widths)
+  decode_one <- function(b, w, sgn) {
+    if (length(b) != w) return(NA_real_); if (sgn) be_sint(b) else be_uint(b) }
+  if (has_sep) {
+    sp <- which(ints == 0x7CL); sp <- sp[sp >= 5L]
+    fstart <- sp + 1L; fend <- c(sp[-1] - 1L, n)
+    vals <- lapply(seq_len(min(length(sp), n_val)), function(i)
+      decode_one(raw[fstart[i]:fend[i]], widths[i], signed[i]))
+  } else {
+    pos <- 5L; vals <- vector("list", n_val)
+    for (i in seq_len(n_val)) { w <- widths[i]
+      if (w == 3L && pos + 3L <= n && all(ints[pos:(pos + 3L)] == c(1L, 0L, 0L, 0L))) {
+        vals[[i]] <- NA_real_; pos <- pos + 4L
+      } else if (i == n_val && pos + w - 1L > n && pos <= n) {
+        vals[[i]] <- be_uint(raw[pos:n]) * 256L^(w - (n - pos + 1L)); pos <- n + 1L
+      } else { vals[[i]] <- decode_one(raw[pos:(pos + w - 1L)], w, signed[i]); pos <- pos + w }
+    }
+  }
+  nv <- vals[2:(1L + n_nodes * nf)]
+  list(time_unix = be_uint(raw[1:4]),
+       nodes = lapply(seq_len(n_nodes), function(i)
+         setNames(nv[((i - 1L) * nf + 1L):(i * nf)], fields)))
+}
+NTCcounts2temp <- function(c) {
+  H <- (-c * 1e6) / (c - 33554432); r <- (H * 499000) / (499000 - H)
+  1 / ((1 / 3380) * log(r / 10000) + 1 / 298.15) - 273.15
+}
+```
+
+```{r decode}
+# Use the same message set as the field decoder: all of this IMEI's files,
+# EXCEPT -2 (the head was not yet erected at that time).
+files <- Sys.glob(sprintf("../testdata/%s-*.bin", IMEI))
+files <- files[!grepl(sprintf("%s-2\\.bin$", IMEI), files)]
+
+all <- lapply(files, read_snowchain_bin, fields = fields, n_nodes = n_nodes)
+ord <- order(sapply(all, `[[`, "time_unix"))
+all <- all[ord]; files <- files[ord]
+times <- as.POSIXct(sapply(all, `[[`, "time_unix"), origin = "1970-01-01", tz = "UTC")
+n_msg <- length(all)
+
+# Temperature matrices: node (row) × message (column).
+tmat <- function(f) sapply(all, function(b) sapply(b$nodes, function(nd) NTCcounts2temp(nd[[f]])))
+T1 <- tmat("ntc1"); T2 <- tmat("ntc2"); T3 <- tmat("testSB")
+
+train <- seq_len(N_TRAIN)            # first four
+test  <- setdiff(seq_len(n_msg), train)  # the rest (here: the 5th)
+
+knitr::kable(
+  data.frame(`#` = seq_len(n_msg), file = basename(files),
+             time_UTC = format(times, "%Y-%m-%d %H:%M"),
+             role = ifelse(seq_len(n_msg) %in% train, "train (fit)", "TEST (held out)"),
+             check.names = FALSE),
+  caption = "Messages used")
+```
+
+## Fit per node and apply
+
+```{r calibrate}
+# For each node, regress NTC1 (truth) on NTC_k over the TRAINING messages, then
+# predict NTC1 from NTC_k for ALL messages. Node 24 NTC3 is defective (NA) → its
+# fit is skipped and stays NA.
+calibrate <- function(Tsensor) {
+  a <- b <- rep(NA_real_, n_nodes)
+  pred <- matrix(NA_real_, n_nodes, n_msg)
+  for (i in seq_len(n_nodes)) {
+    y <- T1[i, train]; x <- Tsensor[i, train]
+    ok <- is.finite(x) & is.finite(y)
+    if (sum(ok) >= 2L) {
+      cf <- coef(lm(y ~ x))
+      a[i] <- cf[1]; b[i] <- cf[2]
+      pred[i, ] <- a[i] + b[i] * Tsensor[i, ]
+    }
+  }
+  list(a = a, b = b, pred = pred)
+}
+cal2 <- calibrate(T2)   # NTC2 → NTC1
+cal3 <- calibrate(T3)   # NTC3 → NTC1
+
+# Tidy frame: expand.grid puts node fastest, matching column-major as.vector().
+df <- expand.grid(node = seq_len(n_nodes), msg = seq_len(n_msg))
+df$time     <- times[df$msg]
+df$set      <- ifelse(df$msg %in% train, "train", "test")
+df$NTC1     <- as.vector(T1)
+df$NTC2     <- as.vector(T2);       df$NTC3     <- as.vector(T3)
+df$NTC2_cal <- as.vector(cal2$pred); df$NTC3_cal <- as.vector(cal3$pred)
+
+# Long residual table: (sensor, raw|cal) minus NTC1.
+res <- df |>
+  transmute(node, msg, time, set,
+            `NTC2 raw` = NTC2 - NTC1, `NTC2 cal` = NTC2_cal - NTC1,
+            `NTC3 raw` = NTC3 - NTC1, `NTC3 cal` = NTC3_cal - NTC1) |>
+  pivot_longer(starts_with("NTC"),
+               names_to = c("sensor", "type"), names_sep = " ",
+               values_to = "resid") |>
+  filter(is.finite(resid))
+```
+
+The fitted per-node coefficients (slope `b` ≈ relative gain to NTC1, intercept
+`a` ≈ offset in °C):
+
+```{r coef-summary}
+coef_tab <- bind_rows(
+  data.frame(sensor = "NTC2", slope = cal2$b, intercept = cal2$a),
+  data.frame(sensor = "NTC3", slope = cal3$b, intercept = cal3$a)
+) |>
+  group_by(sensor) |>
+  summarise(`slope ⌀`     = mean(slope, na.rm = TRUE),
+            `slope sd`     = sd(slope,   na.rm = TRUE),
+            `intercept ⌀` = mean(intercept, na.rm = TRUE),
+            `intercept sd` = sd(intercept, na.rm = TRUE),
+            `n nodes`      = sum(is.finite(slope)), .groups = "drop")
+knitr::kable(coef_tab, digits = 3,
+             caption = "Per-node calibration coefficients (mean over nodes)")
+```
+
+## Does it generalise? (RMSE before vs after)
+
+```{r rmse-table}
+rmse_tab <- res |>
+  mutate(set = ifelse(set == "test", "TEST (5th)", "train")) |>
+  group_by(sensor, set, type) |>
+  summarise(rmse = sqrt(mean(resid^2)), mae = mean(abs(resid)), .groups = "drop") |>
+  pivot_wider(names_from = type, values_from = c(rmse, mae)) |>
+  mutate(`RMSE improvement` = sprintf("%.0f %%", 100 * (rmse_raw - rmse_cal) / rmse_raw)) |>
+  select(sensor, set,
+         `RMSE raw` = rmse_raw, `RMSE cal` = rmse_cal, `RMSE improvement`,
+         `MAE raw`  = mae_raw,  `MAE cal`  = mae_cal)
+knitr::kable(rmse_tab, digits = 3,
+             caption = "RMSE / MAE of (sensor − NTC1) in °C, raw vs calibrated")
+```
+
+```{r rmse-vals, include=FALSE}
+g <- function(s, st, col) {
+  v <- rmse_tab[rmse_tab$sensor == s & grepl(st, rmse_tab$set), col][[1]]
+  if (length(v)) v else NA_real_
+}
+t2r <- g("NTC2", "TEST", "RMSE raw"); t2c <- g("NTC2", "TEST", "RMSE cal")
+t3r <- g("NTC3", "TEST", "RMSE raw"); t3c <- g("NTC3", "TEST", "RMSE cal")
+```
+
+::: {.callout-note}
+## Result
+
+On the held-out 5th message the per-node calibration lowers the spread to NTC1:
+**NTC2** `r sprintf("%.2f → %.2f °C", t2r, t2c)`, **NTC3** `r sprintf("%.2f → %.2f °C", t3r, t3c)`.
+The out-of-sample RMSE stays above the training RMSE (only four fit points per
+node), but the calibration clearly helps on independent data — i.e. the NTC2/NTC3
+deviation is largely a stable per-node gain + offset, not noise.
+:::
+
+## Plots
+
+### Residual to NTC1 on the 5th (held-out) message
+
+```{r plot-test-resid, fig.height=4.5, fig.width=9}
+res |> filter(set == "test") |>
+  ggplot(aes(x = node, y = resid, colour = type)) +
+  geom_hline(yintercept = 0, linewidth = 0.4, colour = "grey40") +
+  geom_line(alpha = 0.6, linewidth = 0.5) + geom_point(size = 1.8) +
+  facet_wrap(~ sensor) +
+  scale_colour_manual(values = c(raw = "#bdbdbd", cal = "#c0392b")) +
+  labs(title = "5. Messung — Abweichung zu NTC1 je Node",
+       subtitle = sprintf("Test = %s UTC | grau: roh, rot: kalibriert",
+                          format(times[test[1]], "%Y-%m-%d %H:%M")),
+       x = "Node", y = "Sensor − NTC1 (°C)", colour = NULL) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+### Residual distribution — train vs. test, raw vs. calibrated
+
+```{r plot-resid-box, fig.height=5, fig.width=9}
+res |>
+  mutate(set = factor(ifelse(set == "test", "TEST (5th)", "train"),
+                      levels = c("train", "TEST (5th)")),
+         grp = paste(type)) |>
+  ggplot(aes(x = type, y = resid, fill = set)) +
+  geom_hline(yintercept = 0, linewidth = 0.4, colour = "grey40") +
+  geom_boxplot(outlier.size = 0.6, position = position_dodge(0.8)) +
+  facet_wrap(~ sensor) +
+  scale_fill_manual(values = c(train = "#7fb3d5", `TEST (5th)` = "#e59866")) +
+  labs(title = "Verteilung der Abweichung zu NTC1 (über alle Nodes)",
+       x = NULL, y = "Sensor − NTC1 (°C)", fill = NULL) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+### Profile of the 5th message — NTC1 truth vs. raw / calibrated
+
+```{r plot-profile, fig.height=7, fig.width=7}
+# Height of each NTC as in the field-decoder profile plot.
+prof <- df |> filter(msg == test[1]) |>
+  transmute(node,
+            `NTC1 (Wahrheit)` = NTC1,
+            `NTC2 roh` = NTC2, `NTC2 kal` = NTC2_cal,
+            `NTC3 roh` = NTC3, `NTC3 kal` = NTC3_cal) |>
+  pivot_longer(-node, names_to = "trace", values_to = "temp_C") |>
+  filter(is.finite(temp_C)) |>
+  mutate(ntc      = substr(trace, 1, 4),
+         ntc_rank = match(ntc, c("NTC1", "NTC2", "NTC3")),
+         hoehe_cm = (node - 1L) * 3L * spacing + ntc_rank * spacing,
+         kind     = case_when(grepl("Wahrheit", trace) ~ "truth",
+                              grepl("roh", trace) ~ "raw", TRUE ~ "cal"))
+
+ggplot(prof, aes(x = temp_C, y = hoehe_cm, colour = trace)) +
+  geom_path(aes(group = trace, linetype = kind), alpha = 0.8) +
+  geom_point(size = 1.6) +
+  scale_colour_manual(values = c(
+    "NTC1 (Wahrheit)" = "black",
+    "NTC2 roh" = "#f1948a", "NTC2 kal" = "#c0392b",
+    "NTC3 roh" = "#a9dfbf", "NTC3 kal" = "#1e8449")) +
+  scale_linetype_manual(values = c(truth = "solid", raw = "dotted", cal = "solid"),
+                        guide = "none") +
+  labs(title = "5. Messung — Profil: roh vs. auf NTC1 kalibriert",
+       subtitle = sprintf("%s UTC | kalibriert (durchgezogen) liegt näher an NTC1",
+                          format(times[test[1]], "%Y-%m-%d %H:%M")),
+       x = "Temperatur (°C)", y = "Höhe (cm)", colour = NULL) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+### Example node fits (NTC1 vs. NTC2 / NTC3)
+
+```{r plot-fits, fig.height=5, fig.width=9}
+# A few nodes spread across the column: training points + fitted line, with the
+# held-out 5th point marked.
+ex_nodes <- round(seq(1, n_nodes, length.out = 4))
+fit_df <- df |> filter(node %in% ex_nodes) |>
+  select(node, set, NTC1, NTC2, NTC3) |>
+  pivot_longer(c(NTC2, NTC3), names_to = "sensor", values_to = "sensor_T") |>
+  filter(is.finite(sensor_T), is.finite(NTC1))
+
+ggplot(fit_df, aes(x = sensor_T, y = NTC1)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey70", linetype = "dashed") +
+  geom_smooth(data = ~ filter(.x, set == "train"),
+              method = "lm", se = FALSE, colour = "#2980b9", linewidth = 0.6) +
+  geom_point(aes(shape = set, colour = set), size = 2) +
+  facet_grid(sensor ~ node, labeller = label_both) +
+  scale_colour_manual(values = c(train = "#34495e", test = "#e74c3c")) +
+  labs(title = "Beispiel-Nodes: NTC1 (y) vs. NTCk (x)",
+       subtitle = "blau: Fit auf Train | gestrichelt: y=x | rot: 5. Messung (Test)",
+       x = "NTCk Temperatur (°C)", y = "NTC1 Temperatur (°C)") +
+  theme_bw(base_size = 11) + theme(legend.position = "bottom")
+```
+
+## Save calibrated 5th message
+
+```{r save}
+out <- df |> filter(msg == test[1]) |>
+  transmute(node, time,
+            NTC1, NTC2, NTC2_cal, NTC3, NTC3_cal,
+            NTC2_resid_raw = NTC2 - NTC1, NTC2_resid_cal = NTC2_cal - NTC1,
+            NTC3_resid_raw = NTC3 - NTC1, NTC3_resid_cal = NTC3_cal - NTC1)
+outfile <- sprintf("data/calib_test_imei%s_%s.csv", IMEI,
+                   format(times[test[1]], "%Y%m%d_%H%M%S"))
+write.csv(out, outfile, row.names = FALSE)
+cat("Saved:", outfile, "\n")
+```
