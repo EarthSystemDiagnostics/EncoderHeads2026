@@ -1,0 +1,316 @@
+---
+title: "Kalibrations-Diagnostik — lokale Steigung & NTC2-Systematik"
+subtitle: "Wie man die Steinhart-Hart-Koeffizienten sinnvoll anschaut"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 13
+    fig-height: 5.4
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Die Laborkalibration jedes NTC liegt als **4-Parameter-Steinhart-Hart**-Satz
+$(a,b,c,d)$ vor (Dateien `meta/SM1_` und `meta/SM2_CalibrationCoefficients.csv`):
+
+$$T(R) = \frac{1}{a + b\,\ln R + c\,(\ln R)^2 + d\,(\ln R)^3} - 273.15,$$
+
+mit der Dekoder-Stufe Rohwert (counts) $\to R$. Die vier Zahlen sind stark
+korreliert und einzeln **nicht interpretierbar**. Dieses Dokument zeigt, wie man
+sie sinnvoll zusammenfasst — über die **lokale Steigung** $dT/d\text{counts}$ am
+Arbeitspunkt — und nutzt das, um zu prüfen, ob sich NTC2 systematisch von
+NTC1/NTC3 unterscheidet.
+
+```{r setup}
+suppressMessages({library(dplyr); library(tidyr); library(ggplot2); library(patchwork)})
+
+# counts -> R (Dekoder-Stufe) und 4-Parameter Steinhart-Hart R -> T
+NTCcounts2R <- function(c) { H <- (-c * 1e6) / (c - 33554432); (H * 499000) / (499000 - H) }
+S4_T_C      <- function(R, co) { lR <- log(R); 1 / (co[1] + co[2]*lR + co[3]*lR^2 + co[4]*lR^3) - 273.15 }
+Tc_of       <- function(cf, counts) S4_T_C(NTCcounts2R(counts), cf)
+
+# counts beim Temperatur-Arbeitspunkt T0, und die lokale Steigung dort
+counts_at <- function(cf, T0) { f <- function(cc) Tc_of(cf, cc) - T0
+  if (sign(f(4e5)) == sign(f(3.2e6))) return(NA_real_); uniroot(f, c(4e5, 3.2e6), tol = 1)$root }
+slope_at  <- function(cf, T0) { c0 <- counts_at(cf, T0); if (is.na(c0)) return(NA_real_)
+  (Tc_of(cf, c0 + 200) - Tc_of(cf, c0 - 200)) / 400 }            # °C / count
+is_mono   <- function(cf) { cc <- seq(7e5, 2.3e6, length.out = 200); all(diff(Tc_of(cf, cc)) < 0) }
+
+read_sm <- function(f, src) {
+  m <- read.csv(f, check.names = FALSE, row.names = 1)
+  do.call(rbind, lapply(colnames(m), function(cn) {
+    p <- strsplit(cn, "_")[[1]]
+    data.frame(source = src, node = as.integer(sub("N", "", p[1])),
+               ntc = as.integer(sub("NTC", "", p[2])), name = cn,
+               a = m["a", cn], b = m["b", cn], c = m["c", cn], d = m["d", cn])
+  }))
+}
+co <- rbind(read_sm("../meta/SM1_CalibrationCoefficients.csv", "SM1"),
+            read_sm("../meta/SM2_CalibrationCoefficients.csv", "SM2"))
+co <- co[complete.cases(co[, c("a","b","c","d")]), ]
+
+# robuste Koeffizienten-Anomalie: max |z| über a,b,c,d (Median/MAD)
+med  <- sapply(c("a","b","c","d"), function(k) median(co[[k]]))
+mad_ <- sapply(c("a","b","c","d"), function(k) mad(co[[k]]))
+co$zmax    <- apply(co[, c("a","b","c","d")], 1, function(r) max(abs((r - med) / mad_)))
+co$mono    <- mapply(function(a,b,c,d) is_mono(c(a,b,c,d)), co$a, co$b, co$c, co$d)
+co$s5      <- mapply(function(a,b,c,d) slope_at(c(a,b,c,d), -5) * 1e6, co$a, co$b, co$c, co$d)
+co$corrupt <- !co$mono | !is.finite(co$s5) | co$s5 > -10 | co$s5 < -40
+
+ntc_pal <- c(NTC1 = "#2980b9", NTC2 = "#e74c3c", NTC3 = "#27ae60")
+ntc_lab <- function(k) factor(paste0("NTC", k), names(ntc_pal))
+```
+
+`r nrow(co)` Sensoren (SM1 + SM2). Einer ist korrupt (`r co$name[co$corrupt]`,
+siehe unten) und wird aus den quantitativen Vergleichen ausgeschlossen.
+
+# 1 — Die lokale Steigung als interpretierbare Zusammenfassung
+
+Die Koeffizienten beschreiben eine **nichtlineare** Kurve $T(\text{counts})$ über
+den ganzen Messbereich. Statt die vier Zahlen zu vergleichen, linearisiert man
+die Kurve am **Arbeitspunkt** (z. B. −5 oder −15 °C): die Tangente, d. h. die
+lokale Steigung $dT/d\text{counts}$, ist die physikalische Empfindlichkeit dort.
+
+```{r fig-concept, fig.height=5.4}
+cof <- co[!co$corrupt, ]
+T_refs <- c(-5, -15)
+
+# Beispielsensor = Median-Steigung bei -5 °C
+rep_i <- which.min(abs(cof$s5 - median(cof$s5)))
+cf <- as.numeric(cof[rep_i, c("a","b","c","d")])
+rep_name <- sprintf("%s (%s)", cof$name[rep_i], cof$source[rep_i])
+
+cc_grid  <- seq(counts_at(cf, 5), counts_at(cf, -30), length.out = 400)
+curve_df <- data.frame(counts = cc_grid, T = Tc_of(cf, cc_grid))
+tan_df <- do.call(rbind, lapply(T_refs, function(T0) {
+  c0 <- counts_at(cf, T0); m <- slope_at(cf, T0); cc <- c0 + c(-2.2e5, 2.2e5)
+  data.frame(Tref = T0, counts = cc, T = T0 + m * (cc - c0)) }))
+pt_df <- do.call(rbind, lapply(T_refs, function(T0) data.frame(
+  Tref = T0, counts = counts_at(cf, T0), T = T0,
+  lab = sprintf("%g °C:  %.0f mK / 1000 counts", T0, slope_at(cf, T0) * 1e6))))
+
+p_left <- ggplot() +
+  geom_line(data = curve_df, aes(counts/1000, T), colour = "grey30", linewidth = 0.9) +
+  geom_line(data = tan_df, aes(counts/1000, T, group = Tref), colour = "#c0392b", linewidth = 1.1) +
+  geom_point(data = pt_df, aes(counts/1000, T), colour = "#c0392b", size = 3) +
+  geom_text(data = pt_df, aes(counts/1000, T, label = lab), hjust = -0.05, vjust = 1.7,
+            size = 3.5, colour = "#c0392b") +
+  labs(title = "Nichtlineare Kurve + lokale Steigung (Tangente)",
+       subtitle = sprintf("Beispielsensor %s — rote Tangente = Linearisierung", rep_name),
+       x = "Rohwert (1000 counts)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 12)
+
+T_eval <- seq(-25, 2, by = 1)
+slope_long <- do.call(rbind, lapply(seq_len(nrow(cof)), function(i) {
+  cfi <- as.numeric(cof[i, c("a","b","c","d")])
+  data.frame(id = i, ntc = cof$ntc[i], T0 = T_eval,
+             mK = sapply(T_eval, function(t) slope_at(cfi, t)) * 1e6) }))
+slope_long <- slope_long[is.finite(slope_long$mK), ]
+
+p_right <- ggplot(slope_long, aes(T0, mK, group = id, colour = ntc_lab(ntc))) +
+  geom_vline(xintercept = T_refs, linetype = "dashed", colour = "grey50") +
+  geom_line(alpha = 0.35, linewidth = 0.4) +
+  annotate("text", x = T_refs, y = min(slope_long$mK), label = paste0(T_refs, " °C"),
+           vjust = 1.2, size = 3.3, colour = "grey30") +
+  scale_colour_manual(values = ntc_pal, name = NULL) +
+  labs(title = "Lokale Steigung dT/dcounts vs. Bezugstemperatur",
+       subtitle = "jede Linie = ein Sensor — Steigung je Arbeitspunkt",
+       x = "Bezugstemperatur (°C)", y = "dT/dcounts (mK / 1000 counts)") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "inside", legend.position.inside = c(0.84, 0.7),
+        legend.background = element_rect(fill = "white", colour = NA))
+
+p_left + p_right
+```
+
+Welche „Steigung" man bekommt, hängt vom **gewählten Arbeitspunkt** ab (steiler
+bei −5 als bei −15 °C) — deshalb fasst eine einzelne Zahl die nichtlineare
+Beziehung nicht zusammen, man muss einen Arbeitspunkt nennen. Bemerkenswert:
+über **alle** Sensoren und alle drei Kanäle fallen die Kurven praktisch
+aufeinander (rechtes Panel).
+
+# 2 — Verschiedene Koeffizienten, gleiche Steigung — und der Korruptions-Check
+
+Die Rohkoeffizienten dürfen stark verschieden aussehen und trotzdem dieselbe
+Kurve beschreiben (entartete Parametrisierung). Über alle gesunden Sensoren ist
+die Steigung bei −5 °C **−23.7 ± 0.04 mK/1000 counts** — obwohl z. B. $a$ um den
+Faktor 20 streut. Das macht die lokale Steigung zum idealen Diagnose-Werkzeug:
+ein „anomal" wirkender Koeffizientensatz mit normaler Steigung ist gesund; nur
+ein echt defekter fällt heraus.
+
+```{r fig-anom, fig.height=5.6}
+# links: normale vs. "anomale, aber gesunde" Kurven (liegen aufeinander)
+normal2  <- co |> filter(zmax < 2, !corrupt) |> arrange(abs(s5 + 23.7)) |> slice(1:2)
+anomfine <- co |> filter(name %in% c("N77_NTC3", "N96_NTC3", "N80_NTC3"))
+showco <- bind_rows(transform(normal2,  cls = "normal (z<2)"),
+                    transform(anomfine, cls = "anomale Koeffizienten (z 20–39)"))
+showco$lab <- sprintf("%s (z=%.0f)", showco$name, showco$zmax)
+cls_pal <- c(`normal (z<2)` = "#1f78b4", `anomale Koeffizienten (z 20–39)` = "#33a02c")
+T0 <- -5
+curve_df <- do.call(rbind, lapply(seq_len(nrow(showco)), function(i) {
+  cf <- as.numeric(showco[i, c("a","b","c","d")]); cc <- seq(7e5, 2.3e6, length.out = 400)
+  data.frame(lab = showco$lab[i], cls = showco$cls[i], counts = cc, T = Tc_of(cf, cc)) }))
+cn <- filter(curve_df, cls == "normal (z<2)"); ca <- filter(curve_df, cls != "normal (z<2)")
+tan_df <- do.call(rbind, lapply(seq_len(nrow(showco)), function(i) {
+  cf <- as.numeric(showco[i, c("a","b","c","d")]); c0 <- counts_at(cf, T0); m <- slope_at(cf, T0)
+  data.frame(lab = showco$lab[i], counts = c0 + c(-2e5, 2e5), T = T0 + m * c(-2e5, 2e5)) }))
+pt_df <- data.frame(counts = mean(sapply(seq_len(nrow(showco)),
+                      function(i) counts_at(as.numeric(showco[i, c("a","b","c","d")]), T0))), T = T0)
+
+p_left <- ggplot() +
+  geom_line(data = cn, aes(counts/1000, T, group = lab, colour = cls), linewidth = 2.4) +
+  geom_line(data = ca, aes(counts/1000, T, group = lab, colour = cls), linewidth = 0.8) +
+  geom_line(data = tan_df, aes(counts/1000, T, group = lab), colour = "black", linewidth = 0.5) +
+  geom_point(data = pt_df, aes(counts/1000, T), colour = "black", size = 2) +
+  annotate("text", x = pt_df$counts/1000, y = T0,
+           label = "Tangente −5 °C\n≈ −23.7 mK/kcount\n(alle gesunden)",
+           hjust = -0.06, vjust = 0.9, size = 3.1) +
+  scale_colour_manual(values = cls_pal, name = NULL) +
+  coord_cartesian(ylim = c(-30, 12)) +
+  labs(title = "5 sehr verschiedene Koeffizientensätze — eine Kurve",
+       subtitle = "grün (anomale a,b,c,d) liegt exakt auf blau",
+       x = "Rohwert (1000 counts)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "inside", legend.position.inside = c(0.36, 0.16),
+        legend.background = element_rect(fill = "white", colour = "grey80"))
+
+# rechts: Koeffizienten-Anomalie vs. lokale Steigung, alle Sensoren
+allc <- co |> mutate(grp = ifelse(corrupt, "korrupt", "gesund"),
+                     s5_plot = pmin(pmax(s5, -40), -10))
+off <- filter(allc, corrupt)
+p_right <- ggplot(allc, aes(zmax, s5_plot, colour = grp)) +
+  annotate("rect", xmin = 0, xmax = Inf, ymin = -24.0, ymax = -23.4, fill = "#1f78b4", alpha = 0.12) +
+  geom_point(size = 2, alpha = 0.8) +
+  annotate("text", x = off$zmax, y = -11.2,
+           label = sprintf("%s: Steigung %.0e\nKurve bis −1250 °C\n(korrupt, geclippt)", off$name, off$s5),
+           colour = "#e31a1c", size = 3, hjust = 1.05, vjust = 1) +
+  scale_x_log10() +
+  scale_colour_manual(values = c(gesund = "#1f78b4", korrupt = "#e31a1c"), name = NULL) +
+  coord_cartesian(ylim = c(-40, -8)) +
+  labs(title = "Koeffizienten-Anomalie vs. lokale Steigung",
+       subtitle = "Band = normaler Steigungsbereich",
+       x = "Koeffizienten-Anomalie  max|z|  (log)", y = "Steigung bei −5 °C (mK / 1000 counts)") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "inside", legend.position.inside = c(0.16, 0.22),
+        legend.background = element_rect(fill = "white", colour = "grey80"))
+
+p_left + p_right
+```
+
+```{r tab-anom}
+co |> filter(zmax > 3) |>
+  mutate(NTC = paste0("NTC", ntc),
+         Status = ifelse(corrupt, "KORRUPT", "gesund"),
+         `Steigung@-5 (mK/kc)` = round(s5, 1), z = round(zmax, 0)) |>
+  arrange(desc(zmax)) |>
+  select(Sensor = name, source, NTC, z, `Steigung@-5 (mK/kc)`, Status) |>
+  knitr::kable(caption = sprintf(
+    "Sensoren mit anomalen Koeffizienten (z>3): %d gesund, %d korrupt. Anomale Sätze sind überwiegend NTC3.",
+    sum(co$zmax > 3 & !co$corrupt), sum(co$corrupt)))
+```
+
+Von den `r sum(co$zmax > 3)` Sensoren mit auffälligen Koeffizienten ist genau
+**einer** wirklich korrupt (`r co$name[co$corrupt]`: nicht monotone Kurve, Werte
+bis −1250 °C). Die anomalen Sätze sind **überwiegend NTC3** — passend zur größeren
+Koeffizienten-Streuung dieses Kanals (siehe Abschnitt 3).
+
+# 3 — Gibt es einen systematischen NTC2-Unterschied?
+
+Im Feld zeigt NTC2 eine ~2.4 % größere Tagesamplitude. Liegt das in der
+Kalibration? Test über den **ganzen** Temperaturbereich, **gepaart je Node**
+(eliminiert Node-zu-Node-Streuung), getrennt nach NTC2−NTC1 und NTC2−NTC3, in
+zwei physikalischen Größen: Empfindlichkeit $dT/d\text{counts}$ und Counts-Niveau
+bei fester Temperatur.
+
+```{r ntc2-compute}
+cof <- co[!co$corrupt, ]
+Tgrid <- c(-25, -20, -15, -10, -5, -2)
+slope <- sapply(Tgrid, function(t) mapply(function(a,b,c,d) slope_at(c(a,b,c,d), t)*1e6, cof$a,cof$b,cof$c,cof$d))
+cnts  <- sapply(Tgrid, function(t) mapply(function(a,b,c,d) counts_at(c(a,b,c,d), t),     cof$a,cof$b,cof$c,cof$d))
+colnames(slope) <- colnames(cnts) <- as.character(Tgrid)
+
+# gepaarte Differenz NTC2 - NTCk im selben Node, in % der mittleren Größe
+paired_pct <- function(M, k) {
+  long <- data.frame(uid = paste(cof$source, cof$node), ntc = cof$ntc, M, check.names = FALSE) |>
+    pivot_longer(-c(uid, ntc), names_to = "T", values_to = "v") |>
+    mutate(T = as.numeric(T)) |>
+    pivot_wider(names_from = ntc, values_from = v, names_prefix = "n")
+  base <- long |> group_by(T) |> summarise(scale = mean(abs(c(n1, n2, n3)), na.rm = TRUE), .groups = "drop")
+  long |> mutate(d = 100 * (n2 - .data[[paste0("n", k)]]) / base$scale[match(T, base$T)]) |>
+    filter(is.finite(d)) |> group_by(T) |>
+    summarise(mean = mean(d), se = sd(d)/sqrt(n()), p = t.test(d)$p.value, .groups = "drop") |>
+    mutate(contrast = sprintf("NTC2 − NTC%d", k))
+}
+df_slope <- bind_rows(paired_pct(slope, 1), paired_pct(slope, 3))
+df_cnts  <- bind_rows(paired_pct(cnts,  1), paired_pct(cnts,  3))
+stars <- function(p) ifelse(p<.001,"***",ifelse(p<.01,"**",ifelse(p<.05,"*","")))
+df_slope$lab <- stars(df_slope$p); df_cnts$lab <- stars(df_cnts$p)
+con_pal <- c(`NTC2 − NTC1` = "#1f78b4", `NTC2 − NTC3` = "#33a02c")
+```
+
+```{r fig-ntc2, fig.height=5.4}
+mkpanel <- function(d, ttl, ylab) ggplot(d, aes(T, mean, colour = contrast, fill = contrast)) +
+  geom_hline(yintercept = 0, colour = "grey50") +
+  geom_ribbon(aes(ymin = mean - 1.96*se, ymax = mean + 1.96*se), alpha = 0.18, colour = NA) +
+  geom_line(linewidth = 0.8) + geom_point(size = 2) +
+  geom_text(aes(label = lab), vjust = -0.6, size = 4, show.legend = FALSE) +
+  scale_colour_manual(values = con_pal, name = NULL, aesthetics = c("colour","fill")) +
+  labs(title = ttl, x = "Bezugstemperatur (°C)", y = ylab) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "inside", legend.position.inside = c(0.80, 0.16),
+        legend.background = element_rect(fill = "white", colour = "grey80"))
+
+p1 <- mkpanel(df_slope, "Empfindlichkeit dT/dcounts — gepaart je Node", "NTC2 − NTCk  (% der Steigung)") +
+  annotate("text", x = -25, y = Inf, vjust = 1.4, hjust = 0, size = 3, colour = "grey30",
+           label = "Feld-Amplitudeneffekt NTC2: +2.4 %  (≈ 20× größer)")
+p2 <- mkpanel(df_cnts, "Counts-Niveau bei fester Temperatur — gepaart je Node", "NTC2 − NTCk  (% der Counts)")
+p1 + p2
+```
+
+```{r tab-ntc2}
+df_slope |> mutate(Größe = "Steigung") |> bind_rows(mutate(df_cnts, Größe = "Counts")) |>
+  transmute(Größe, `T (°C)` = T, Kontrast = contrast,
+            `Differenz (%)` = round(mean, 3), `±95% (%)` = round(1.96*se, 3),
+            p = signif(p, 2), Signif = lab) |>
+  arrange(Größe, Kontrast, desc(`T (°C)`)) |>
+  knitr::kable(caption = "Gepaarte NTC2-Differenzen (% der Größe), je Bezugstemperatur.")
+```
+
+::: {.callout-note}
+## Ergebnis
+
+- **NTC2 ≈ NTC1 — überall** (blau ≈ 0), in Empfindlichkeit *und* Counts-Niveau,
+  über den gesamten Bereich statistisch ununterscheidbar (gepaarte $p > 0.18$).
+- Die einzigen signifikanten Effekte sind **NTC2 vs NTC3**, aber winzig
+  (≤ 0.19 % Steigung, ≤ 0.09 % Counts) und zur Kälte hin wachsend. Also ist
+  **NTC3** der leicht abweichende Kanal, nicht NTC2.
+- Für den Feldbefund irrelevant: der NTC2−NTC3-Effekt ist ~20–50× zu klein und
+  hat das *falsche* Vorzeichen (NTC2 eher etwas geringere |Steigung| als NTC3,
+  was die Amplitude senken würde). **Die Kalibration erklärt den
+  NTC2-Amplitudenüberschuss nicht** — er steckt in den Counts.
+:::
+
+## Falle: die Rohkoeffizienten
+
+```{r tab-rawcoef}
+cof |> mutate(NTC = paste0("NTC", ntc)) |> group_by(NTC) |>
+  summarise(`a ⌀` = mean(a), `a sd` = sd(a), `b ⌀` = mean(b), `c ⌀` = mean(c),
+            `Steigung@-5 ⌀` = mean(s5), `Steigung@-5 sd` = sd(s5), .groups = "drop") |>
+  knitr::kable(digits = c(0, 6, 6, 6, 7, 2, 3),
+               caption = "Rohkoeffizienten zeigen einen Schein-Kanaltrend (a: NTC1<NTC2<NTC3) — die Steigung tut es nicht.")
+```
+
+Die nackten $a,b,c,d$ zeigen einen scheinbaren Kanaltrend (z. B. $a$:
+NTC1 < NTC2 < NTC3) und NTC3 die mit Abstand größte Streuung. Gepaart pro Node
+ist NTC2 in den *Rohkoeffizienten* sogar formal von NTC1 verschieden — aber das
+ist genau die entartete Parametrisierung aus Abschnitt 2: in der **Kurve/Steigung**
+kommt davon nichts an. Wer Sensoren über $a,b,c,d$ vergleicht, sieht ein
+NTC2-„Muster", das physikalisch nicht existiert. **Immer über die lokale Steigung
+am Arbeitspunkt vergleichen, nie über die Rohkoeffizienten.**

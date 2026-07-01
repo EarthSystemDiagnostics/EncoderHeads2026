@@ -287,17 +287,109 @@ fit_df <- df |> filter(node %in% ex_nodes) |>
   pivot_longer(c(NTC2, NTC3), names_to = "sensor", values_to = "sensor_T") |>
   filter(is.finite(sensor_T), is.finite(NTC1))
 
+# Per-panel slope/intercept from the per-node fits (NTC1 ~ NTCk on train).
+ann <- do.call(rbind, lapply(ex_nodes, function(nd) rbind(
+  data.frame(node = nd, sensor = "NTC2", slope = cal2$b[nd], intercept = cal2$a[nd]),
+  data.frame(node = nd, sensor = "NTC3", slope = cal3$b[nd], intercept = cal3$a[nd])))) |>
+  mutate(label = sprintf("slope %.3f\nint %+.2f", slope, intercept))
+
 ggplot(fit_df, aes(x = sensor_T, y = NTC1)) +
   geom_abline(slope = 1, intercept = 0, colour = "grey70", linetype = "dashed") +
   geom_smooth(data = ~ filter(.x, set == "train"),
               method = "lm", se = FALSE, colour = "#2980b9", linewidth = 0.6) +
   geom_point(aes(shape = set, colour = set), size = 2) +
+  geom_text(data = ann, aes(x = -Inf, y = Inf, label = label), inherit.aes = FALSE,
+            hjust = -0.08, vjust = 1.15, size = 2.7, colour = "#2980b9", lineheight = 0.9) +
   facet_grid(sensor ~ node, labeller = label_both) +
   scale_colour_manual(values = c(train = "#34495e", test = "#e74c3c")) +
   labs(title = "Beispiel-Nodes: NTC1 (y) vs. NTCk (x)",
        subtitle = "blau: Fit auf Train | gestrichelt: y=x | rot: 5. Messung (Test)",
        x = "NTCk Temperatur (°C)", y = "NTC1 Temperatur (°C)") +
   theme_bw(base_size = 11) + theme(legend.position = "bottom")
+```
+
+## Ergebnis-Plots (kalibriert)
+
+The same time-series figures as in `decode_field.qmd` (Hovmöller heatmap +
+line plot), but with the **calibrated** values: NTC1 unchanged, NTC2 and NTC3
+mapped onto NTC1 with their per-node fit. The per-node NTC triplets should now
+collapse, so the heatmap looks vertically smoother and the lines bundle tighter.
+
+```{r cal-series-build}
+s <- spacing
+cal_long <- df |>
+  transmute(node, time, NTC1 = NTC1, NTC2 = NTC2_cal, NTC3 = NTC3_cal) |>
+  pivot_longer(c(NTC1, NTC2, NTC3), names_to = "sensor", values_to = "temp_C") |>
+  filter(is.finite(temp_C)) |>
+  mutate(ntc_rank = match(sensor, c("NTC1", "NTC2", "NTC3")),
+         hoehe_cm = (node - 1L) * 3L * s + ntc_rank * s)
+tlevels  <- format(sort(unique(cal_long$time)), "%m-%d %H:%M")
+cal_long <- cal_long |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels))
+max_h <- n_nodes * 3L * s
+```
+
+```{r cal-series-plot, fig.height=11, fig.width=8}
+p_heat <- ggplot(cal_long, aes(x = tlab, y = hoehe_cm, fill = temp_C)) +
+  geom_tile() +
+  scale_fill_distiller(palette = "RdYlBu", direction = -1, name = "T (°C)") +
+  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  labs(title    = "Zeitlicher Verlauf — kalibriert (NTC2, NTC3 → NTC1)",
+       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, IMEI),
+       x = NULL) +
+  theme_bw(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid  = element_blank())
+
+p_line <- ggplot(cal_long, aes(x = time, y = temp_C,
+                               group = interaction(node, sensor), colour = hoehe_cm)) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1) +
+  scale_colour_viridis_c(name = "Höhe (cm)") +
+  labs(x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 13)
+
+p_heat / p_line + plot_layout(heights = c(3, 2))
+```
+
+### Anomaly — per-timepoint height-mean removed
+
+At each measurement time we subtract the mean temperature over **all heights**,
+so the common diurnal signal is gone and only the **vertical structure** (how the
+profile deviates from its own column mean) remains. Calibrated values.
+
+```{r cal-anom-build}
+anom_long <- cal_long |>
+  group_by(time) |>
+  mutate(temp_anom = temp_C - mean(temp_C, na.rm = TRUE)) |>
+  ungroup()
+alim <- max(abs(anom_long$temp_anom), na.rm = TRUE)
+```
+
+```{r cal-anom-plot, fig.height=11, fig.width=8}
+a_heat <- ggplot(anom_long, aes(x = tlab, y = hoehe_cm, fill = temp_anom)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
+                       midpoint = 0, limits = c(-alim, alim), name = "ΔT (°C)") +
+  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  labs(title    = "Anomalie — Höhen-Mittel je Zeitpunkt abgezogen (kalibriert)",
+       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, IMEI),
+       x = NULL) +
+  theme_bw(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid  = element_blank())
+
+a_line <- ggplot(anom_long, aes(x = time, y = temp_anom,
+                                group = interaction(node, sensor), colour = hoehe_cm)) +
+  geom_hline(yintercept = 0, linewidth = 0.4, colour = "grey50") +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1) +
+  scale_colour_viridis_c(name = "Höhe (cm)") +
+  labs(x = "Zeit (UTC)", y = "T − Höhenmittel (°C)") +
+  theme_bw(base_size = 13)
+
+a_heat / a_line + plot_layout(heights = c(3, 2))
 ```
 
 ## Save calibrated 5th message
