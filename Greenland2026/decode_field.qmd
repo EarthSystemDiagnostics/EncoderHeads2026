@@ -48,7 +48,7 @@ head_config <- list(
   # One entry per deployed head, KEYED BY IMEI. `label` is just a human name;
   # n_nodes / fields / type / spacing_cm are authoritative for decoding & plots.
   # `calibration` = path to a per-sensor lab calibration table
-  # (position,node,ntc,a,b,c,d); NA → decode with the universal Beta curve.
+  # (position,node,ntc,a,b,c,d); NA → decode with the universal mean lab-S4 curve.
   "301434062008130" = list(label = "Kette (chain)", n_nodes = 20L,
                  fields = c("ntc1", "ntc2", "gnd", "pressure"),
                  type = "standard", spacing_cm = NA_integer_,
@@ -90,7 +90,8 @@ fields  <- cfg$fields
 # 4-param Steinhart–Hart fit (NTC_s4) instead of the universal Beta curve.
 # `position` in that table is the decode order (1 = first node in the stream),
 # so it maps 1:1 onto the node index used below. Any sensor whose fit is missing
-# or numerically broken falls back to Beta (handled in calibrate_channel).
+# or numerically broken falls back to the universal mean lab-S4 curve
+# (NTC_mean; handled in calibrate_channel).
 ntc_channel <- c(ntc1 = 1L, ntc2 = 2L, testSB = 3L)   # field name → NTC number
 lab_cal <- NULL
 cal_path <- cfg$calibration
@@ -113,8 +114,8 @@ n_lab_sensors <- if (is.null(lab_cal)) 0L else
   sum(sapply(names(lab_cal), function(ch)
     if (ch %in% fields) sum(!vapply(lab_cal[[ch]], is.null, logical(1))) else 0L))
 n_ntc_sensors <- n_nodes * sum(fields %in% names(ntc_channel))
-cal_method <- if (is.null(lab_cal)) "Beta (universelle Kurve)" else
-  sprintf("Lab-S4 pro Sensor (%d/%d) mit Beta-Fallback", n_lab_sensors, n_ntc_sensors)
+cal_method <- if (is.null(lab_cal)) "Mittlere Lab-S4-Kurve (universeller Fallback)" else
+  sprintf("Lab-S4 pro Sensor (%d/%d) mit Mean-S4-Fallback", n_lab_sensors, n_ntc_sensors)
 
 # Per-field value width in BYTES (binary) — gnd is int16, the rest int24/uint24.
 bin_field_bytes <- function(f) {
@@ -218,22 +219,31 @@ NTCcounts2R <- function(c) {
   H <- (-c * 1e6) / (c - 33554432)
   (H * 499000) / (499000 - H)
 }
-# Fallback calibration: single universal Beta curve (β = 3380, R25 = 10 kΩ).
-# It is systematically ~5.5 % LESS sensitive than the per-sensor lab calibration
-# (measured at the field operating point), so it is used only where no lab
-# coefficient set exists for a head (see head_config `calibration`) or where a
-# lab fit is numerically broken.
-NTC_beta <- function(c) {
-  r <- NTCcounts2R(c)
-  1 / ((1 / 3380) * log(r / 10000) + 1 / 298.15) - 273.15
-}
 # Per-sensor lab calibration: 4-parameter Steinhart–Hart on ln(R).
 NTC_s4 <- function(c, co) {
   lr <- log(NTCcounts2R(c))
   1 / (co[1] + co[2] * lr + co[3] * lr^2 + co[4] * lr^3) - 273.15
 }
-# Back-compat alias (Beta) so any external caller still resolves.
-NTCcounts2temp <- NTC_beta
+# Universal FALLBACK calibration: the MEAN lab-S4 coefficient set, i.e. the
+# average of the 62 healthy GRIP sensors (a,b,c,d averaged after dropping the
+# 10 a_suspect fits from GRIP_calibration_assignment.csv). Because 1/T is LINEAR
+# in (a,b,c,d), the mean coefficients reproduce the mean 1/T curve EXACTLY; that
+# curve represents every healthy sensor to ±0.03–0.05 °C (SD) over −40…0 °C.
+# Used where a head has no per-sensor lab table (head_config `calibration` = NA)
+# or where an individual lab fit is missing/numerically broken. Derivation:
+# Greenland2026/derive_mean_calibration.R.
+NTC_MEAN_COEF <- c(8.4229499262e-04, 2.7615486685e-04,
+                   -3.1654916185e-06, 3.0727486494e-07)
+NTC_mean <- function(c) NTC_s4(c, NTC_MEAN_COEF)
+# Legacy universal Beta curve (β = 3380, R25 = 10 kΩ). NO LONGER the decoding
+# fallback (it reads systematically too warm: −0.7 °C at 0 °C growing to −3.2 °C
+# at −40 °C vs. the mean lab curve). Kept only for the lab-vs-Beta diagnostic.
+NTC_beta <- function(c) {
+  r <- NTCcounts2R(c)
+  1 / ((1 / 3380) * log(r / 10000) + 1 / 298.15) - 273.15
+}
+# Back-compat alias so any external caller still resolves → mean lab curve.
+NTCcounts2temp <- NTC_mean
 
 pressure2hPa   <- function(p) p / 1000
 unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
@@ -338,10 +348,11 @@ library(ggplot2)
 library(patchwork)
 
 # counts → °C for one NTC channel across all nodes: the per-sensor lab fit where
-# available (and numerically sane), else the Beta fallback. `counts` is in node
+# available (and numerically sane), else the universal mean lab-S4 fallback
+# (NTC_mean). `counts` is in node
 # (= decode = calibration `position`) order, so index p selects the right sensor.
 calibrate_channel <- function(counts, field) {
-  out <- NTC_beta(counts)                         # default: Beta everywhere
+  out <- NTC_mean(counts)                         # default: mean lab curve everywhere
   if (!is.null(lab_cal) && field %in% names(ntc_channel)) {
     for (p in seq_along(counts)) {
       co <- lab_cal[[field]][[p]]

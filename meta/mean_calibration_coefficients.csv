@@ -1,0 +1,2 @@
+"a","b","c","d","n_sensors","source","model"
+0.000842294992618737,0.000276154866853736,-3.16549161851815e-06,3.07274864940545e-07,62,"mean of healthy GRIP sensors (a_suspect dropped) in GRIP_calibration_assignment.csv","1/T[K] = a + b*lnR + c*lnR^2 + d*lnR^3 ; T_C = 1/(1/T)-273.15"
