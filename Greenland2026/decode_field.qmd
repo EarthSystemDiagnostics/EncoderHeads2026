@@ -47,12 +47,16 @@ MSG2 <- ""
 head_config <- list(
   # One entry per deployed head, KEYED BY IMEI. `label` is just a human name;
   # n_nodes / fields / type / spacing_cm are authoritative for decoding & plots.
+  # `calibration` = path to a per-sensor lab calibration table
+  # (position,node,ntc,a,b,c,d); NA → decode with the universal Beta curve.
   "301434062008130" = list(label = "Kette (chain)", n_nodes = 20L,
                  fields = c("ntc1", "ntc2", "gnd", "pressure"),
-                 type = "standard", spacing_cm = NA_integer_),
+                 type = "standard", spacing_cm = NA_integer_,
+                 calibration = NA_character_),
   "300434065508020" = list(label = "Snowmelt NEWGRIP", n_nodes = 24L,
                  fields = c("ntc1", "ntc2", "testSB"),
-                 type = "snowmelt", spacing_cm = 4L)
+                 type = "snowmelt", spacing_cm = 4L,
+                 calibration = "../meta/GRIP_calibration_assignment.csv")
   # Add further heads here, one per IMEI.
 )
 
@@ -80,6 +84,37 @@ if (is.null(cfg))
 
 n_nodes <- cfg$n_nodes
 fields  <- cfg$fields
+
+# --- Per-sensor lab calibration (optional, keyed by head) --------------------
+# If the head has a `calibration` table, decode counts→°C with the per-sensor
+# 4-param Steinhart–Hart fit (NTC_s4) instead of the universal Beta curve.
+# `position` in that table is the decode order (1 = first node in the stream),
+# so it maps 1:1 onto the node index used below. Any sensor whose fit is missing
+# or numerically broken falls back to Beta (handled in calibrate_channel).
+ntc_channel <- c(ntc1 = 1L, ntc2 = 2L, testSB = 3L)   # field name → NTC number
+lab_cal <- NULL
+cal_path <- cfg$calibration
+if (!is.null(cal_path) && !is.na(cal_path)) {
+  if (file.exists(cal_path)) {
+    ca <- read.csv(cal_path)
+    lab_cal <- setNames(lapply(names(ntc_channel), function(fld) {
+      k <- ntc_channel[[fld]]
+      lapply(seq_len(n_nodes), function(p) {
+        r  <- ca[ca$position == p & ca$ntc == k, c("a", "b", "c", "d")]
+        co <- if (nrow(r) == 1L) as.numeric(r) else NULL
+        if (!is.null(co) && all(is.finite(co))) co else NULL
+      })
+    }), names(ntc_channel))
+  } else {
+    warning(sprintf("Calibration table '%s' not found — decoding with Beta.", cal_path))
+  }
+}
+n_lab_sensors <- if (is.null(lab_cal)) 0L else
+  sum(sapply(names(lab_cal), function(ch)
+    if (ch %in% fields) sum(!vapply(lab_cal[[ch]], is.null, logical(1))) else 0L))
+n_ntc_sensors <- n_nodes * sum(fields %in% names(ntc_channel))
+cal_method <- if (is.null(lab_cal)) "Beta (universelle Kurve)" else
+  sprintf("Lab-S4 pro Sensor (%d/%d) mit Beta-Fallback", n_lab_sensors, n_ntc_sensors)
 
 # Per-field value width in BYTES (binary) — gnd is int16, the rest int24/uint24.
 bin_field_bytes <- function(f) {
@@ -177,11 +212,29 @@ decode_hex <- function(schema, hex) {
 }
 
 adc2temp       <- function(c) 6.101e-5 * c - 256.6
-NTCcounts2temp <- function(c) {
+
+# counts → NTC resistance (Ω). Shared by both calibrations below.
+NTCcounts2R <- function(c) {
   H <- (-c * 1e6) / (c - 33554432)
-  r <- (H * 499000) / (499000 - H)
+  (H * 499000) / (499000 - H)
+}
+# Fallback calibration: single universal Beta curve (β = 3380, R25 = 10 kΩ).
+# It is systematically ~5.5 % LESS sensitive than the per-sensor lab calibration
+# (measured at the field operating point), so it is used only where no lab
+# coefficient set exists for a head (see head_config `calibration`) or where a
+# lab fit is numerically broken.
+NTC_beta <- function(c) {
+  r <- NTCcounts2R(c)
   1 / ((1 / 3380) * log(r / 10000) + 1 / 298.15) - 273.15
 }
+# Per-sensor lab calibration: 4-parameter Steinhart–Hart on ln(R).
+NTC_s4 <- function(c, co) {
+  lr <- log(NTCcounts2R(c))
+  1 / (co[1] + co[2] * lr + co[3] * lr^2 + co[4] * lr^3) - 273.15
+}
+# Back-compat alias (Beta) so any external caller still resolves.
+NTCcounts2temp <- NTC_beta
+
 pressure2hPa   <- function(p) p / 1000
 unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
 
@@ -284,15 +337,32 @@ library(tidyr)
 library(ggplot2)
 library(patchwork)
 
+# counts → °C for one NTC channel across all nodes: the per-sensor lab fit where
+# available (and numerically sane), else the Beta fallback. `counts` is in node
+# (= decode = calibration `position`) order, so index p selects the right sensor.
+calibrate_channel <- function(counts, field) {
+  out <- NTC_beta(counts)                         # default: Beta everywhere
+  if (!is.null(lab_cal) && field %in% names(ntc_channel)) {
+    for (p in seq_along(counts)) {
+      co <- lab_cal[[field]][[p]]
+      if (is.null(co) || is.na(counts[p])) next
+      t <- NTC_s4(counts[p], co)
+      if (is.finite(t) && t > -80 && t < 60) out[p] <- t   # sane lab fit → use it
+    }
+  }
+  out
+}
+
 # Turn one decoded message into a tidy per-node data.frame. Both the raw counts
-# (before calibration, *_counts) and the calibrated value are kept.
+# (before calibration, *_counts) and the calibrated value are kept. The *_C value
+# uses the per-sensor lab calibration when the head has one (see cal_method).
 bin_to_nodes <- function(b) {
   df <- data.frame(node = seq_len(n_nodes))
   for (f in fields) {
     vals <- sapply(b$nodes, function(nd) nd[[f]])
     if (f %in% c("ntc1", "ntc2", "testSB")) {
       df[[paste0(f, "_counts")]] <- vals
-      df[[paste0(f, "_C")]]      <- NTCcounts2temp(vals)
+      df[[paste0(f, "_C")]]      <- calibrate_channel(vals, f)
     } else if (f == "pressure") {
       df$pressure_counts <- vals
       df$pressure_hPa    <- pressure2hPa(vals)
@@ -374,6 +444,7 @@ check <- function(val, lo, hi, label, unit) {
 | **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
 | **Battery** | `r if (battery_partial) sprintf("%d–%d mV (low byte lost — defective-sensor shift)", battery_lo, battery_hi) else paste0(battery_mv, " mV")` |
 | **ADC temp** | `r round(adc_temp_C, 2)` °C |
+| **Kalibrierung** | `r cal_method` |
 | **Source** | `r if (use_bin) paste0("binary: ", basename(primary_file), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
 | **Messages loaded** | `r if (use_bin) sprintf("%d file(s)%s", n_msg, if (n_msg > 1) " — newest shown below; see Zeitlicher Verlauf for the series" else "") else "1 (hex)"` |
 :::
@@ -400,7 +471,7 @@ if (!use_bin) {
     cnts    <- sapply(col_raw, function(nm) raw[[nm]])
     nodes[[paste0(f, "_counts")]] <- cnts          # raw counts (pre-calibration)
     if (f == "pressure") nodes$pressure_hPa  <- pressure2hPa(cnts)
-    else                 nodes[[paste0(f, "_C")]] <- NTCcounts2temp(cnts)
+    else                 nodes[[paste0(f, "_C")]] <- calibrate_channel(cnts, f)
   }
 
   if (!is.null(gnd_field)) {
@@ -518,7 +589,7 @@ series_long <- left_join(temp_l, cnt_l, by = c("node", "time", "sensor")) |>
   filter(!is.na(temp_C))
 ```
 
-```{r ts-snowmelt, eval=(multi && cfg$type == "snowmelt"), fig.height=11, fig.width=8}
+```{r ts-snowmelt, eval=(multi && cfg$type == "snowmelt"), fig.height=11, fig.width=15}
 # Two stacked panels over the same time series:
 #  (top)    Hovmöller heatmap — Höhe (same axis as the profile plot) × time,
 #           fill = temperature. Each measurement is one evenly-spaced column.
@@ -536,16 +607,115 @@ tlevels <- format(sort(unique(ts$time)), "%m-%d %H:%M")
 ts  <- ts |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels))
 max_h <- n_nodes * 3L * s
 
+# Companion strip (left of the heatmap, same y-axis): sensor type at each height.
+# Lets you read whether a temperature stripe sits on the NTC2 rows (channel gain)
+# or the NTC3 rows (calibration outliers). Full node×rank grid so a defective
+# sensor still gets a coloured row.
+sensor_cols <- c(NTC1 = "#2980b9", NTC2 = "#e74c3c", "NTC3 (TestSB)" = "#27ae60")
+strip_df <- expand.grid(node = seq_len(n_nodes), ntc_rank = 1:3) |>
+  mutate(sensor   = factor(c("NTC1", "NTC2", "NTC3 (TestSB)")[ntc_rank],
+                           levels = names(sensor_cols)),
+         hoehe_cm = (node - 1L) * 3L * s + ntc_rank * s)
+
+p_sensor <- ggplot(strip_df, aes(x = 1, y = hoehe_cm, fill = sensor)) +
+  geom_tile() +
+  scale_fill_manual(values = sensor_cols, name = NULL) +
+  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  scale_x_continuous(name = "Sensor", breaks = NULL, expand = c(0, 0)) +
+  labs(title = " ", subtitle = " ") +
+  theme_bw(base_size = 13) +
+  theme(panel.grid = element_blank(), legend.position = "left",
+        legend.key.size = unit(0.8, "lines"))
+
+# Two companion curves on the same height axis:
+#  (SD)   robust SD over time per sensor height — the NTC2 gain shows as a
+#         sawtooth peak on every middle (red) sensor of a node triplet (within a
+#         triplet the height trend is ~flat, so NTC2's larger swing pops out).
+#  (mean) time-MEDIAN residual from the smooth vertical profile (loess per
+#         message) = the fixed per-sensor offset; NTC3 calibration outliers show
+#         as persistently cold (negative) points, while the NTC2 gain (∝ T−T0)
+#         averages out. Both use robust stats (MAD/median) → the handling-
+#         contaminated last message does not dominate.
+sensor_by_h <- strip_df |> select(hoehe_cm, sensor)
+
+var_df <- ts |> group_by(hoehe_cm) |>
+  summarise(sd_t = 1.4826 * mad(temp_C, na.rm = TRUE), .groups = "drop") |>
+  left_join(sensor_by_h, by = "hoehe_cm") |> arrange(hoehe_cm)
+
+# Mittel−Trend = per-height time-median minus a single LINEAR height trend, once
+# with the lab calibration and once with the fixed Beta curve (from counts). The
+# atmosphere carries no persistent structure beyond the ~linear trend (checked:
+# higher-order trends don't shrink the residual, which is white-noise jagged), so
+# the jagged residual is a FIXED per-sensor artifact. lab ≈ Beta ⇒ it is mounting/
+# geometry (common to both calibrations), NOT calibration error.
+ts <- ts |> mutate(temp_beta = NTC_beta(counts))
+# Per message: linear height trend → residual per sensor. Offset = mean over
+# time; SE = sd/√N is the expected sampling scatter of that mean. Points inside
+# ±2·SE are consistent with noise (only ~16/71 clear it at N≈20 → curve is still
+# largely under-averaged; longer/colder data needed).
+lin_offset <- function(col) {
+  d <- ts |> select(time, hoehe_cm, y = all_of(col)) |> filter(is.finite(y)) |>
+    group_by(time) |> mutate(r = 1000 * (y - fitted(lm(y ~ hoehe_cm)))) |> ungroup()
+  d |> group_by(hoehe_cm) |>
+    summarise(off_mK = mean(r), se_mK = sd(r) / sqrt(n()), .groups = "drop") |>
+    left_join(sensor_by_h, by = "hoehe_cm")
+}
+off_lab  <- lin_offset("temp_C")
+off_beta <- lin_offset("temp_beta")
+xr_off   <- range(c(off_lab$off_mK  + 2 * off_lab$se_mK,  off_lab$off_mK  - 2 * off_lab$se_mK,
+                    off_beta$off_mK + 2 * off_beta$se_mK, off_beta$off_mK - 2 * off_beta$se_mK),
+                  na.rm = TRUE)
+
+ybreaks <- seq(0, max_h, by = max(s, 8L))
+p_var <- ggplot(var_df, aes(sd_t, hoehe_cm)) +
+  geom_path(colour = "grey75", linewidth = 0.3) +
+  geom_point(aes(colour = sensor), size = 1.5) +
+  scale_colour_manual(values = sensor_cols, guide = "none") +
+  scale_y_continuous(name = NULL, limits = c(0, max_h), breaks = ybreaks, expand = c(0, 0)) +
+  scale_x_continuous(name = "SD/Zeit (°C)") +
+  labs(title = "Varianz", subtitle = "NTC2 ↑") +
+  theme_bw(base_size = 13) +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        panel.grid.minor = element_blank())
+
+# NTC3 calibration outliers from the coefficient/ReTest check (nodes 71/77/80/
+# 50/51/26), at their NTC3-row heights — overlaid as black rings so we can see
+# whether they line up with the field offset curve.
+cal_outlier_h <- c(144, 180, 192, 216, 228, 288)
+
+mk_mean <- function(d, ttl, sub) {
+  out <- d |> filter(hoehe_cm %in% cal_outlier_h)
+  ggplot(d, aes(off_mK, hoehe_cm)) +
+    geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+    geom_errorbarh(aes(xmin = off_mK - 2 * se_mK, xmax = off_mK + 2 * se_mK),
+                   height = 0, colour = "grey70", linewidth = 0.3) +
+    geom_path(colour = "grey80", linewidth = 0.3) +
+    geom_point(aes(colour = sensor), size = 1.5) +
+    geom_point(data = out, shape = 21, size = 3.6, stroke = 0.9,
+               colour = "black", fill = NA) +
+    scale_colour_manual(values = sensor_cols, guide = "none") +
+    scale_y_continuous(name = NULL, limits = c(0, max_h), breaks = ybreaks, expand = c(0, 0)) +
+    scale_x_continuous(name = "Mittel−Trend ±2·SE (mK)", limits = xr_off) +
+    labs(title = ttl, subtitle = sub) +
+    theme_bw(base_size = 13) +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          panel.grid.minor = element_blank())
+}
+p_mean_lab  <- mk_mean(off_lab,  "Mittel−Trend", "lab-kal. (○ = Kal-Outlier)")
+p_mean_beta <- mk_mean(off_beta, "Mittel−Trend", "Beta (fix)")
+
 p_heat <- ggplot(ts, aes(x = tlab, y = hoehe_cm, fill = temp_C)) +
   geom_tile() +
   scale_fill_distiller(palette = "RdYlBu", direction = -1, name = "T (°C)") +
-  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+  scale_y_continuous(name = NULL, limits = c(0, max_h),
                      breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
   labs(title    = sprintf("Zeitlicher Verlauf — %s", cfg$label),
        subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, imei),
        x = NULL) +
   theme_bw(base_size = 13) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_blank(), axis.ticks.y = element_blank(),
         panel.grid  = element_blank())
 
 p_line <- ggplot(ts, aes(x = time, y = temp_C,
@@ -556,7 +726,9 @@ p_line <- ggplot(ts, aes(x = time, y = temp_C,
   labs(x = "Zeit (UTC)", y = "Temperatur (°C)") +
   theme_bw(base_size = 13)
 
-p_heat / p_line + plot_layout(heights = c(3, 2))
+(p_sensor + p_var + p_mean_lab + p_mean_beta + p_heat +
+   plot_layout(widths = c(0.5, 1.3, 1.3, 1.3, 5))) / p_line +
+  plot_layout(heights = c(3, 2))
 ```
 
 ```{r ts-standard, eval=(multi && cfg$type == "standard"), fig.height=6, fig.width=9}
