@@ -7,6 +7,7 @@
 # Generated files
 *.html
 !Greenland2026/decode_field.html
+!Greenland2026/tape_experiment.html
 *_files/
 Rplots.pdf
 .DS_Store
