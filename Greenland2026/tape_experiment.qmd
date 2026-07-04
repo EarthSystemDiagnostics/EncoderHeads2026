@@ -1,6 +1,6 @@
 ---
 title: "Tape-Experiment — Snowmelt NEWGRIP"
-subtitle: "Schwarztape auf Knoten 16–24"
+subtitle: "Schwarztape auf den Stäben 16–24 (= Knoten 6/7/8)"
 author: "Thom Laepple"
 date: today
 format:
@@ -17,25 +17,26 @@ execute:
   message: false
 ---
 
-Knoten 16–24 des Kopfs **IMEI 300434065508020** wurden mit schwarzem Tape
-umwickelt (α_Rohrwand ≈ 0.25 → ~0.95, heizt das **Rohr** unter Sonne). Liest die
-neueste Decoder-Zeitreihe (`data/series_imei<IMEI>_*.csv`). Zwei Fragen:
+Am Kopf **IMEI 300434065508020** wurden die **Sensor-Stäbe 16–24** mit schwarzem
+Tape umwickelt. Jeder Knoten hat drei Stäbe (NTC1/NTC2/NTC3), **jeder NTC in einem
+eigenen Rohr** — d. h. Stäbe 16–18 → Knoten 6, 19–21 → Knoten 7, 22–24 → Knoten 8.
+Getapt sind also **alle drei Rohre der Knoten 6, 7 und 8**; das Tape sitzt sichtbar
+**inhomogen**. Zwei Fragen:
 
-1. **Was passiert** mit den getapten Knoten?
-2. **NTC2-Hypothese**: der NTC2-Unterschied stammt aus einer anderen **Mischung von
-   Luft/Silikon- und Rohrtemperatur** (NTC2 stärker Rohr-gewichtet). Dann muss NTC2
-   auf den getapten Knoten bei Sonne über NTC1/NTC3 steigen (Tape heizt das Rohr).
+1. **Was macht das Tape** mit der gemessenen Temperatur?
+2. **NTC2-Hypothese**: NTC2 sieht einen größeren *Rohr*-Anteil (`f`) gegenüber Luft
+   als NTC1/NTC3 (der ~5 %-Feldeffekt). Wenn das Tape das Rohr heizt, die Luft aber
+   nicht, sollte NTC2 minimal **mehr** vom Tape sehen: `d = NTC2 − Mittel(NTC1,NTC3)
+   ≈ Δf · Heizung`.
 
-Beide Fragen über den **Nachbarvergleich**: getapte Knoten direkt an der Grenze
-gegen die angrenzenden blanken bei **gleicher Höhe** — das entfernt den
-Höhen-/Sonnenexpositions-Confound (getapt = obere Knoten).
+Referenzquelle: die neueste Decoder-Zeitreihe `data/series_imei<IMEI>_*.csv`.
 
 ```{r params}
 IMEI        <- "300434065508020"
-TAPED_NODES <- 16:24                 # Decode-Reihenfolge
-BAND        <- 5                     # Knoten je Seite der Grenze für den Nachbarvergleich
-TAPE_START  <- "2026-07-02 22:00"    # UTC
-SITE_LAT    <- 72.58                 # GRIP
+TAPED_NODES <- c(6, 7, 8)                 # = Stäbe 16–24 (3 Stäbe/Knoten)
+NEIGHBORS   <- c(3, 4, 5, 9, 10, 11)      # blanke Nachbarn, gleiche Höhe (beide Seiten)
+TAPE_START  <- "2026-07-02 22:00"         # UTC
+SITE_LAT    <- 72.58                       # GRIP
 SITE_LON    <- -37.64
 SERIES_CSV  <- tail(sort(Sys.glob(sprintf("data/series_imei%s_*.csv", IMEI))), 1)
 ```
@@ -45,7 +46,7 @@ library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
 stopifnot(length(SERIES_CSV) == 1L && file.exists(SERIES_CSV))
 tape_start <- as.POSIXct(TAPE_START, tz = "UTC")
 
-# Näherung Sonnenhöhe (Grad), ohne Paket — nur zum Ordnen nach Sonnenstand.
+# Näherung Sonnenhöhe (Grad), ohne Paket.
 solar_elev <- function(t, lat = SITE_LAT, lon = SITE_LON) {
   doy  <- as.numeric(format(t, "%j", tz = "UTC"))
   hh   <- as.numeric(format(t, "%H", tz = "UTC")) + as.numeric(format(t, "%M", tz = "UTC")) / 60
@@ -54,115 +55,92 @@ solar_elev <- function(t, lat = SITE_LAT, lon = SITE_LON) {
   latr <- lat * pi / 180
   asin(sin(latr) * sin(decl) + cos(latr) * cos(decl) * cos(H)) * 180 / pi
 }
-
-# Nachbar-Bänder um die Tape-Grenze (gleiche Höhe).
-b0        <- min(TAPED_NODES)
-bare_band <- (b0 - BAND):(b0 - 1)     # blanke Nachbarn direkt unter dem Tape
-tape_band <- b0:(b0 + BAND - 1)       # unterste getapte Knoten
 ```
 
 ```{r load}
-tw <- read.csv(SERIES_CSV, stringsAsFactors = FALSE) |>
+w <- read.csv(SERIES_CSV, stringsAsFactors = FALSE) |>
   mutate(time = as.POSIXct(time, tz = "UTC")) |>
   select(node, time, sensor, temp_C) |>
   pivot_wider(names_from = sensor, values_from = temp_C) |>
-  mutate(
-    taped = node %in% TAPED_NODES,
-    d21   = ntc2_C - ntc1_C,      # NTC2 vs NTC1  (sauberes Paar)
-    d13   = ntc1_C - testSB_C,    # Kontrolle: kein NTC2 beteiligt
-    elev  = solar_elev(time),
-    sun   = ifelse(elev > 20, "hoch", "tief"),
-    phase = ifelse(time >= tape_start, "nach", "vor")
-  )
-n_msg <- dplyr::n_distinct(tw$time)
+  mutate(elev = solar_elev(time), phase = ifelse(time >= tape_start, "nach", "vor"))
 
-# Grenzband-Zuordnung.
-nb <- tw |> filter(node %in% c(bare_band, tape_band)) |>
-  mutate(band = factor(ifelse(node %in% tape_band, "getapt", "blank"), levels = c("blank", "getapt")))
+# Umgebungsreferenz je Zeit = Median NTC1 aller Knoten (6/7/8 sind nur 3 von 24).
+ref <- w |> group_by(time) |> summarise(refT = median(ntc1_C, na.rm = TRUE), .groups = "drop")
+w <- w |> left_join(ref, by = "time") |>
+  mutate(anom = ntc1_C - refT,                          # Erwärmung ggü. Umgebung
+         heiz = (ntc1_C + ntc2_C + testSB_C) / 3 - refT, # Knoten-Heizung (alle Kanäle)
+         d    = ntc2_C - (ntc1_C + testSB_C) / 2,        # NTC2-Excess
+         grp  = case_when(node %in% TAPED_NODES ~ "getapt (6/7/8)",
+                          node %in% NEIGHBORS   ~ "blank (Nachbarn)",
+                          TRUE ~ "andere"))
+n_msg <- dplyr::n_distinct(w$time)
 ```
 
 Datei `` `r basename(SERIES_CSV)` `` — `r n_msg` Messungen,
-`r format(min(tw$time), "%m-%d %H:%M")`–`r format(max(tw$time), "%m-%d %H:%M")` UTC.
-Nachbarvergleich: getapt `r paste(range(tape_band), collapse="–")` vs. blank
-`r paste(range(bare_band), collapse="–")`.
+`r format(min(w$time), "%m-%d %H:%M")`–`r format(max(w$time), "%m-%d %H:%M")` UTC.
 
-## 1 · Was passiert?
+## 1 · Was macht das Tape?
 
-Kurz: **fast nichts an der gemessenen Temperatur.** Der Plot legt die Temperatur der
-getapten Knoten und ihrer gleich hohen blanken Nachbarn übereinander — sie liegen
-praktisch aufeinander, über den ganzen Tagesgang, auch nach dem Bekleben.
-
-```{r bands-fig, fig.height=4, fig.width=9}
-band_ts <- nb |> group_by(time, band) |>
-  summarise(NTC1 = median(ntc1_C, na.rm = TRUE), .groups = "drop")
-ggplot(band_ts, aes(time, NTC1, colour = band)) +
+```{r fig-anom, fig.height=4.4, fig.width=11}
+pl <- w |> filter(grp != "andere")
+ggplot(pl, aes(time, anom, group = node)) +
   geom_vline(xintercept = tape_start, linetype = "dashed", colour = "grey40") +
   annotate("text", x = tape_start, y = Inf, label = " Tape", hjust = 0, vjust = 1.4,
            size = 3.2, colour = "grey40") +
-  geom_line(linewidth = 0.6) + geom_point(size = 1.5) +
-  scale_colour_manual(values = c(blank = "#3498db", getapt = "black"), name = NULL) +
-  labs(title = "NTC1 der Nachbarknoten an der Tape-Grenze (gleiche Höhe)",
-       subtitle = "getapt (schwarz) und blank (blau) liegen aufeinander → Tape ändert die Temperatur kaum",
-       x = "Zeit (UTC)", y = "NTC1 (°C)") +
-  theme_bw(base_size = 12) + theme(legend.position = "bottom")
-```
-
-```{r bulk-table}
-bulk <- nb |> filter(phase == "nach") |> group_by(sun, band) |>
-  summarise(NTC1 = median(ntc1_C, na.rm = TRUE), .groups = "drop") |>
-  pivot_wider(names_from = band, values_from = NTC1) |>
-  mutate(`getapt−blank` = getapt - blank)
-knitr::kable(bulk, digits = 2,
-             caption = "Bulk-Temperatur NTC1 im Grenzband (gleiche Höhe), nach Tape")
-```
-
-```{r bulk-verdict, results='asis'}
-db_hi <- bulk$`getapt−blank`[bulk$sun == "hoch"]
-db_lo <- bulk$`getapt−blank`[bulk$sun == "tief"]
-cat(sprintf("Im Grenzband liest NTC1 der getapten Knoten praktisch wie die blanken Nachbarn: **%+.2f °C bei hoher, %+.2f °C bei tiefer Sonne**.\n\n", db_hi, db_lo))
-cat("→ Die **gemessene (Bulk-)Temperatur ändert sich kaum** — kein klares Erwärmen oder Abkühlen durch das Tape. (Das im Gruppenmittel früher gesehene „getapt ~2 °C kälter\" war ein Artefakt der anomalen Knoten 6/8, nicht des Tapes.) Der einzige klare Effekt steckt im *Kanalunterschied* NTC2 vs. NTC1 — Frage 2.\n")
-```
-
-## 2 · NTC2: Luft/Silikon- vs. Rohr-Mischung
-
-Hypothese: NTC2 ist stärker **Rohr-gewichtet**. Tape heizt das Rohr → NTC2 müsste
-bei Sonne über NTC1 steigen. Kontrolle **NTC1−NTC3** (ohne NTC2) darf sich nicht mit
-der Sonne ändern.
-
-```{r ntc2-fig, fig.height=4.2, fig.width=9}
-pw <- nb |> filter(phase == "nach") |> group_by(time, band) |>
-  summarise(`NTC2−NTC1` = median(d21, na.rm = TRUE), elev = first(elev), .groups = "drop")
-ggplot(pw, aes(elev, `NTC2−NTC1`, colour = band)) +
   geom_hline(yintercept = 0, colour = "grey80") +
-  geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
-  geom_point(size = 2.4) +
-  scale_colour_manual(values = c(blank = "#3498db", getapt = "black"), name = NULL) +
-  labs(title = "NTC2 − NTC1 vs. Sonnenhöhe im Grenzband (nach Tape)",
-       subtitle = "getapt (schwarz) steigt mit der Sonne, blank (blau) bleibt flach → NTC2 spürt das heiße Rohr",
-       x = "Sonnen-Elevation (°)", y = "NTC2 − NTC1 (°C)") +
+  geom_line(aes(colour = grp), alpha = 0.7) +
+  geom_point(aes(colour = grp), size = 1.2) +
+  scale_colour_manual(values = c("getapt (6/7/8)" = "#c0392b", "blank (Nachbarn)" = "#3498db"),
+                      name = NULL) +
+  labs(title = "Erwärmung ggü. Umgebung (NTC1 − Median aller Knoten)",
+       subtitle = "getapte Stäbe (rot) spiken nach dem Tape bei Sonne auf bis +16 °C; blanke Nachbarn (blau) bleiben ~0",
+       x = "Zeit (UTC)", y = "NTC1 − Umgebung (°C)") +
   theme_bw(base_size = 12) + theme(legend.position = "bottom")
 ```
 
-```{r ntc2-table}
-con <- nb |> filter(phase == "nach") |> group_by(band, sun) |>
-  summarise(`NTC2−NTC1` = median(d21, na.rm = TRUE),
-            `NTC1−NTC3` = median(d13, na.rm = TRUE), .groups = "drop") |>
-  pivot_longer(-c(band, sun), names_to = "Paar", values_to = "m") |>
-  pivot_wider(names_from = sun, values_from = m) |> mutate(`hoch−tief` = hoch - tief)
-knitr::kable(con |> select(band, Paar, tief, hoch, `hoch−tief`), digits = 3,
-             caption = "Kanaldifferenz im Grenzband: tiefe (<20°) vs. hohe (>20°) Sonne, nach Tape")
+```{r anom-table}
+sol_tab <- w |> filter(grp != "andere", elev > 25) |>
+  group_by(node, grp, phase) |>
+  summarise(anom = mean(anom, na.rm = TRUE), .groups = "drop") |>
+  pivot_wider(names_from = phase, values_from = anom) |>
+  mutate(`nach−vor` = nach - vor) |> arrange(desc(`nach−vor`))
+knitr::kable(sol_tab, digits = 2,
+             caption = "Solar-Anomalie (NTC1 − Umgebung) bei hoher Sonne (>25°): vor/nach Tape je Knoten")
 ```
 
-```{r ntc2-verdict, results='asis'}
-c_tape <- con$`hoch−tief`[con$band == "getapt" & con$Paar == "NTC2−NTC1"]
-c_bare <- con$`hoch−tief`[con$band == "blank"  & con$Paar == "NTC2−NTC1"]
-c_ctrl <- con$`hoch−tief`[con$band == "getapt" & con$Paar == "NTC1−NTC3"]
-seen   <- isTRUE(c_tape > c_bare + 0.05) && isTRUE(c_tape > abs(c_ctrl))
-cat(sprintf("NTC2−NTC1 (tiefe→hohe Sonne): **%+.3f °C getapt** vs. %+.3f °C blank (gleiche Höhe); Kontrolle NTC1−NTC3 getapt %+.3f °C.\n\n",
-            c_tape, c_bare, c_ctrl))
-cat(if (seen)
-  "→ **Ja**: NTC2 zieht bei Sonne über NTC1 — nur auf den getapten Knoten, nicht auf den gleich hohen blanken Nachbarn, und die NTC2-freie Kontrolle bleibt kleiner. Konsistent mit einer stärker Rohr-gewichteten NTC2-Mischung; der Effekt hängt an einer rein optischen Änderung (Tape → heißes Rohr), ist also sonnen-/nicht elektronisch getrieben. Noch schwach (wenige Punkte, 1 klarer Tag) — bewölkter Tag als Gegentest.\n"
-  else
-  "→ Noch kein klarer NTC2-Vorsprung im Grenzband — mehr (v.a. klare) Tage nötig.\n")
-cat("\n*NTC3 (testSB) ist selbst verrauscht → NTC2−NTC1 ist das belastbare Paar.*\n")
+```{r q1-verdict, results='asis'}
+tap_eff <- sol_tab |> filter(grp == "getapt (6/7/8)")
+nb_eff  <- sol_tab |> filter(grp == "blank (Nachbarn)")
+cat(sprintf("Getapte Stäbe (Knoten 6/7/8), Solar-Anomalie nach−vor Tape bei hoher Sonne: **%+.1f…%+.1f °C**; blanke Nachbarn %+.2f…%+.2f °C. Spitze Knoten 8: NTC1 = +14.7 °C bei 07-03 18:15 (Luft ~−1.5 °C).\n",
+            min(tap_eff$`nach−vor`), max(tap_eff$`nach−vor`), min(nb_eff$`nach−vor`), max(nb_eff$`nach−vor`)))
+```
+
+## 2 · Sieht NTC2 mehr vom Tape? (Rohr- vs. Luftanteil)
+
+Modell: jeder Sensor liest `f·T_Rohr + (1−f)·T_Luft`; das Tape hebt `T_Rohr`, nicht
+`T_Luft`. Größeres `f` bei NTC2 ⇒ `d = NTC2 − Mittel(NTC1,NTC3) ≈ Δf · Heizung`
+sollte **positiv mit der Heizung steigen**.
+
+```{r fig-d, fig.height=4.2, fig.width=9}
+tp <- w |> filter(node %in% TAPED_NODES)
+fit  <- lm(d ~ heiz, tp)
+ggplot(tp, aes(heiz, d, colour = factor(node))) +
+  geom_hline(yintercept = 0, colour = "grey80") +
+  geom_smooth(aes(group = 1), method = "lm", se = TRUE, colour = "black", linewidth = 0.6) +
+  geom_point(size = 2) +
+  scale_colour_brewer(palette = "Set1", name = "Knoten") +
+  labs(title = "NTC2-Excess vs. Tape-Heizung (getapte Knoten 6/7/8)",
+       subtitle = "erwartet bei größerem NTC2-Rohranteil: leichte positive Steigung (Δf)",
+       x = "Heizung = Knoten − Umgebung (°C)", y = "d = NTC2 − Mittel(NTC1,NTC3)  (°C)") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom")
+```
+
+```{r q2-stats, results='asis'}
+s      <- summary(fit)
+slope  <- coef(fit)[["heiz"]]; pval <- s$coefficients["heiz", "Pr(>|t|)"]
+hot    <- tp |> filter(heiz > 3)
+d_hot  <- mean(hot$d, na.rm = TRUE); sd_hot <- sd(hot$d, na.rm = TRUE)
+p_hot  <- tryCatch(t.test(hot$d)$p.value, error = function(e) NA)
+cat(sprintf("Regression d ~ Heizung: Steigung **%+.3f** (≈ Δf), p = %.3f, n = %d. Stark geheizte Punkte (Heizung > 3 °C, n = %d): d = **%+.2f ± %.2f °C**, t-Test p = %.2f. Erwartet wäre Δf·Heizung ≈ 0.3–0.7 °C.\n",
+            slope, pval, nrow(tp), nrow(hot), d_hot, sd_hot, p_hot))
 ```
