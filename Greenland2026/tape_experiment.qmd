@@ -21,7 +21,8 @@ Am Kopf **IMEI 300434065508020** wurden die **Sensor-Stäbe 16–24** mit schwar
 Tape umwickelt. Jeder Knoten hat drei Stäbe (NTC1/NTC2/NTC3), **jeder NTC in einem
 eigenen Rohr** — d. h. Stäbe 16–18 → Knoten 6, 19–21 → Knoten 7, 22–24 → Knoten 8.
 Getapt sind also **alle drei Rohre der Knoten 6, 7 und 8**; das Tape sitzt sichtbar
-**inhomogen**. Zwei Fragen:
+**inhomogen**. Es war von **2026-07-02 22:00** bis **2026-07-06 00:00** UTC angebracht
+und wurde dann wieder **entfernt** — ein An–Aus-Reversal. Zwei Fragen:
 
 1. **Was macht das Tape** mit der gemessenen Temperatur?
 2. **NTC2-Hypothese**: NTC2 sieht einen größeren *Rohr*-Anteil (`f`) gegenüber Luft
@@ -35,7 +36,8 @@ Referenzquelle: die neueste Decoder-Zeitreihe `data/series_imei<IMEI>_*.csv`.
 IMEI        <- "300434065508020"
 TAPED_NODES <- c(6, 7, 8)                 # = Stäbe 16–24 (3 Stäbe/Knoten)
 NEIGHBORS   <- c(3, 4, 5, 9, 10, 11)      # blanke Nachbarn, gleiche Höhe (beide Seiten)
-TAPE_START  <- "2026-07-02 22:00"         # UTC
+TAPE_START  <- "2026-07-02 22:00"         # UTC — Tape angebracht
+TAPE_END    <- "2026-07-06 00:00"          # UTC — Tape wieder entfernt (Reversal)
 SITE_LAT    <- 72.58                       # GRIP
 SITE_LON    <- -37.64
 SERIES_CSV  <- tail(sort(Sys.glob(sprintf("data/series_imei%s_*.csv", IMEI))), 1)
@@ -45,6 +47,7 @@ SERIES_CSV  <- tail(sort(Sys.glob(sprintf("data/series_imei%s_*.csv", IMEI))), 1
 library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
 stopifnot(length(SERIES_CSV) == 1L && file.exists(SERIES_CSV))
 tape_start <- as.POSIXct(TAPE_START, tz = "UTC")
+tape_end   <- as.POSIXct(TAPE_END,   tz = "UTC")
 
 # Näherung Sonnenhöhe (Grad), ohne Paket.
 solar_elev <- function(t, lat = SITE_LAT, lon = SITE_LON) {
@@ -62,7 +65,11 @@ w <- read.csv(SERIES_CSV, stringsAsFactors = FALSE) |>
   mutate(time = as.POSIXct(time, tz = "UTC")) |>
   select(node, time, sensor, temp_C) |>
   pivot_wider(names_from = sensor, values_from = temp_C) |>
-  mutate(elev = solar_elev(time), phase = ifelse(time >= tape_start, "nach", "vor"))
+  mutate(elev  = solar_elev(time),
+         phase = factor(case_when(time <  tape_start ~ "vor",
+                                  time <  tape_end   ~ "getapt",
+                                  TRUE               ~ "ab Tape"),
+                        levels = c("vor", "getapt", "ab Tape")))
 
 # Umgebungsreferenz je Zeit = Median NTC1 aller Knoten (6/7/8 sind nur 3 von 24).
 ref <- w |> group_by(time) |> summarise(refT = median(ntc1_C, na.rm = TRUE), .groups = "drop")
@@ -84,16 +91,20 @@ Datei `` `r basename(SERIES_CSV)` `` — `r n_msg` Messungen,
 ```{r fig-anom, fig.height=4.4, fig.width=11}
 pl <- w |> filter(grp != "andere")
 ggplot(pl, aes(time, anom, group = node)) +
-  geom_vline(xintercept = tape_start, linetype = "dashed", colour = "grey40") +
-  annotate("text", x = tape_start, y = Inf, label = " Tape", hjust = 0, vjust = 1.4,
-           size = 3.2, colour = "grey40") +
+  annotate("rect", xmin = tape_start, xmax = tape_end, ymin = -Inf, ymax = Inf,
+           fill = "grey85", alpha = 0.5) +
+  geom_vline(xintercept = c(tape_start, tape_end), linetype = "dashed", colour = "grey40") +
+  annotate("text", x = tape_start, y = Inf, label = " Tape drauf", hjust = 0, vjust = 1.4,
+           size = 3, colour = "grey40") +
+  annotate("text", x = tape_end, y = Inf, label = " Tape ab", hjust = 0, vjust = 1.4,
+           size = 3, colour = "grey40") +
   geom_hline(yintercept = 0, colour = "grey80") +
   geom_line(aes(colour = grp), alpha = 0.7) +
   geom_point(aes(colour = grp), size = 1.2) +
   scale_colour_manual(values = c("getapt (6/7/8)" = "#c0392b", "blank (Nachbarn)" = "#3498db"),
                       name = NULL) +
   labs(title = "Erwärmung ggü. Umgebung (NTC1 − Median aller Knoten)",
-       subtitle = "getapte Stäbe (rot) spiken nach dem Tape bei Sonne auf bis +16 °C; blanke Nachbarn (blau) bleiben ~0",
+       subtitle = "getapte Stäbe (rot) spiken nur im getapten Fenster (grau) bei Sonne — davor und nach der Entfernung ~0",
        x = "Zeit (UTC)", y = "NTC1 − Umgebung (°C)") +
   theme_bw(base_size = 12) + theme(legend.position = "bottom")
 ```
@@ -103,16 +114,16 @@ sol_tab <- w |> filter(grp != "andere", elev > 25) |>
   group_by(node, grp, phase) |>
   summarise(anom = mean(anom, na.rm = TRUE), .groups = "drop") |>
   pivot_wider(names_from = phase, values_from = anom) |>
-  mutate(`nach−vor` = nach - vor) |> arrange(desc(`nach−vor`))
+  arrange(grp, node)
 knitr::kable(sol_tab, digits = 2,
-             caption = "Solar-Anomalie (NTC1 − Umgebung) bei hoher Sonne (>25°): vor/nach Tape je Knoten")
+             caption = "Solar-Anomalie (NTC1 − Umgebung) bei hoher Sonne (>25°) je Knoten und Phase")
 ```
 
 ```{r q1-verdict, results='asis'}
-tap_eff <- sol_tab |> filter(grp == "getapt (6/7/8)")
-nb_eff  <- sol_tab |> filter(grp == "blank (Nachbarn)")
-cat(sprintf("Getapte Stäbe (Knoten 6/7/8), Solar-Anomalie nach−vor Tape bei hoher Sonne: **%+.1f…%+.1f °C**; blanke Nachbarn %+.2f…%+.2f °C. Spitze Knoten 8: NTC1 = +14.7 °C bei 07-03 18:15 (Luft ~−1.5 °C).\n",
-            min(tap_eff$`nach−vor`), max(tap_eff$`nach−vor`), min(nb_eff$`nach−vor`), max(nb_eff$`nach−vor`)))
+tap <- sol_tab |> filter(grp == "getapt (6/7/8)")
+cat(sprintf("Getapte Stäbe (Knoten 6/7/8), Solar-Anomalie bei hoher Sonne — **vor %+.2f…%+.2f °C**, **getapt %+.1f…%+.1f °C**, **ab Tape %+.2f…%+.2f °C**. Spitze Knoten 8: NTC1 = +14.7 °C bei 07-03 18:15 (Luft ~−1.5 °C). Das Signal erscheint nur im getapten Fenster und verschwindet nach der Entfernung.\n",
+            min(tap$vor), max(tap$vor), min(tap$getapt), max(tap$getapt),
+            min(tap$`ab Tape`), max(tap$`ab Tape`)))
 ```
 
 ## 2 · Sieht NTC2 mehr vom Tape? (Rohr- vs. Luftanteil)
@@ -122,7 +133,7 @@ Modell: jeder Sensor liest `f·T_Rohr + (1−f)·T_Luft`; das Tape hebt `T_Rohr`
 sollte **positiv mit der Heizung steigen**.
 
 ```{r fig-d, fig.height=4.2, fig.width=9}
-tp <- w |> filter(node %in% TAPED_NODES)
+tp <- w |> filter(node %in% TAPED_NODES, phase == "getapt")   # nur das getapte Fenster
 fit  <- lm(d ~ heiz, tp)
 ggplot(tp, aes(heiz, d, colour = factor(node))) +
   geom_hline(yintercept = 0, colour = "grey80") +
