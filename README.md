@@ -22,8 +22,12 @@ EncoderHeads2026/
 │   └── data/                  # Raw CSV exports and decoded results
 │
 └── Greenland2026/             # Greenland field campaign — heads 26-02…26-05
-    ├── decode_field.qmd       # ← MAIN FIELD TOOL: paste hex → plots + CSV
-    └── data/                  # Field decode outputs (gitignored)
+    ├── decode_core.R          # Shared decode + calibration functions (sourced by both docs)
+    ├── decode_snowmelt.qmd    # ← SnowMelt head (IMEI 300434065508020): vertical melt profile
+    ├── decode_chain.qmd       # ← Doppelkette (IMEI 301434062008130): borehole depth profile
+    ├── tape_experiment.qmd    # Black-tape solar-absorption experiment (SnowMelt)
+    ├── derive_mean_calibration.R  # Universal mean lab-S4 fallback coefficients
+    └── data/                  # Field decode outputs (tracked; filenames keyed by message time)
 ```
 
 ## Instruments
@@ -41,16 +45,33 @@ Heads 26-02 and 26-03 are SnowMelt sensors with nodes at 4 cm vertical spacing (
 
 ## Greenland field use
 
-1. Open `Greenland2026/decode_field.qmd` in RStudio
-2. Set `HEAD_ID` and paste the hex payload(s) from the Cloudloop email into `MSG1` / `MSG2`
-3. Render (`Ctrl+Shift+K`) → temperature profile, diagnostics, CSV saved to `Greenland2026/data/`
+The decoder is **field-driven and keyed solely by IMEI** (the `.bin` filename prefix, e.g.
+`300434065508020-57.bin`). Two devices send in parallel, each with its own report document
+sharing `decode_core.R`:
 
-Expected message sizes:
+- **SnowMelt head** — IMEI `300434065508020` → `decode_snowmelt.qmd`
+- **Doppelkette** — IMEI `301434062008130` → `decode_chain.qmd`
 
-| Head type     | Bytes | Hex chars |
-|---------------|-------|-----------|
-| 26-02 / 26-03 | 225   | 450       |
-| 26-04 / 26-05 | 169   | 338       |
+Workflow:
+
+1. Save the `.bin` attachment(s) from the Cloudloop email into `testdata/`.
+2. Open the matching document (`decode_snowmelt.qmd` or `decode_chain.qmd`) in RStudio.
+   `BIN_FILE` already globs all `.bin` for that IMEI; a vector of files renders a time series.
+   (A hex payload can still be pasted into `MSG1` / `MSG2` in the SnowMelt doc instead.)
+3. Render (`Ctrl+Shift+K`) → profile, diagnostics, and CSV(s) saved to `Greenland2026/data/`.
+
+The head's `n_nodes` / `fields` / `type` / `spacing` / calibration come from `head_config[[IMEI]]`
+inside each document — never derived from the message body. Counts→°C use the per-sensor lab
+Steinhart–Hart fit where a calibration table exists, else the universal **mean lab-S4 curve**
+(`derive_mean_calibration.R`); the legacy Beta curve is kept only for diagnostics.
+
+Expected `.bin` message sizes (two firmware variants — every field is `0x7C`-separated or
+concatenated; a defective sensor can add a few bytes):
+
+| Device (IMEI)              | Nodes × fields              | sep (B) | nosep (B) |
+|----------------------------|-----------------------------|--------:|----------:|
+| SnowMelt (300434065508020) | 24 × NTC1/NTC2/TestSB        | 299     | 225       |
+| Doppelkette (301434062008130) | 20 × NTC1/NTC2/GND/Pressure | 311     | 229       |
 
 ## Dependencies
 
