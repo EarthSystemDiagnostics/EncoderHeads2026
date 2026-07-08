@@ -1,6 +1,6 @@
 ---
-title: "Field Decoder — Encoder Heads Greenland 2026"
-subtitle: "Single-message decode, diagnostics & plots"
+title: "SnowMelt Decoder — Encoder Heads Greenland 2026"
+subtitle: "Vertikales Schmelzprofil (IMEI 300434065508020) — Decode, Diagnostik & Plots"
 author: "Thom Laepple"
 date: today
 format:
@@ -17,6 +17,16 @@ execute:
   message: false
 ---
 
+Der **SnowMelt-Kopf** (IMEI **300434065508020**) steht vertikal im Schnee: 24 Knoten
+mit je NTC1 / NTC2 / NTC3 (TestSB), Abstand 4 cm. Dieses Dokument decodiert die
+`.bin`-Nachrichten und zeichnet das Schmelz-/Temperaturprofil. Die Kette
+(IMEI 301434062008130) hat ihr eigenes Dokument `decode_chain.qmd`. Die gemeinsamen
+Decode- und Kalibrierfunktionen liegen in `decode_core.R`.
+
+```{r core}
+source("decode_core.R")
+```
+
 ## Parameters
 
 Edit this block, then re-render (`Ctrl+Shift+K`).
@@ -29,41 +39,31 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 
 # Path(s) to the .bin attachment(s) from the Cloudloop email ------------------
-# One file → single decode as before. A VECTOR of files → a time series: the
-# newest message drives the single-message sections (summary, table, profile),
-# and ALL files feed the extra "Zeitlicher Verlauf" plot. All files must be the
-# same head (same IMEI). Use Sys.glob() to pick up every file for one device.
+# One file → single decode. A VECTOR of files → a time series: the newest message
+# drives the single-message sections (summary, table, profile), and ALL files
+# feed the "Zeitlicher Verlauf" plot. All files must be the same head (same IMEI).
 # -2 excluded: head was not yet erected at that time, so its profile is invalid.
 BIN_FILE <- setdiff(Sys.glob("../testdata/300434065508020-*.bin"),
                     "../testdata/300434065508020-2.bin")
 
 # OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
-# If the head sends two messages per measurement, paste both.
 MSG1 <- ""
 MSG2 <- ""
 ```
 
 ```{r head-config}
 head_config <- list(
-  # One entry per deployed head, KEYED BY IMEI. `label` is just a human name;
-  # n_nodes / fields / type / spacing_cm are authoritative for decoding & plots.
-  # `calibration` = path to a per-sensor lab calibration table
-  # (position,node,ntc,a,b,c,d); NA → decode with the universal mean lab-S4 curve.
-  "301434062008130" = list(label = "Kette (chain)", n_nodes = 20L,
-                 fields = c("ntc1", "ntc2", "gnd", "pressure"),
-                 type = "standard", spacing_cm = NA_integer_,
-                 calibration = NA_character_),
+  # SnowMelt head, KEYED BY IMEI. `label` is a human name; n_nodes / fields /
+  # type / spacing_cm are authoritative for decoding & plots. `calibration` =
+  # path to a per-sensor lab table (position,node,ntc,a,b,c,d); NA → decode with
+  # the universal mean lab-S4 curve.
   "300434065508020" = list(label = "Snowmelt NEWGRIP", n_nodes = 24L,
                  fields = c("ntc1", "ntc2", "testSB"),
                  type = "snowmelt", spacing_cm = 4L,
                  calibration = "../meta/GRIP_calibration_assignment.csv")
-  # Add further heads here, one per IMEI.
 )
 
 # --- Identify head by IMEI ---------------------------------------------------
-# For a .bin attachment the IMEI is the filename prefix; for a hex payload set
-# IMEI manually above. The IMEI is the sole selector into head_config.
-# BIN_FILE may be a vector (time series); keep only the non-empty paths.
 bin_files <- BIN_FILE[nzchar(BIN_FILE)]
 use_bin   <- length(bin_files) > 0L
 
@@ -80,36 +80,17 @@ imei <- if (IMEI != "") {
 }
 cfg  <- head_config[[imei]]
 if (is.null(cfg))
-  stop(sprintf("IMEI '%s' is not in head_config — add an entry for this device.", imei))
+  stop(sprintf("IMEI '%s' is not in head_config (this is the SnowMelt document; the chain lives in decode_chain.qmd).", imei))
 
 n_nodes <- cfg$n_nodes
 fields  <- cfg$fields
 
 # --- Per-sensor lab calibration (optional, keyed by head) --------------------
-# If the head has a `calibration` table, decode counts→°C with the per-sensor
-# 4-param Steinhart–Hart fit (NTC_s4) instead of the universal Beta curve.
-# `position` in that table is the decode order (1 = first node in the stream),
-# so it maps 1:1 onto the node index used below. Any sensor whose fit is missing
-# or numerically broken falls back to the universal mean lab-S4 curve
-# (NTC_mean; handled in calibrate_channel).
-ntc_channel <- c(ntc1 = 1L, ntc2 = 2L, testSB = 3L)   # field name → NTC number
-lab_cal <- NULL
+# NTC_s4 per sensor where a lab fit exists (and is numerically sane), else the
+# universal mean lab-S4 curve (NTC_mean). See decode_core.R::calibrate_channel.
 cal_path <- cfg$calibration
-if (!is.null(cal_path) && !is.na(cal_path)) {
-  if (file.exists(cal_path)) {
-    ca <- read.csv(cal_path)
-    lab_cal <- setNames(lapply(names(ntc_channel), function(fld) {
-      k <- ntc_channel[[fld]]
-      lapply(seq_len(n_nodes), function(p) {
-        r  <- ca[ca$position == p & ca$ntc == k, c("a", "b", "c", "d")]
-        co <- if (nrow(r) == 1L) as.numeric(r) else NULL
-        if (!is.null(co) && all(is.finite(co))) co else NULL
-      })
-    }), names(ntc_channel))
-  } else {
-    warning(sprintf("Calibration table '%s' not found — decoding with Beta.", cal_path))
-  }
-}
+lab_cal  <- load_lab_cal(cal_path, n_nodes)     # nested [field][position] coefs, or NULL
+
 n_lab_sensors <- if (is.null(lab_cal)) 0L else
   sum(sapply(names(lab_cal), function(ch)
     if (ch %in% fields) sum(!vapply(lab_cal[[ch]], is.null, logical(1))) else 0L))
@@ -117,23 +98,7 @@ n_ntc_sensors <- n_nodes * sum(fields %in% names(ntc_channel))
 cal_method <- if (is.null(lab_cal)) "Mittlere Lab-S4-Kurve (universeller Fallback)" else
   sprintf("Lab-S4 pro Sensor (%d/%d) mit Mean-S4-Fallback", n_lab_sensors, n_ntc_sensors)
 
-# Per-field value width in BYTES (binary) — gnd is int16, the rest int24/uint24.
-bin_field_bytes <- function(f) {
-  if (f %in% c("ntc1", "ntc2", "testSB", "pressure")) return(3L)
-  if (f == "gnd") return(2L)
-  stop("Unknown field: ", f)
-}
-
-# Expected binary file size for N nodes with these fields, in two firmware
-# variants: each field is either preceded by a 0x7C separator byte ("sep") or
-# the fields are concatenated directly ("nosep"). Layout in both cases:
-#   4 B timestamp + adc(3) + N × node + battery(2), separators add +1 B/field.
-bin_expected_len <- function(n_nodes, fields) {
-  w <- sapply(fields, bin_field_bytes)
-  list(sep   = 4L + (1L + 3L) + n_nodes * sum(1L + w) + (1L + 2L),
-       nosep = 4L +        3L  + n_nodes * sum(w)       +        2L)
-}
-
+# --- File-size sanity check (sep vs nosep variant) ---------------------------
 if (!use_bin) {
   n_hex_node   <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB", "pressure"), 6L, 4L))
   expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
@@ -141,8 +106,6 @@ if (!use_bin) {
   exp_len <- bin_expected_len(n_nodes, fields)
   for (bf in bin_files) {
     n_file  <- file.info(bf)$size
-    # A defective sensor can emit an out-of-range value needing >3 B, so a sep
-    # file may be a few bytes LARGER than exp_len$sep — tolerate small surplus.
     surplus <- n_file - exp_len$sep
     ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
     if (!ok)
@@ -158,187 +121,6 @@ if (!use_bin) {
 
 ---
 
-## Decode functions
-
-```{r decode-fns}
-hex_to_uint <- function(h) {
-  if (is.na(h) || nchar(h) == 0L) return(NA_real_)
-  chars  <- strsplit(toupper(h), "", fixed = TRUE)[[1]]
-  nibble <- match(chars, c(as.character(0:9), LETTERS[1:6])) - 1L
-  if (any(is.na(nibble))) return(NA_real_)
-  v <- 0; for (d in nibble) v <- v * 16 + d; v
-}
-
-hex_to_int <- function(h, bits) {
-  v <- hex_to_uint(h)
-  if (is.na(v)) return(NA_integer_)
-  s <- 2^(bits - 1L)
-  if (v >= s) v <- v - 2^bits
-  as.integer(v)
-}
-
-field_spec <- function(name) {
-  if (name == "time_unix")  return(list(n = 8L, fn = hex_to_uint))
-  if (name == "adc_temp")   return(list(n = 6L, fn = function(h) hex_to_int(h, 24L)))
-  if (name == "battery_mv") return(list(n = 4L, fn = hex_to_uint))
-  if (grepl("\\.(ntc1|ntc2|testSB)$", name))
-    return(list(n = 6L, fn = function(h) hex_to_int(h, 24L)))
-  if (grepl("\\.pressure$", name))
-    return(list(n = 6L, fn = hex_to_uint))
-  if (grepl("\\.gnd$", name))
-    return(list(n = 4L, fn = function(h) hex_to_int(h, 16L)))
-  stop("Unknown field: ", name)
-}
-
-build_schema <- function(n_nodes, fields) {
-  node_fields <- paste(
-    sapply(seq_len(n_nodes), function(i)
-      paste(paste0("n", i, ".", fields), collapse = " ")),
-    collapse = " "
-  )
-  paste("time_unix adc_temp", node_fields, "battery_mv")
-}
-
-decode_hex <- function(schema, hex) {
-  fnames <- strsplit(trimws(schema), "\\s+")[[1]]
-  pos    <- 1L
-  out    <- setNames(vector("list", length(fnames)), fnames)
-  for (i in seq_along(fnames)) {
-    sp      <- field_spec(fnames[i])
-    block   <- substr(hex, pos, pos + sp$n - 1L)
-    out[[i]] <- if (nchar(block) == sp$n) sp$fn(block) else NA
-    pos <- pos + sp$n
-  }
-  out
-}
-
-adc2temp       <- function(c) 6.101e-5 * c - 256.6
-
-# counts → NTC resistance (Ω). Shared by both calibrations below.
-NTCcounts2R <- function(c) {
-  H <- (-c * 1e6) / (c - 33554432)
-  (H * 499000) / (499000 - H)
-}
-# Per-sensor lab calibration: 4-parameter Steinhart–Hart on ln(R).
-NTC_s4 <- function(c, co) {
-  lr <- log(NTCcounts2R(c))
-  1 / (co[1] + co[2] * lr + co[3] * lr^2 + co[4] * lr^3) - 273.15
-}
-# Universal FALLBACK calibration: the MEAN lab-S4 coefficient set, i.e. the
-# average of the 62 healthy GRIP sensors (a,b,c,d averaged after dropping the
-# 10 a_suspect fits from GRIP_calibration_assignment.csv). Because 1/T is LINEAR
-# in (a,b,c,d), the mean coefficients reproduce the mean 1/T curve EXACTLY; that
-# curve represents every healthy sensor to ±0.03–0.05 °C (SD) over −40…0 °C.
-# Used where a head has no per-sensor lab table (head_config `calibration` = NA)
-# or where an individual lab fit is missing/numerically broken. Derivation:
-# Greenland2026/derive_mean_calibration.R.
-NTC_MEAN_COEF <- c(8.4229499262e-04, 2.7615486685e-04,
-                   -3.1654916185e-06, 3.0727486494e-07)
-NTC_mean <- function(c) NTC_s4(c, NTC_MEAN_COEF)
-# Legacy universal Beta curve (β = 3380, R25 = 10 kΩ). NO LONGER the decoding
-# fallback (it reads systematically too warm: −0.7 °C at 0 °C growing to −3.2 °C
-# at −40 °C vs. the mean lab curve). Kept only for the lab-vs-Beta diagnostic.
-NTC_beta <- function(c) {
-  r <- NTCcounts2R(c)
-  1 / ((1 / 3380) * log(r / 10000) + 1 / 298.15) - 273.15
-}
-# Back-compat alias so any external caller still resolves → mean lab curve.
-NTCcounts2temp <- NTC_mean
-
-pressure2hPa   <- function(p) p / 1000
-unix2utc       <- function(t) as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
-
-# Binary snowchain/snowmelt decoder — field-driven by `fields`:
-#   4-byte BE timestamp + adc(int24) + N × node + battery(uint16)
-# Each node holds one value per entry of `fields`, in order:
-#   ntc1/ntc2/testSB → 3-byte signed int24, gnd → 2-byte signed int16,
-#   pressure → 3-byte unsigned uint24.
-# Two firmware variants:
-#   sep   — every value is preceded by a 0x7C separator byte. Fields are read
-#           BETWEEN separators (variable length): a defective sensor can emit an
-#           out-of-range value that needs >3 bytes; such wrong-width fields are
-#           returned as NA so the rest stays aligned.
-#   nosep — values concatenated directly, fixed width (no recovery possible).
-# Detected from byte 5 (== 0x7C ⇒ sep), since a sentinel/defective field shifts
-# the file size. n_nodes comes from head_config (authoritative).
-read_snowchain_bin <- function(path, fields, n_nodes) {
-  raw  <- readBin(path, what = "raw", n = file.info(path)$size)
-  n    <- length(raw)
-  ints <- as.integer(raw)
-
-  has_sep <- ints[5] == 0x7CL
-
-  be_uint <- function(b) sum(as.integer(b) * 256^rev(seq_along(b) - 1L))
-  be_sint <- function(b) {
-    v <- be_uint(b); bits <- 8L * length(b)
-    if (v >= 2^(bits - 1L)) v - 2^bits else v
-  }
-
-  nf     <- length(fields)
-  widths <- c(3L, rep(sapply(fields, bin_field_bytes), n_nodes), 2L)  # adc, nodes…, battery
-  signed <- c(TRUE, rep(fields != "pressure", n_nodes), FALSE)
-  n_val  <- length(widths)
-
-  # Decode one field's bytes; wrong length (defective sensor / sentinel) → NA.
-  decode_one <- function(b, w, sgn) {
-    if (length(b) != w) return(NA_real_)
-    if (sgn) be_sint(b) else be_uint(b)
-  }
-
-  time_unix   <- be_uint(raw[1:4])
-  bat_lo <- NA_integer_; bat_hi <- NA_integer_; bat_partial <- FALSE
-
-  if (has_sep) {
-    sep_pos <- which(ints == 0x7CL); sep_pos <- sep_pos[sep_pos >= 5L]
-    if (length(sep_pos) != n_val)
-      warning(sprintf("Found %d separators, expected %d (adc + %d×%d fields + battery) — alignment may be off (0x7C in data?)",
-                      length(sep_pos), n_val, n_nodes, nf))
-    fstart <- sep_pos + 1L
-    fend   <- c(sep_pos[-1] - 1L, n)
-    vals   <- lapply(seq_len(min(length(sep_pos), n_val)), function(i)
-      decode_one(raw[fstart[i]:fend[i]], widths[i], signed[i]))
-  } else {
-    # nosep is fixed-width, BUT a defective sensor emits the overflow sentinel
-    # 0x01000000, which needs 4 bytes in a 3-byte field. Detect it by signature
-    # and consume the extra byte to re-align the rest of the stream.
-    pos  <- 5L
-    vals <- vector("list", n_val)
-    for (i in seq_len(n_val)) {
-      w <- widths[i]
-      if (w == 3L && pos + 3L <= n && all(ints[pos:(pos + 3L)] == c(1L, 0L, 0L, 0L))) {
-        vals[[i]] <- NA_real_                       # defective sensor → NA, skip 4 B
-        pos <- pos + 4L
-      } else if (i == n_val && pos + w - 1L > n && pos <= n) {
-        # battery low byte(s) lost to a sentinel shift: only the high byte(s)
-        # survived → reconstruct a 256-mV range from what is left.
-        navail <- n - pos + 1L
-        hb     <- be_uint(raw[pos:n]) * 256L^(w - navail)
-        bat_lo <- as.integer(hb)
-        bat_hi <- as.integer(hb + 256L^(w - navail) - 1L)
-        bat_partial <- TRUE
-        vals[[i]] <- hb
-        pos <- n + 1L
-      } else {
-        vals[[i]] <- decode_one(raw[pos:(pos + w - 1L)], w, signed[i])
-        pos <- pos + w
-      }
-    }
-  }
-
-  node_vals  <- vals[2:(1L + n_nodes * nf)]
-  nodes_raw  <- lapply(seq_len(n_nodes), function(i)
-    setNames(node_vals[((i - 1L) * nf + 1L):(i * nf)], fields))
-  battery_mv <- as.integer(vals[[n_val]])
-  if (!bat_partial) { bat_lo <- battery_mv; bat_hi <- battery_mv }
-
-  list(time_unix = time_unix, adc_temp = vals[[1]], nodes = nodes_raw,
-       battery_mv = battery_mv, battery_lo = bat_lo, battery_hi = bat_hi,
-       battery_partial = bat_partial, n_nodes = n_nodes, has_sep = has_sep)
-}
-```
-
----
-
 ## Decode
 
 ```{r decode}
@@ -347,48 +129,10 @@ library(tidyr)
 library(ggplot2)
 library(patchwork)
 
-# counts → °C for one NTC channel across all nodes: the per-sensor lab fit where
-# available (and numerically sane), else the universal mean lab-S4 fallback
-# (NTC_mean). `counts` is in node
-# (= decode = calibration `position`) order, so index p selects the right sensor.
-calibrate_channel <- function(counts, field) {
-  out <- NTC_mean(counts)                         # default: mean lab curve everywhere
-  if (!is.null(lab_cal) && field %in% names(ntc_channel)) {
-    for (p in seq_along(counts)) {
-      co <- lab_cal[[field]][[p]]
-      if (is.null(co) || is.na(counts[p])) next
-      t <- NTC_s4(counts[p], co)
-      if (is.finite(t) && t > -80 && t < 60) out[p] <- t   # sane lab fit → use it
-    }
-  }
-  out
-}
-
-# Turn one decoded message into a tidy per-node data.frame. Both the raw counts
-# (before calibration, *_counts) and the calibrated value are kept. The *_C value
-# uses the per-sensor lab calibration when the head has one (see cal_method).
-bin_to_nodes <- function(b) {
-  df <- data.frame(node = seq_len(n_nodes))
-  for (f in fields) {
-    vals <- sapply(b$nodes, function(nd) nd[[f]])
-    if (f %in% c("ntc1", "ntc2", "testSB")) {
-      df[[paste0(f, "_counts")]] <- vals
-      df[[paste0(f, "_C")]]      <- calibrate_channel(vals, f)
-    } else if (f == "pressure") {
-      df$pressure_counts <- vals
-      df$pressure_hPa    <- pressure2hPa(vals)
-    } else {                       # gnd → raw counts (already uncalibrated)
-      df[[f]] <- vals
-    }
-  }
-  df
-}
-
 if (use_bin) {
   # ---- Binary snowchain path ------------------------------------------------
-  # Decode every file, then order oldest → newest by timestamp. The NEWEST
-  # message is the "primary" one shown in the single-message sections below;
-  # all of them feed the "Zeitlicher Verlauf" plot.
+  # Decode every file, order oldest → newest. The NEWEST message is the "primary"
+  # one shown in the single-message sections; all feed "Zeitlicher Verlauf".
   all_bin <- lapply(bin_files, read_snowchain_bin, fields = fields, n_nodes = n_nodes)
   ord       <- order(sapply(all_bin, `[[`, "time_unix"))
   all_bin   <- all_bin[ord]
@@ -405,7 +149,7 @@ if (use_bin) {
   battery_partial <- bin$battery_partial
   bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
 
-  nodes <- bin_to_nodes(bin)
+  nodes <- bin_to_nodes(bin, fields, lab_cal)
 
 } else {
   # ---- Hex email path -------------------------------------------------------
@@ -482,14 +226,13 @@ if (!use_bin) {
     cnts    <- sapply(col_raw, function(nm) raw[[nm]])
     nodes[[paste0(f, "_counts")]] <- cnts          # raw counts (pre-calibration)
     if (f == "pressure") nodes$pressure_hPa  <- pressure2hPa(cnts)
-    else                 nodes[[paste0(f, "_C")]] <- calibrate_channel(cnts, f)
+    else                 nodes[[paste0(f, "_C")]] <- calibrate_channel(cnts, f, lab_cal)
   }
 
   if (!is.null(gnd_field)) {
     col_raw <- paste0("n", nodes$node, ".gnd")
     nodes$gnd <- sapply(col_raw, function(nm) raw[[nm]])
   }
-
 }
 
 # CSV gets the raw counts too; the on-page table stays calibrated for readability.
@@ -501,9 +244,9 @@ knitr::kable(nodes |> select(-ends_with("_counts")), digits = 2,
 
 ---
 
-## Plots
+## Profil
 
-```{r plot-snowmelt, eval=(cfg$type == "snowmelt"), fig.height=8, fig.width=6}
+```{r plot-snowmelt, fig.height=8, fig.width=6}
 # NTC rank within node: NTC1=1, NTC2=2, TestSB=3; height = (node-1)*3*s + rank*s
 s <- cfg$spacing_cm
 long <- nodes |>
@@ -537,41 +280,6 @@ ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank())
 ```
 
-```{r plot-standard, eval=(cfg$type == "standard"), fig.height=6}
-long_ntc <- nodes |>
-  select(node, ends_with("_C")) |>
-  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
-  filter(!is.na(temp_C)) |>          # drop defective sensors
-  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2"))
-
-p1 <- ggplot(long_ntc, aes(x = node, y = temp_C, colour = sensor)) +
-  geom_line(linewidth = 0.7, alpha = 0.6) +
-  geom_point(size = 2) +
-  scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c")) +
-  labs(title = sprintf("Temperatures — %s", cfg$label),
-       subtitle = sprintf("%s UTC  |  IMEI %s",
-                          format(time_utc, "%Y-%m-%d %H:%M"), imei),
-       x = "Node", y = "Temperature (°C)", colour = NULL) +
-  theme_bw(base_size = 13) +
-  theme(legend.position = "bottom")
-
-p2 <- ggplot(nodes, aes(x = node, y = gnd)) +
-  geom_col(fill = "#7f8c8d", width = 0.6) +
-  labs(x = "Node", y = "GND (counts)") +
-  theme_bw(base_size = 13)
-
-if ("pressure_hPa" %in% names(nodes)) {
-  p3 <- ggplot(nodes, aes(x = node, y = pressure_hPa)) +
-    geom_line(colour = "#8e44ad", linewidth = 0.7) +
-    geom_point(colour = "#8e44ad", size = 2) +
-    labs(x = "Node", y = "Druck (hPa)") +
-    theme_bw(base_size = 13)
-  p1 / p2 / p3 + plot_layout(heights = c(3, 1, 1))
-} else {
-  p1 / p2 + plot_layout(heights = c(3, 1))
-}
-```
-
 ---
 
 ## Zeitlicher Verlauf
@@ -585,10 +293,9 @@ multi <- use_bin && exists("all_bin") && n_msg > 1L
 
 ```{r ts-build, eval=multi}
 # Long table across all messages: one row per (time, node, sensor), carrying
-# both the calibrated temperature and the raw counts (pre-calibration). The
-# `sensor` key keeps the *_C name so the plots/diagnostics below are unchanged.
+# both the calibrated temperature and the raw counts (pre-calibration).
 series_wide <- bind_rows(lapply(all_bin, function(b)
-  bin_to_nodes(b) |> mutate(time = unix2utc(b$time_unix))))
+  bin_to_nodes(b, fields, lab_cal) |> mutate(time = unix2utc(b$time_unix))))
 
 temp_l <- series_wide |> select(node, time, ends_with("_C")) |>
   pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C")
@@ -600,7 +307,7 @@ series_long <- left_join(temp_l, cnt_l, by = c("node", "time", "sensor")) |>
   filter(!is.na(temp_C))
 ```
 
-```{r ts-snowmelt, eval=(multi && cfg$type == "snowmelt"), fig.height=11, fig.width=15}
+```{r ts-snowmelt, eval=multi, fig.height=11, fig.width=15}
 # Two stacked panels over the same time series:
 #  (top)    Hovmöller heatmap — Höhe (same axis as the profile plot) × time,
 #           fill = temperature. Each measurement is one evenly-spaced column.
@@ -619,9 +326,6 @@ ts  <- ts |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels)
 max_h <- n_nodes * 3L * s
 
 # Companion strip (left of the heatmap, same y-axis): sensor type at each height.
-# Lets you read whether a temperature stripe sits on the NTC2 rows (channel gain)
-# or the NTC3 rows (calibration outliers). Full node×rank grid so a defective
-# sensor still gets a coloured row.
 sensor_cols <- c(NTC1 = "#2980b9", NTC2 = "#e74c3c", "NTC3 (TestSB)" = "#27ae60")
 strip_df <- expand.grid(node = seq_len(n_nodes), ntc_rank = 1:3) |>
   mutate(sensor   = factor(c("NTC1", "NTC2", "NTC3 (TestSB)")[ntc_rank],
@@ -639,15 +343,7 @@ p_sensor <- ggplot(strip_df, aes(x = 1, y = hoehe_cm, fill = sensor)) +
   theme(panel.grid = element_blank(), legend.position = "left",
         legend.key.size = unit(0.8, "lines"))
 
-# Two companion curves on the same height axis:
-#  (SD)   robust SD over time per sensor height — the NTC2 gain shows as a
-#         sawtooth peak on every middle (red) sensor of a node triplet (within a
-#         triplet the height trend is ~flat, so NTC2's larger swing pops out).
-#  (mean) time-MEDIAN residual from the smooth vertical profile (loess per
-#         message) = the fixed per-sensor offset; NTC3 calibration outliers show
-#         as persistently cold (negative) points, while the NTC2 gain (∝ T−T0)
-#         averages out. Both use robust stats (MAD/median) → the handling-
-#         contaminated last message does not dominate.
+# Two companion curves on the same height axis (variance & mean−trend residual).
 sensor_by_h <- strip_df |> select(hoehe_cm, sensor)
 
 var_df <- ts |> group_by(hoehe_cm) |>
@@ -655,16 +351,8 @@ var_df <- ts |> group_by(hoehe_cm) |>
   left_join(sensor_by_h, by = "hoehe_cm") |> arrange(hoehe_cm)
 
 # Mittel−Trend = per-height time-median minus a single LINEAR height trend, once
-# with the lab calibration and once with the fixed Beta curve (from counts). The
-# atmosphere carries no persistent structure beyond the ~linear trend (checked:
-# higher-order trends don't shrink the residual, which is white-noise jagged), so
-# the jagged residual is a FIXED per-sensor artifact. lab ≈ Beta ⇒ it is mounting/
-# geometry (common to both calibrations), NOT calibration error.
+# with the lab calibration and once with the fixed Beta curve (from counts).
 ts <- ts |> mutate(temp_beta = NTC_beta(counts))
-# Per message: linear height trend → residual per sensor. Offset = mean over
-# time; SE = sd/√N is the expected sampling scatter of that mean. Points inside
-# ±2·SE are consistent with noise (only ~16/71 clear it at N≈20 → curve is still
-# largely under-averaged; longer/colder data needed).
 lin_offset <- function(col) {
   d <- ts |> select(time, hoehe_cm, y = all_of(col)) |> filter(is.finite(y)) |>
     group_by(time) |> mutate(r = 1000 * (y - fitted(lm(y ~ hoehe_cm)))) |> ungroup()
@@ -690,9 +378,7 @@ p_var <- ggplot(var_df, aes(sd_t, hoehe_cm)) +
   theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
         panel.grid.minor = element_blank())
 
-# NTC3 calibration outliers from the coefficient/ReTest check (nodes 71/77/80/
-# 50/51/26), at their NTC3-row heights — overlaid as black rings so we can see
-# whether they line up with the field offset curve.
+# NTC3 calibration outliers (nodes 71/77/80/50/51/26) at their NTC3-row heights.
 cal_outlier_h <- c(144, 180, 192, 216, 228, 288)
 
 mk_mean <- function(d, ttl, sub) {
@@ -742,46 +428,23 @@ p_line <- ggplot(ts, aes(x = time, y = temp_C,
   plot_layout(heights = c(3, 2))
 ```
 
-```{r ts-standard, eval=(multi && cfg$type == "standard"), fig.height=6, fig.width=9}
-ts <- series_long |>
-  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2"))
-
-ggplot(ts, aes(x = time, y = temp_C, colour = node, group = interaction(node, sensor))) +
-  geom_line(alpha = 0.5, linewidth = 0.4) +
-  geom_point(size = 1) +
-  scale_colour_viridis_c(name = "Node") +
-  labs(title    = sprintf("Zeitlicher Verlauf — %s", cfg$label),
-       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, imei),
-       x = "Zeit (UTC)", y = "Temperatur (°C)") +
-  theme_bw(base_size = 13)
-```
-
 ---
 
 ## NTC2-Diagnose
 
 NTC1 / NTC2 / NTC3 sind je Node quasi am selben Ort, sollten also denselben
 Tagesgang sehen. Hier wird geprüft, ob **NTC2 systematisch einen stärkeren
-Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten). Zwei
-Maße, jeweils paarweise je Node ausgewertet:
+Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten).
 
-* **Amplitude** = max − min der Temperatur über die geladenen Messungen.
-* **Sensitivität** = Regressions-Slope des Sensors gegen das gemeinsame Signal
-  (Mittel aller Sensoren pro Zeit); > 1 ⇒ reagiert stärker als der Durchschnitt.
-
-Läuft nur für Snowmelt-Köpfe mit NTC1/NTC2/NTC3 und mehreren Messungen.
-
-```{r ntc2-diag, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields))}
+```{r ntc2-diag, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
 safe_amp <- function(x) { x <- x[is.finite(x)]; if (length(x) < 2L) NA_real_ else diff(range(x)) }
 
 diag_long <- series_long |>
   mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3"))
 
-# Common diurnal forcing = mean over all sensors at each time.
 common_df <- diag_long |> group_by(time) |>
   summarise(common = mean(temp_C, na.rm = TRUE), .groups = "drop")
 
-# Per node × sensor: amplitude and sensitivity (slope vs common forcing).
 per_node <- diag_long |>
   left_join(common_df, by = "time") |>
   group_by(node, sensor) |>
@@ -792,7 +455,6 @@ per_node <- diag_long |>
     .groups = "drop"
   )
 
-# Wide per node to compare NTC2 against the mean of NTC1 & NTC3 (paired).
 amp_w <- per_node |> select(node, sensor, amp) |>
   pivot_wider(names_from = sensor, values_from = amp) |>
   mutate(ref = (NTC1 + NTC3) / 2, d = NTC2 - ref)
@@ -812,12 +474,12 @@ others_amp <- max(summary_tab$`Amplitude ⌀ (°C)`[summary_tab$sensor != "NTC2"
 ntc2_stronger <- isTRUE(ntc2_amp > others_amp) && isTRUE(!is.na(pval) && pval < 0.05)
 ```
 
-```{r ntc2-table, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields))}
+```{r ntc2-table, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
 knitr::kable(summary_tab, digits = c(0, 2, 3, 0),
              caption = sprintf("Pro-Sensor-Mittel über %d Messungen", n_msg))
 ```
 
-```{r ntc2-verdict, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
+```{r ntc2-verdict, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
 col <- if (ntc2_stronger) "#e67e22" else "#2ecc71"
 tag <- if (ntc2_stronger) "AUFFÄLLIG" else "unauffällig"
 cat(sprintf(
@@ -834,7 +496,7 @@ cat(sprintf("\n%s\n",
     "→ Kein systematischer Mehr-Tagesgang von NTC2 in diesen Daten."))
 ```
 
-```{r ntc2-plot, eval=(multi && cfg$type == "snowmelt" && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.5, fig.width=9}
+```{r ntc2-plot, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.5, fig.width=9}
 ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
   geom_line(alpha = 0.6, linewidth = 0.5) +
   geom_point(size = 1.8) +
@@ -854,7 +516,7 @@ ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
 ## Save result
 
 ```{r save}
-# Newest message → per-node table (as before).
+# Newest message → per-node table.
 slug    <- if (use_bin) tools::file_path_sans_ext(basename(primary_file)) else paste0("imei", imei)
 outfile <- sprintf("data/decoded_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
 write.csv(nodes, outfile, row.names = FALSE)

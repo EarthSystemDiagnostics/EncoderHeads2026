@@ -1,0 +1,319 @@
+---
+title: "Chain Decoder — Encoder Heads Greenland 2026"
+subtitle: "Doppelkette in Bohrlöchern (IMEI 301434062008130) — Decode, Tiefenprofil & Diagnostik"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Die **Doppelkette** (IMEI **301434062008130**) besteht aus zwei Ketten, die in
+Bohrlöcher in die Tiefe gehen. Jeder Knoten trägt **NTC1 und NTC2 als Replikate am
+selben Ort** (mitteln / beide zeigen) sowie **GND, Druck und ADC als Diagnose**.
+Der SnowMelt-Kopf (IMEI 300434065508020) hat sein eigenes Dokument
+`decode_snowmelt.qmd`; die gemeinsamen Decode-/Kalibrierfunktionen liegen in
+`decode_core.R`.
+
+```{r core}
+source("decode_core.R")
+```
+
+## Parameters
+
+```{r params}
+IMEI <- ""   # "" = auto-detect from BIN_FILE (filename prefix)
+
+# .bin attachments for the chain. -138 (47 B) is a truncated/partial message and
+# is excluded. A vector → time series (newest drives the single-message sections).
+BIN_FILE <- setdiff(Sys.glob("../testdata/301434062008130-*.bin"),
+                    "../testdata/301434062008130-138.bin")
+```
+
+```{r head-config}
+head_config <- list(
+  # Chain head, KEYED BY IMEI. 20 nodes = two chains × 10 sensors. NTC1/NTC2 are
+  # co-located replicates; gnd/pressure are diagnostic. calibration = NA → decode
+  # with the universal mean lab-S4 curve (per-node lab cal from the SM1/SM2
+  # registry can be wired in later via head_config$calibration).
+  "301434062008130" = list(label = "Doppelkette", n_nodes = 20L,
+                 fields = c("ntc1", "ntc2", "gnd", "pressure"),
+                 type = "chain", spacing_cm = NA_integer_,
+                 calibration = NA_character_)
+)
+
+bin_files <- BIN_FILE[nzchar(BIN_FILE)]
+use_bin   <- length(bin_files) > 0L
+stopifnot(use_bin)
+
+imei <- if (IMEI != "") IMEI else {
+  imeis <- unique(sub("-.*$", "", basename(bin_files)))
+  if (length(imeis) > 1L)
+    stop("BIN_FILE mixes IMEIs (", paste(imeis, collapse = ", "), ") — one head only.")
+  imeis
+}
+cfg <- head_config[[imei]]
+if (is.null(cfg))
+  stop(sprintf("IMEI '%s' is not in head_config (this is the chain document; the SnowMelt head lives in decode_snowmelt.qmd).", imei))
+
+n_nodes <- cfg$n_nodes
+fields  <- cfg$fields
+
+cal_path <- cfg$calibration
+lab_cal  <- load_lab_cal(cal_path, n_nodes)     # NULL → mean lab curve everywhere
+cal_method <- if (is.null(lab_cal)) "Mittlere Lab-S4-Kurve (universeller Fallback)" else
+  "Lab-S4 pro Sensor (Registry)"
+
+# --- File-size sanity check --------------------------------------------------
+exp_len <- bin_expected_len(n_nodes, fields)
+for (bf in bin_files) {
+  n_file  <- file.info(bf)$size
+  surplus <- n_file - exp_len$sep
+  ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
+  if (!ok)
+    warning(sprintf("%s is %d B but IMEI %s implies %d B (sep) / %d B (nosep) for %d nodes — check head_config",
+                    basename(bf), n_file, imei, exp_len$sep, exp_len$nosep, n_nodes))
+}
+```
+
+## Positions- / Tiefen-Zuordnung
+
+Die Sender-Reihenfolge (Decode-Position 1–20) wird auf **Kette, Sensor-Node-Nr und
+Tiefe** abgebildet. Grundlage sind die beiden Tiefentabellen (Stand 2026-07-08;
+`meta/GRIP_Position_NodeNr.xlsx` ist überholt). **Angenommene Reihenfolge:** die 20
+Positionen sind die beiden Tabellen von oben nach unten hintereinander gehängt
+(Position 1–10 = Kette 1, 11–20 = Kette 2) — die Daten bestätigen das (Kette 2 =
+sauberes, monoton kälter werdendes Bohrloch-Profil). Zum Umstellen einfach diesen
+Block editieren.
+
+```{r depth-map}
+# position = Decode-Reihenfolge im Stream (1 = erster Node). node_nr = physische
+# Sensor-Node-Nr aus der Tiefentabelle. depth_m = Tiefe unter Schneeoberfläche.
+depth_map <- rbind(
+  # ---- Kette 1 (Positionen 1–10) ----
+  data.frame(position = 1:10, chain = "Kette 1",
+             depth_m = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30),
+             node_nr = c(34, 1, 3, 5, 6, 7, 8, 15, 16, 17)),
+  # ---- Kette 2 (Positionen 11–20) — "CGB 10 Nodes in SNOW!" ----
+  data.frame(position = 11:20, chain = "Kette 2",
+             depth_m = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30),
+             node_nr = c(33, 4, 10, 11, 12, 13, 20, 21, 22, 24))
+)
+knitr::kable(depth_map, caption = "Decode-Position → Kette / Node-Nr / Tiefe (editierbar)")
+```
+
+---
+
+## Decode
+
+```{r decode}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+
+all_bin   <- lapply(bin_files, read_snowchain_bin, fields = fields, n_nodes = n_nodes)
+ord       <- order(sapply(all_bin, `[[`, "time_unix"))
+all_bin   <- all_bin[ord]
+bin_files <- bin_files[ord]
+n_msg     <- length(all_bin)
+
+bin          <- all_bin[[n_msg]]
+primary_file <- bin_files[n_msg]
+time_utc   <- unix2utc(bin$time_unix)
+adc_temp_C <- adc2temp(bin$adc_temp)
+battery_mv <- bin$battery_mv
+bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
+
+# Per-node table + replicate mean (NTC1/NTC2 co-located). ntc_C = mean of the two
+# available NTC channels; where one is defective (NA) the other carries through.
+enrich <- function(b) {
+  df <- bin_to_nodes(b, fields, lab_cal) |>
+    rename(position = node) |>
+    left_join(depth_map, by = "position") |>
+    mutate(ntc_C = rowMeans(cbind(ntc1_C, ntc2_C), na.rm = TRUE),
+           ntc_C = ifelse(is.nan(ntc_C), NA_real_, ntc_C))
+  df
+}
+nodes <- enrich(bin)
+```
+
+::: {.callout-note}
+## Message summary — `r cfg$label` (IMEI `r imei`)
+
+| | |
+|---|---|
+| **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
+| **Battery** | `r paste0(battery_mv, " mV")` |
+| **ADC temp** | `r round(adc_temp_C, 2)` °C |
+| **Kalibrierung** | `r cal_method` |
+| **Source** | `r paste0("binary: ", basename(primary_file), " (", bin_fmt, ")")` |
+| **Messages loaded** | `r sprintf("%d file(s) — newest shown below; series in Zeitlicher Verlauf", n_msg)` |
+:::
+
+```{r diag-checks, results='asis'}
+check <- function(val, lo, hi, label, unit) {
+  ok  <- !is.na(val) && val >= lo && val <= hi
+  col <- if (ok) "#2ecc71" else "#e74c3c"; tag <- if (ok) "OK" else "CHECK"
+  cat(sprintf('<span style="color:%s">%s</span>  **%s**: %.1f %s  *(expected %g – %g)*\n\n',
+              col, tag, label, val, unit, lo, hi))
+}
+check(battery_mv,  5500, 7200, "Battery",  "mV")
+check(adc_temp_C, -60,   40,   "ADC temp", "°C")
+```
+
+---
+
+## Node-Tabelle
+
+```{r node-table}
+knitr::kable(
+  nodes |>
+    select(position, chain, node_nr, depth_m, ntc1_C, ntc2_C, ntc_C, gnd, pressure_hPa) |>
+    arrange(position),
+  digits = 2,
+  col.names = c("Pos", "Kette", "Node-Nr", "Tiefe (m)", "NTC1 (°C)", "NTC2 (°C)",
+                "Mittel (°C)", "GND", "Druck (hPa)"),
+  caption = sprintf("Alle Knoten — %s | %s UTC",
+                    basename(primary_file), format(time_utc, "%Y-%m-%d %H:%M")))
+```
+
+---
+
+## Temperatur je Position
+
+NTC1 und NTC2 sind Replikate — sie sollten praktisch aufeinander liegen; sichtbare
+Abweichung ⇒ ein defekter Kanal.
+
+```{r plot-position, fig.height=5, fig.width=10}
+long_ntc <- nodes |>
+  select(position, chain, ntc1_C, ntc2_C) |>
+  pivot_longer(c(ntc1_C, ntc2_C), names_to = "sensor", values_to = "temp_C") |>
+  filter(!is.na(temp_C)) |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2"))
+
+ggplot(long_ntc, aes(position, temp_C)) +
+  geom_line(data = nodes, aes(position, ntc_C), colour = "grey65", linewidth = 0.4) +
+  geom_point(aes(colour = sensor, shape = chain), size = 2.6) +
+  scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c")) +
+  labs(title = sprintf("Temperatur je Decode-Position — %s", cfg$label),
+       subtitle = sprintf("%s UTC | IMEI %s | Linie = Replikat-Mittel",
+                          format(time_utc, "%Y-%m-%d %H:%M"), imei),
+       x = "Decode-Position", y = "Temperatur (°C)", colour = NULL, shape = NULL) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+## Tiefenprofil
+
+Replikat-Mittel gegen die Tiefe, je Kette. Oberfläche (0 m) oben, tief unten.
+
+```{r plot-depth, fig.height=7, fig.width=8}
+prof <- nodes |> filter(!is.na(depth_m), !is.na(ntc_C))
+ggplot(prof, aes(ntc_C, depth_m, colour = chain)) +
+  geom_path(aes(group = chain), linewidth = 0.5, alpha = 0.7) +
+  geom_point(size = 3) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_x_continuous(name = "Temperatur (°C, Mittel NTC1/NTC2)") +
+  scale_colour_manual(values = c("Kette 1" = "#e67e22", "Kette 2" = "#2980b9")) +
+  labs(title = sprintf("Tiefenprofil — %s", cfg$label),
+       subtitle = sprintf("%s UTC | IMEI %s", format(time_utc, "%Y-%m-%d %H:%M"), imei),
+       colour = NULL) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+---
+
+## Diagnostik: Replikate, GND, Druck
+
+```{r plot-diag, fig.height=9, fig.width=9}
+# (1) Replikat-Differenz NTC1−NTC2 je Position (sollte ~0 sein).
+d_rep <- nodes |> mutate(dNTC = ntc1_C - ntc2_C)
+p_rep <- ggplot(d_rep, aes(position, dNTC, fill = chain)) +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  geom_col(width = 0.6) +
+  scale_fill_manual(values = c("Kette 1" = "#e67e22", "Kette 2" = "#2980b9"), guide = "none") +
+  labs(title = "Replikat-Differenz NTC1 − NTC2", x = "Position", y = "ΔT (°C)") +
+  theme_bw(base_size = 12)
+
+# (2) GND (Rohcounts) je Position.
+p_gnd <- ggplot(nodes, aes(position, gnd, fill = chain)) +
+  geom_col(width = 0.6) +
+  scale_fill_manual(values = c("Kette 1" = "#e67e22", "Kette 2" = "#2980b9"), guide = "none") +
+  labs(title = "GND (Rohcounts)", x = "Position", y = "GND") +
+  theme_bw(base_size = 12)
+
+# (3) Druck je Position.
+p_pr <- ggplot(nodes, aes(position, pressure_hPa, colour = chain)) +
+  geom_line(aes(group = chain), linewidth = 0.5) + geom_point(size = 2) +
+  scale_colour_manual(values = c("Kette 1" = "#e67e22", "Kette 2" = "#2980b9"), guide = "none") +
+  labs(title = "Druck", x = "Position", y = "Druck (hPa)") +
+  theme_bw(base_size = 12)
+
+p_rep / p_gnd / p_pr
+```
+
+---
+
+## Zeitlicher Verlauf
+
+```{r ts-flag}
+multi <- n_msg > 1L
+```
+
+```{r ts-build, eval=multi}
+series <- bind_rows(lapply(all_bin, function(b)
+  enrich(b) |> mutate(time = unix2utc(b$time_unix)))) |>
+  filter(!is.na(depth_m))
+```
+
+```{r ts-depth, eval=multi, fig.height=6, fig.width=11}
+# Temperatur vs Zeit, eine Linie je Tiefe, Farbe = Tiefe, Facet je Kette.
+ggplot(series, aes(time, ntc_C, group = depth_m, colour = depth_m)) +
+  geom_line(alpha = 0.7, linewidth = 0.5) + geom_point(size = 1.2) +
+  scale_colour_viridis_c(name = "Tiefe (m)", direction = -1) +
+  facet_wrap(~ chain) +
+  labs(title = sprintf("Zeitlicher Verlauf — %s", cfg$label),
+       subtitle = sprintf("%d Messungen | IMEI %s | Mittel NTC1/NTC2", n_msg, imei),
+       x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 13)
+```
+
+```{r ts-hov, eval=multi, fig.height=6, fig.width=11}
+# Hovmöller: Tiefe × Zeit, Farbe = Temperatur, je Kette.
+tlevels <- format(sort(unique(series$time)), "%m-%d %H:%M")
+hov <- series |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels))
+ggplot(hov, aes(tlab, depth_m, fill = ntc_C)) +
+  geom_tile() +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_fill_distiller(palette = "RdYlBu", direction = -1, name = "T (°C)") +
+  facet_wrap(~ chain) +
+  labs(title = sprintf("Tiefe–Zeit Hovmöller — %s", cfg$label), x = NULL) +
+  theme_bw(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid = element_blank())
+```
+
+---
+
+## Save result
+
+```{r save}
+slug    <- tools::file_path_sans_ext(basename(primary_file))
+outfile <- sprintf("data/chain_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
+write.csv(nodes, outfile, row.names = FALSE)
+cat("Saved:", outfile, "\n")
+
+if (multi) {
+  ts_file <- sprintf("data/chain_series_imei%s_%s.csv", imei, format(time_utc, "%Y%m%d_%H%M%S"))
+  write.csv(series, ts_file, row.names = FALSE)
+  cat("Saved series:", ts_file, "\n")
+}
+```

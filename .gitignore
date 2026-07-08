@@ -6,7 +6,8 @@
 
 # Generated files
 *.html
-!Greenland2026/decode_field.html
+!Greenland2026/decode_snowmelt.html
+!Greenland2026/decode_chain.html
 !Greenland2026/tape_experiment.html
 *_files/
 Rplots.pdf
