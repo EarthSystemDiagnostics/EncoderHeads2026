@@ -98,6 +98,8 @@ read_snowchain_bin <- function(path, fields, n_nodes) {
   nf     <- length(fields)
   widths <- c(3L, rep(sapply(fields, bin_field_bytes), n_nodes), 2L)  # adc, nodes…, battery
   signed <- c(TRUE, rep(fields != "pressure", n_nodes), FALSE)
+  ftype  <- c("adc", rep(fields, n_nodes), "battery")   # field kind per value slot
+  is_ntc <- ftype %in% c("ntc1", "ntc2", "testSB")       # NTC channels (overflow-eligible)
   n_val  <- length(widths)
 
   # Decode one field's bytes; wrong length (defective sensor / sentinel) → NA.
@@ -119,14 +121,21 @@ read_snowchain_bin <- function(path, fields, n_nodes) {
     vals   <- lapply(seq_len(min(length(sep_pos), n_val)), function(i)
       decode_one(raw[fstart[i]:fend[i]], widths[i], signed[i]))
   } else {
-    # nosep is fixed-width, BUT a defective sensor emits the overflow sentinel
-    # 0x01000000, which needs 4 bytes in a 3-byte field. Detect it by signature
-    # and consume the extra byte to re-align the rest of the stream.
+    # nosep is fixed-width, BUT a defective sensor emits a 4-byte overflow in a
+    # 3-byte NTC field, which shifts the rest of the stream. Two signatures seen:
+    #   • 0x01000000   — high byte 0x01 (e.g. msg -142 sep-variant sibling)
+    #   • 0x008x xxxx  — high byte 0x00, i.e. counts < 2^16 → non-physical (>+90 °C);
+    #                    a healthy NTC reading never has a 0x00 high byte (msg -143,
+    #                    where node 16's ntc1 AND ntc2 both overflow → +2 B).
+    # Detect either, set NA, and consume 4 B to re-align. Restricted to NTC fields
+    # so a genuine small pressure/gnd value is never mistaken for a sentinel.
     pos  <- 5L
     vals <- vector("list", n_val)
     for (i in seq_len(n_val)) {
       w <- widths[i]
-      if (w == 3L && pos + 3L <= n && all(ints[pos:(pos + 3L)] == c(1L, 0L, 0L, 0L))) {
+      ntc_overflow <- w == 3L && is_ntc[i] && pos + 3L <= n &&
+        (all(ints[pos:(pos + 3L)] == c(1L, 0L, 0L, 0L)) || ints[pos] == 0L)
+      if (ntc_overflow) {
         vals[[i]] <- NA_real_                       # defective sensor → NA, skip 4 B
         pos <- pos + 4L
       } else if (i == n_val && pos + w - 1L > n && pos <= n) {

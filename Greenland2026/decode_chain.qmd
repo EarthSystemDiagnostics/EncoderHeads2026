@@ -137,10 +137,14 @@ bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
 # Per-node table + replicate mean (NTC1/NTC2 co-located). ntc_C = mean of the two
 # available NTC channels; where one is defective (NA) the other carries through.
 enrich <- function(b) {
+  # Unphysikalische NTC-Werte (defekter Sensor, z. B. node_nr 13: −65 °C in -142)
+  # als NA verwerfen — gleiche Schwelle wie im Druck-Code (−55…+45 °C).
+  phys <- function(x) ifelse(!is.na(x) & (x < -55 | x > 45), NA_real_, x)
   df <- bin_to_nodes(b, fields, lab_cal) |>
     rename(position = node) |>
     left_join(depth_map, by = "position") |>
-    mutate(ntc_C = rowMeans(cbind(ntc1_C, ntc2_C), na.rm = TRUE),
+    mutate(ntc1_C = phys(ntc1_C), ntc2_C = phys(ntc2_C),
+           ntc_C = rowMeans(cbind(ntc1_C, ntc2_C), na.rm = TRUE),
            ntc_C = ifelse(is.nan(ntc_C), NA_real_, ntc_C))
   df
 }
@@ -214,20 +218,44 @@ ggplot(long_ntc, aes(position, temp_C)) +
 
 ## Tiefenprofil
 
-Replikat-Mittel gegen die Tiefe, je Kette. Oberfläche (0 m) oben, tief unten.
+Beide NTC-Kanäle (NTC1 / NTC2) gegen die Tiefe, je Kette. Oberfläche (0 m) oben,
+tief unten. **Links** der volle Bereich, **rechts** derselbe Plot ohne den obersten
+Sensor (1 m) im Zoom — der oberste Node ist deutlich wärmer und streckt sonst die
+Temperaturachse, sodass die Struktur der tiefen Sensoren nicht mehr auflösbar ist.
 
-```{r plot-depth, fig.height=7, fig.width=8}
-prof <- nodes |> filter(!is.na(depth_m), !is.na(ntc_C))
-ggplot(prof, aes(ntc_C, depth_m, colour = chain)) +
-  geom_path(aes(group = chain), linewidth = 0.5, alpha = 0.7) +
-  geom_point(size = 3) +
-  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
-  scale_x_continuous(name = "Temperatur (°C, Mittel NTC1/NTC2)") +
-  scale_colour_manual(values = c("Kette 1" = "#e67e22", "Kette 2" = "#2980b9")) +
-  labs(title = sprintf("Tiefenprofil — %s", cfg$label),
-       subtitle = sprintf("%s UTC | IMEI %s", format(time_utc, "%Y-%m-%d %H:%M"), imei),
-       colour = NULL) +
-  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```{r plot-depth, fig.height=7, fig.width=13}
+prof_long <- nodes |>
+  select(position, chain, depth_m, ntc1_C, ntc2_C) |>
+  pivot_longer(c(ntc1_C, ntc2_C), names_to = "sensor", values_to = "temp_C") |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2")) |>
+  filter(!is.na(depth_m), !is.na(temp_C))
+
+depth_profile <- function(df, ttl, xlim = NULL) {
+  g <- ggplot(df, aes(temp_C, depth_m, colour = sensor)) +
+    geom_path(aes(group = interaction(chain, sensor)), linewidth = 0.5, alpha = 0.7) +
+    geom_point(size = 2.4) +
+    scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+    scale_x_continuous(name = "Temperatur (°C)") +
+    scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c")) +
+    facet_wrap(~ chain) +
+    labs(title = ttl, colour = NULL) +
+    theme_bw(base_size = 12) + theme(legend.position = "bottom")
+  if (!is.null(xlim)) g <- g + coord_cartesian(xlim = xlim)
+  g
+}
+
+# Zoom-Bereich: alle Sensoren AUSSER dem flachsten (obersten) Node.
+deep <- prof_long |> filter(depth_m > min(depth_m))
+xr   <- range(deep$temp_C, na.rm = TRUE); xr <- xr + c(-1, 1) * 0.05 * diff(xr)
+
+p_full <- depth_profile(prof_long, "Voller Bereich")
+p_zoom <- depth_profile(prof_long, "Zoom (ohne obersten Sensor, 1 m)", xlim = xr)
+
+(p_full | p_zoom) +
+  plot_annotation(title = sprintf("Tiefenprofil — %s", cfg$label),
+                  subtitle = sprintf("%s UTC | IMEI %s | beide NTC-Kanäle",
+                                     format(time_utc, "%Y-%m-%d %H:%M"), imei)) +
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
 ```
 
 ## Druckprofil (Tiefe) — gemessen vs. barometrisch erwartet
@@ -322,25 +350,33 @@ p_rep / p_gnd / p_pr
 
 ## Zeitlicher Verlauf
 
-```{r ts-flag}
-multi <- n_msg > 1L
-```
+Erst **ab Nachricht -142** (Einbau in die Bohrlöcher); die früheren Nachrichten
+(-139…-141, Ketten noch an der Oberfläche) sind ausgeschlossen. Gezeigt wird der
+zeitliche Verlauf **gegenüber der Tiefe**: je Nachricht ein Tiefenprofil, Farbe = Zeit.
 
-```{r ts-build, eval=multi}
-series <- bind_rows(lapply(all_bin, function(b)
-  enrich(b) |> mutate(time = unix2utc(b$time_unix)))) |>
-  filter(!is.na(depth_m))
+```{r ts-build}
+TS_FROM_MSG <- 142L   # Zeitreihe erst ab dieser .bin-Nachrichtennummer
+msg_num <- as.integer(sub(".*-(\\d+)\\.bin$", "\\1", basename(bin_files)))
+series <- bind_rows(Map(function(b, num)
+  enrich(b) |> mutate(time = unix2utc(b$time_unix), msg = num),
+  all_bin, msg_num)) |>
+  filter(!is.na(depth_m), msg >= TS_FROM_MSG)
+series$tlab <- factor(format(series$time, "%m-%d %H:%M"),
+                      levels = format(sort(unique(series$time)), "%m-%d %H:%M"))
+n_ts  <- length(unique(series$time))
+multi <- n_ts > 1L
 ```
 
 ```{r ts-depth, eval=multi, fig.height=6, fig.width=11}
-# Temperatur vs Zeit, eine Linie je Tiefe, Farbe = Tiefe, Facet je Kette.
-ggplot(series, aes(time, ntc_C, group = depth_m, colour = depth_m)) +
-  geom_line(alpha = 0.7, linewidth = 0.5) + geom_point(size = 1.2) +
-  scale_colour_viridis_c(name = "Tiefe (m)", direction = -1) +
+# Tiefenprofil je Nachricht (Farbe = Zeit) — Entwicklung des Profils über die Zeit.
+ggplot(series, aes(ntc_C, depth_m, group = time, colour = tlab)) +
+  geom_path(linewidth = 0.5, alpha = 0.8) + geom_point(size = 1.6) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_x_continuous(name = "Temperatur (°C, Mittel NTC1/NTC2)") +
+  scale_colour_viridis_d(name = "Zeit (UTC)", option = "C", end = 0.9) +
   facet_wrap(~ chain) +
-  labs(title = sprintf("Zeitlicher Verlauf — %s", cfg$label),
-       subtitle = sprintf("%d Messungen | IMEI %s | Mittel NTC1/NTC2", n_msg, imei),
-       x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  labs(title = sprintf("Zeitlicher Verlauf (Tiefenprofile) — %s", cfg$label),
+       subtitle = sprintf("%d Messungen ab -%d | IMEI %s", n_ts, TS_FROM_MSG, imei)) +
   theme_bw(base_size = 13)
 ```
 
