@@ -513,6 +513,105 @@ ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
 
 ---
 
+## Tape- & Alufolie-Experiment
+
+An denselben oberen Knoten wurden nacheinander zwei **optische** Manipulationen
+angebracht: zuerst **schwarzes Tape** (absorbiert Sonne → heizt die Stäbe), später
+**Alufolie** (reflektiert Sonne → kühlt sie im Sonnenlicht). Beide zeigen sich klar
+als Solar-Anomalie (NTC1 − Median aller Knoten) der betroffenen Knoten — mit
+**entgegengesetztem Vorzeichen**.
+
+| Behandlung | Knoten | von (UTC) | bis (UTC) | Solar-Signatur |
+|---|---|---|---|---|
+| **Schwarztape** | 6, 7, 8 | Do 2026-07-02 22:00 | Mo 2026-07-06 00:00 | **+3 … +16 °C** (heizt) |
+| **Alufolie** | 6, 7 | Do 2026-07-09 ~20:00 | So 2026-07-12 Nacht¹ | **−1 … −1.5 °C** (kühlt) |
+
+¹ Zum Zeitpunkt der neuesten Nachricht (07-12 06:15) ist die Folie noch angebracht;
+die Entfernung Sonntag Nacht liegt nach dem letzten Datensatz. **Knoten 8** war nur
+getapt (keine Folie): im Folien-Fenster ist seine Anomalie ~0/erratisch (separates
+Kontakt-/Sitz-Problem) — foliert sind **Knoten 6 und 7**.
+
+```{r tape-alu-setup, eval=multi}
+BLACK_NODES <- c(6L, 7L, 8L)
+ALU_NODES   <- c(6L, 7L)
+win <- data.frame(
+  treatment = c("Schwarztape", "Alufolie"),
+  start = as.POSIXct(c("2026-07-02 22:00", "2026-07-09 20:00"), tz = "UTC"),
+  end   = as.POSIXct(c("2026-07-06 00:00", "2026-07-12 22:00"), tz = "UTC"))
+
+# Näherung Sonnenhöhe (Grad) am GRIP-Standort, ohne Paket.
+solar_elev <- function(t, lat = 72.58, lon = -37.64) {
+  doy  <- as.numeric(format(t, "%j", tz = "UTC"))
+  hh   <- as.numeric(format(t, "%H", tz = "UTC")) + as.numeric(format(t, "%M", tz = "UTC")) / 60
+  decl <- 23.45 * sin(2 * pi * (284 + doy) / 365) * pi / 180
+  H    <- ((hh + lon / 15) - 12) * 15 * pi / 180; latr <- lat * pi / 180
+  asin(sin(latr) * sin(decl) + cos(latr) * cos(decl) * cos(H)) * 180 / pi
+}
+
+# NTC1 pro Knoten & Zeit → Anomalie ggü. Median aller Knoten (= Umgebung).
+ntc1_w  <- series_long |> filter(sensor == "ntc1_C") |> select(node, time, temp_C)
+med     <- ntc1_w |> group_by(time) |>
+  summarise(refT = median(temp_C, na.rm = TRUE), .groups = "drop")
+anom_df <- ntc1_w |> left_join(med, by = "time") |>
+  mutate(anom  = temp_C - refT,
+         elev  = solar_elev(time),
+         phase = factor(case_when(
+           time <  win$start[1] ~ "vor",
+           time <  win$end[1]   ~ "Schwarztape",
+           time <  win$start[2] ~ "zwischen",
+           time <  win$end[2]   ~ "Alufolie",
+           TRUE                 ~ "nach"),
+           levels = c("vor", "Schwarztape", "zwischen", "Alufolie", "nach")))
+```
+
+```{r tape-alu-timeline, eval=multi, fig.height=5, fig.width=12}
+treated <- anom_df |> filter(node %in% union(BLACK_NODES, ALU_NODES)) |>
+  mutate(Knoten = factor(node))
+ggplot(treated, aes(time, anom, colour = Knoten, group = node)) +
+  annotate("rect", xmin = win$start[1], xmax = win$end[1], ymin = -Inf, ymax = Inf,
+           fill = "grey30", alpha = 0.12) +
+  annotate("rect", xmin = win$start[2], xmax = win$end[2], ymin = -Inf, ymax = Inf,
+           fill = "#2980b9", alpha = 0.12) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_line(alpha = 0.7) + geom_point(size = 1.3) +
+  annotate("text", x = win$start[1], y = Inf, label = " Schwarztape", hjust = 0,
+           vjust = 1.4, size = 3.2, colour = "grey30") +
+  annotate("text", x = win$start[2], y = Inf, label = " Alufolie", hjust = 0,
+           vjust = 1.4, size = 3.2, colour = "#2980b9") +
+  scale_colour_brewer(palette = "Set1") +
+  labs(title = "Solar-Anomalie der behandelten Knoten (NTC1 − Median aller Knoten)",
+       subtitle = "Schwarztape heizt (+, grau schattiert), Alufolie kühlt (−, blau schattiert); dazwischen ~0",
+       x = "Zeit (UTC)", y = "NTC1 − Umgebung (°C)") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+```{r tape-alu-bars, eval=multi, fig.height=4.5, fig.width=11}
+phase_tab <- anom_df |>
+  filter(elev > 25, phase %in% c("vor", "Schwarztape", "zwischen", "Alufolie")) |>
+  group_by(node, phase) |>
+  summarise(anom = mean(anom, na.rm = TRUE), .groups = "drop") |>
+  mutate(behandelt = node %in% union(BLACK_NODES, ALU_NODES))
+ggplot(phase_tab, aes(node, anom, fill = behandelt)) +
+  geom_col() +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  facet_wrap(~ phase, nrow = 1) +
+  scale_fill_manual(values = c(`FALSE` = "grey75", `TRUE` = "#c0392b"),
+                    labels = c("blank", "behandelt (6/7/8)"), name = NULL) +
+  labs(title = "Solar-Anomalie je Knoten und Phase (hohe Sonne > 25°)",
+       subtitle = "nur die behandelten Knoten 6/7/8 heben sich ab — Tape positiv, Folie negativ",
+       x = "Knoten", y = "NTC1 − Umgebung (°C)") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom")
+```
+
+```{r tape-alu-verdict, eval=multi, results='asis'}
+hs     <- anom_df |> filter(elev > 25, node %in% ALU_NODES)
+ph_m   <- function(p) mean(hs$anom[hs$phase == p], na.rm = TRUE)
+cat(sprintf("**Ja — deutlich sichtbar, mit umgekehrtem Vorzeichen zum Tape.** Knoten 6/7 bei hoher Sonne (>25°) im Mittel: **vor %+.2f °C**, **Schwarztape %+.2f °C**, **zwischen %+.2f °C**, **Alufolie %+.2f °C**. Die reflektierende Folie kühlt die Stäbe im Sonnenlicht (weniger absorbierte Strahlung), während das schwarze Tape sie als Schwarzkörper aufheizte. Onset der Folie exakt in der Nacht Do→Fr (erste Hochsonnen-Nachricht 07-10 10:15 bereits ≈ −1.2 °C).\n",
+            ph_m("vor"), ph_m("Schwarztape"), ph_m("zwischen"), ph_m("Alufolie")))
+```
+
+---
+
 ## Save result
 
 ```{r save}
