@@ -22,8 +22,9 @@ EncoderHeads2026/
 │   └── data/                  # Raw CSV exports and decoded results
 │
 └── Greenland2026/             # Greenland field campaign — heads 26-02…26-05
-    ├── decode_core.R          # Shared decode + calibration functions (sourced by both docs)
-    ├── decode_snowmelt.qmd    # ← SnowMelt head (IMEI 300434065508020): vertical melt profile
+    ├── decode_core.R          # Shared decode + calibration functions (sourced by all docs)
+    ├── decode_snowmelt_newgrip.qmd  # ← SnowMelt GRIP (IMEI 300434065508020): melt profile
+    ├── decode_snowmelt_dye3.qmd     # ← SnowMelt Dye3 (IMEI 301434062008160): melt profile
     ├── decode_chain.qmd       # ← Doppelkette (IMEI 301434062008130): borehole depth profile
     ├── tape_experiment.qmd    # Black-tape solar-absorption experiment (SnowMelt)
     ├── derive_mean_calibration.R  # Universal mean lab-S4 fallback coefficients
@@ -46,18 +47,23 @@ Heads 26-02 and 26-03 are SnowMelt sensors with nodes at 4 cm vertical spacing (
 ## Greenland field use
 
 The decoder is **field-driven and keyed solely by IMEI** (the `.bin` filename prefix, e.g.
-`300434065508020-57.bin`). Two devices send in parallel, each with its own report document
-sharing `decode_core.R`:
+`300434065508020-57.bin`). **Three** heads send in parallel, each with its own report
+document sharing `decode_core.R`. IMEI ↔ Rockblock modem serial (payload-verified):
 
-- **SnowMelt head** — IMEI `300434065508020` → `decode_snowmelt.qmd`
-- **Doppelkette** — IMEI `301434062008130` → `decode_chain.qmd`
+| Head | IMEI | Rockblock device | Document |
+|---|---|---|---|
+| SnowMelt GRIP | `300434065508020` | 234048 – Head_26-04 | `decode_snowmelt_newgrip.qmd` |
+| SnowMelt Dye3 | `301434062008160` | 228679 – Head_26-05 | `decode_snowmelt_dye3.qmd` |
+| Doppelkette (chain) | `301434062008130` | 228680 – Head_26-02 | `decode_chain.qmd` |
 
 Workflow:
 
-1. Save the `.bin` attachment(s) from the Cloudloop email into `testdata/`.
-2. Open the matching document (`decode_snowmelt.qmd` or `decode_chain.qmd`) in RStudio.
-   `BIN_FILE` already globs all `.bin` for that IMEI; a vector of files renders a time series.
-   (A hex payload can still be pasted into `MSG1` / `MSG2` in the SnowMelt doc instead.)
+1. Add `.bin` messages to `testdata/` — either the Cloudloop e-mail attachment, or from a
+   Rockblock CSV export in `download/` (extract per IMEI; the CSV names devices by modem
+   serial, see the table above).
+2. Open the matching document in RStudio. `BIN_FILE` already globs all `.bin` for that IMEI;
+   a vector of files renders a time series. (A hex payload can still be pasted into `MSG1` /
+   `MSG2` in the SnowMelt docs instead.)
 3. Render (`Ctrl+Shift+K`) → profile, diagnostics, and CSV(s) saved to `Greenland2026/data/`.
 
 The head's `n_nodes` / `fields` / `type` / `spacing` / calibration come from `head_config[[IMEI]]`

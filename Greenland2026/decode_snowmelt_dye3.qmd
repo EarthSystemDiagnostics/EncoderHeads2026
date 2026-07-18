@@ -1,6 +1,6 @@
 ---
-title: "SnowMelt Decoder — Encoder Heads Greenland 2026"
-subtitle: "Vertikales Schmelzprofil (IMEI 300434065508020) — Decode, Diagnostik & Plots"
+title: "SnowMelt Decoder Dye3 — Encoder Heads Greenland 2026"
+subtitle: "Vertikales Schmelzprofil (IMEI 301434062008160) — Decode, Diagnostik & Plots"
 author: "Thom Laepple"
 date: today
 format:
@@ -17,11 +17,19 @@ execute:
   message: false
 ---
 
-Der **SnowMelt-Kopf** (IMEI **300434065508020**) steht vertikal im Schnee: 24 Knoten
-mit je NTC1 / NTC2 / NTC3 (TestSB), Abstand 4 cm. Dieses Dokument decodiert die
-`.bin`-Nachrichten und zeichnet das Schmelz-/Temperaturprofil. Die Kette
-(IMEI 301434062008130) hat ihr eigenes Dokument `decode_chain.qmd`. Die gemeinsamen
-Decode- und Kalibrierfunktionen liegen in `decode_core.R`.
+Der **zweite SnowMelt-Kopf** (IMEI **301434062008160**) an **Dye3**: 24 Knoten mit je
+NTC1 / NTC2 / NTC3 (TestSB), Abstand 4 cm — baugleich zum NEWGRIP-Kopf. Dieses
+Dokument decodiert die `.bin`-Nachrichten und zeichnet das Schmelz-/Temperaturprofil.
+
+Die beiden Schwesterdokumente: **`decode_snowmelt_newgrip.qmd`** für den Kopf am
+GRIP-Standort (IMEI 300434065508020) und **`decode_chain.qmd`** für die Kette
+(IMEI 301434062008130). Die gemeinsamen Decode- und Kalibrierfunktionen liegen in
+`decode_core.R`.
+
+**Bekannter Defekt: `N28_NTC2`** — der mittlere Sensor des untersten Knotens
+(Position 1). Er läuft in seinem 3-Byte-Feld über, wodurch die Datei 226 statt
+225 B misst; der Decoder gibt ihn von selbst als `NA` zurück. Keine
+Ausschlussliste nötig.
 
 ```{r core}
 source("decode_core.R")
@@ -33,7 +41,7 @@ Edit this block, then re-render (`Ctrl+Shift+K`).
 
 ```{r params}
 # Identification is purely by IMEI — the "IMEI: <id>" line in the Cloudloop mail,
-# which is also the .bin filename prefix (e.g. 300434065508020-2.bin). For a .bin
+# which is also the .bin filename prefix (e.g. 301434062008160-35.bin). For a .bin
 # attachment the IMEI is auto-detected from the filename; the head's n_nodes /
 # fields / type / spacing then come from head_config[[IMEI]].
 IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
@@ -42,9 +50,7 @@ IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
 # One file → single decode. A VECTOR of files → a time series: the newest message
 # drives the single-message sections (summary, table, profile), and ALL files
 # feed the "Zeitlicher Verlauf" plot. All files must be the same head (same IMEI).
-# -2 excluded: head was not yet erected at that time, so its profile is invalid.
-BIN_FILE <- setdiff(Sys.glob("../testdata/300434065508020-*.bin"),
-                    "../testdata/300434065508020-2.bin")
+BIN_FILE <- Sys.glob("../testdata/301434062008160-*.bin")
 
 # OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
 MSG1 <- ""
@@ -57,10 +63,17 @@ head_config <- list(
   # type / spacing_cm are authoritative for decoding & plots. `calibration` =
   # path to a per-sensor lab table (position,node,ntc,a,b,c,d); NA → decode with
   # the universal mean lab-S4 curve.
-  "300434065508020" = list(label = "Snowmelt NEWGRIP", n_nodes = 24L,
+  #
+  # Node order (bottom → top) and the coefficients behind the calibration table
+  # come from ntc2_investigation/build_calibration_assignment.R; the order is the
+  # same as ntc_nodes in ~/sharedAI/thermoheadlogger/param_head.txt. UNLIKE the
+  # NEWGRIP head (SM1/SM2 lab tables) this head is calibrated from the
+  # Calibration Registry, which covers all 72 channels and includes the
+  # 2026-07-06/07 recalibration (TL, 2026-07-15).
+  "301434062008160" = list(label = "Snowmelt Dye3", n_nodes = 24L,
                  fields = c("ntc1", "ntc2", "testSB"),
                  type = "snowmelt", spacing_cm = 4L,
-                 calibration = "../meta/GRIP_calibration_assignment.csv")
+                 calibration = "../meta/calibration_assignment_301434062008160.csv")
 )
 
 # --- Identify head by IMEI ---------------------------------------------------
@@ -513,34 +526,30 @@ ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
 
 ---
 
-## Tape- & Alufolie-Experiment
+## Strahlungsfehler / Warm-Bias
 
-An denselben oberen Knoten wurden nacheinander zwei **optische** Manipulationen
-angebracht: zuerst **schwarzes Tape** (absorbiert Sonne → heizt die Stäbe), später
-**Alufolie** (reflektiert Sonne → kühlt sie im Sonnenlicht). Beide zeigen sich klar
-als Solar-Anomalie (NTC1 − Median aller Knoten) der betroffenen Knoten — mit
-**entgegengesetztem Vorzeichen**.
+Unbelüftete Thermistoren in der Sonne lesen über hellem Schnee **zu warm** — die
+absorbierte Kurzwelle heizt den Fühler über die wahre Lufttemperatur. Der Fehler
+ist **rein tagseitig** (nachts/bei Tiefsonne null) und lässt sich hier nur
+**teilweise** aus den Daten festmachen:
 
-| Behandlung | Knoten | von (UTC) | bis (UTC) | Solar-Signatur |
-|---|---|---|---|---|
-| **Schwarztape** | 6, 7, 8 | Do 2026-07-02 22:00 | Mo 2026-07-06 00:00 | **+3 … +16 °C** (heizt) |
-| **Alufolie** | 6, 7 | Do 2026-07-09 ~20:00 | So 2026-07-12 Nacht¹ | **−1 … −1.5 °C** (kühlt) |
+* **Fest gemessen — der differentielle Anteil.** Die drei NTC eines Nodes sitzen
+  quasi am selben Ort, müssen also dasselbe lesen. Ihr Spread ist nachts ≈ 0 und
+  wächst bei Sonne — das ist reiner Strahlungsfehler (unterschiedlich beschienene
+  Röhrchen) und eine **Untergrenze** des wahren Bias.
+* **Nur eingegrenzt — der gleichsinnige Anteil.** Heizt alle drei Röhrchen
+  gemeinsam, taucht im Spread also *nicht* auf. Er ist der größere Teil (siehe der
+  physikalisch unmögliche Tag-Nacht-Hub unten), lässt sich ohne Wind bzw. einen
+  belüfteten Referenzfühler aber **nicht pro Zeitstempel abziehen**.
 
-¹ Zum Zeitpunkt der neuesten Nachricht (07-12 06:15) ist die Folie noch angebracht;
-die Entfernung Sonntag Nacht liegt nach dem letzten Datensatz. **Knoten 8** war nur
-getapt (keine Folie): im Folien-Fenster ist seine Anomalie ~0/erratisch (separates
-Kontakt-/Sitz-Problem) — foliert sind **Knoten 6 und 7**.
+**Faustregel für „wie warm war es wirklich":** Nacht und Tiefsonne (elev ≲ 5°) den
+Messwerten trauen (Bias ≈ 0); **Tagesspitzen sind Obergrenzen, keine
+Lufttemperatur.** Es wird hier bewusst **nichts korrigiert** — nur diagnostiziert.
 
-```{r tape-alu-setup, eval=multi}
-BLACK_NODES <- c(6L, 7L, 8L)
-ALU_NODES   <- c(6L, 7L)
-win <- data.frame(
-  treatment = c("Schwarztape", "Alufolie"),
-  start = as.POSIXct(c("2026-07-02 22:00", "2026-07-09 20:00"), tz = "UTC"),
-  end   = as.POSIXct(c("2026-07-06 00:00", "2026-07-12 22:00"), tz = "UTC"))
-
-# Näherung Sonnenhöhe (Grad) am GRIP-Standort, ohne Paket.
-solar_elev <- function(t, lat = 72.58, lon = -37.64) {
+```{r radbias-calc, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
+# Sonnenhöhe an DYE3 (~65.18 N, 43.82 W) — dort geht die Sonne unter (echte Nacht
+# als strahlungsfreie Referenz), anders als am Polartag-GRIP.
+solar_elev <- function(t, lat = 65.18, lon = -43.82) {
   doy  <- as.numeric(format(t, "%j", tz = "UTC"))
   hh   <- as.numeric(format(t, "%H", tz = "UTC")) + as.numeric(format(t, "%M", tz = "UTC")) / 60
   decl <- 23.45 * sin(2 * pi * (284 + doy) / 365) * pi / 180
@@ -548,66 +557,47 @@ solar_elev <- function(t, lat = 72.58, lon = -37.64) {
   asin(sin(latr) * sin(decl) + cos(latr) * cos(decl) * cos(H)) * 180 / pi
 }
 
-# NTC1 pro Knoten & Zeit → Anomalie ggü. Median aller Knoten (= Umgebung).
-ntc1_w  <- series_long |> filter(sensor == "ntc1_C") |> select(node, time, temp_C)
-med     <- ntc1_w |> group_by(time) |>
-  summarise(refT = median(temp_C, na.rm = TRUE), .groups = "drop")
-anom_df <- ntc1_w |> left_join(med, by = "time") |>
-  mutate(anom  = temp_C - refT,
-         elev  = solar_elev(time),
-         phase = factor(case_when(
-           time <  win$start[1] ~ "vor",
-           time <  win$end[1]   ~ "Schwarztape",
-           time <  win$start[2] ~ "zwischen",
-           time <  win$end[2]   ~ "Alufolie",
-           TRUE                 ~ "nach"),
-           levels = c("vor", "Schwarztape", "zwischen", "Alufolie", "nach")))
+# Differentieller Fehler: Spread der 3 NTC je Node & Zeit, Median über Nodes.
+rb <- series_long |> mutate(elev = solar_elev(time))
+spread_t <- rb |> group_by(time, node) |>
+  summarise(spread = safe_amp(temp_C), .groups = "drop") |>
+  group_by(time) |> summarise(spread = median(spread, na.rm = TRUE), .groups = "drop") |>
+  left_join(distinct(rb, time, elev), by = "time")
+
+sp_night <- median(spread_t$spread[spread_t$elev < 5],  na.rm = TRUE)
+sp_day   <- median(spread_t$spread[spread_t$elev > 25], na.rm = TRUE)
+
+# Gleichsinniger Anteil (indirekt): Tag-Nacht-Hub des Profilmedians.
+prof_t <- rb |> group_by(time) |>
+  summarise(Tmed = median(temp_C, na.rm = TRUE),
+            elev = first(elev), .groups = "drop")
+t_night <- min(prof_t$Tmed, na.rm = TRUE)
+t_daypk <- max(prof_t$Tmed, na.rm = TRUE)
+swing   <- t_daypk - t_night
 ```
 
-```{r tape-alu-timeline, eval=multi, fig.height=5, fig.width=12}
-treated <- anom_df |> filter(node %in% union(BLACK_NODES, ALU_NODES)) |>
-  mutate(Knoten = factor(node))
-ggplot(treated, aes(time, anom, colour = Knoten, group = node)) +
-  annotate("rect", xmin = win$start[1], xmax = win$end[1], ymin = -Inf, ymax = Inf,
-           fill = "grey30", alpha = 0.12) +
-  annotate("rect", xmin = win$start[2], xmax = win$end[2], ymin = -Inf, ymax = Inf,
-           fill = "#2980b9", alpha = 0.12) +
-  geom_hline(yintercept = 0, colour = "grey70") +
-  geom_line(alpha = 0.7) + geom_point(size = 1.3) +
-  annotate("text", x = win$start[1], y = Inf, label = " Schwarztape", hjust = 0,
-           vjust = 1.4, size = 3.2, colour = "grey30") +
-  annotate("text", x = win$start[2], y = Inf, label = " Alufolie", hjust = 0,
-           vjust = 1.4, size = 3.2, colour = "#2980b9") +
-  scale_colour_brewer(palette = "Set1") +
-  labs(title = "Solar-Anomalie der behandelten Knoten (NTC1 − Median aller Knoten)",
-       subtitle = "Schwarztape heizt (+, grau schattiert), Alufolie kühlt (−, blau schattiert); dazwischen ~0",
-       x = "Zeit (UTC)", y = "NTC1 − Umgebung (°C)") +
-  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```{r radbias-plot, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4, fig.width=9}
+# EIN Zusammenhang (Spread vs. Sonne) → keine Legende; Nacht-Rauschband als Referenz.
+ggplot(spread_t, aes(elev, spread)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0, ymax = max(sp_night, 0.05),
+           fill = "grey85", alpha = 0.6) +
+  geom_vline(xintercept = 0, colour = "grey70", linewidth = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, colour = "#c0392b", linewidth = 0.7) +
+  geom_point(size = 2, colour = "#2c3e50") +
+  annotate("text", x = -2, y = max(sp_night, 0.05), label = " Nacht-Rauschen ≈ wahr",
+           hjust = 0, vjust = -0.4, size = 3, colour = "grey40") +
+  labs(title = "Differentieller Strahlungsfehler — NTC-Spread je Node vs. Sonnenstand",
+       subtitle = "nachts ≈ 0 (Sensoren einig), bei Sonne > 0 (Untergrenze des Warm-Bias)",
+       x = "Sonnenhöhe (°)", y = "Spread der 3 NTC (°C)") +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 ```
 
-```{r tape-alu-bars, eval=multi, fig.height=4.5, fig.width=11}
-phase_tab <- anom_df |>
-  filter(elev > 25, phase %in% c("vor", "Schwarztape", "zwischen", "Alufolie")) |>
-  group_by(node, phase) |>
-  summarise(anom = mean(anom, na.rm = TRUE), .groups = "drop") |>
-  mutate(behandelt = node %in% union(BLACK_NODES, ALU_NODES))
-ggplot(phase_tab, aes(node, anom, fill = behandelt)) +
-  geom_col() +
-  geom_hline(yintercept = 0, colour = "grey60") +
-  facet_wrap(~ phase, nrow = 1) +
-  scale_fill_manual(values = c(`FALSE` = "grey75", `TRUE` = "#c0392b"),
-                    labels = c("blank", "behandelt (6/7/8)"), name = NULL) +
-  labs(title = "Solar-Anomalie je Knoten und Phase (hohe Sonne > 25°)",
-       subtitle = "nur die behandelten Knoten 6/7/8 heben sich ab — Tape positiv, Folie negativ",
-       x = "Knoten", y = "NTC1 − Umgebung (°C)") +
-  theme_bw(base_size = 12) + theme(legend.position = "bottom")
-```
-
-```{r tape-alu-verdict, eval=multi, results='asis'}
-hs     <- anom_df |> filter(elev > 25, node %in% ALU_NODES)
-ph_m   <- function(p) mean(hs$anom[hs$phase == p], na.rm = TRUE)
-cat(sprintf("**Ja — deutlich sichtbar, mit umgekehrtem Vorzeichen zum Tape.** Knoten 6/7 bei hoher Sonne (>25°) im Mittel: **vor %+.2f °C**, **Schwarztape %+.2f °C**, **zwischen %+.2f °C**, **Alufolie %+.2f °C**. Die reflektierende Folie kühlt die Stäbe im Sonnenlicht (weniger absorbierte Strahlung), während das schwarze Tape sie als Schwarzkörper aufheizte. Onset der Folie exakt in der Nacht Do→Fr (erste Hochsonnen-Nachricht 07-10 10:15 bereits ≈ −1.2 °C).\n",
-            ph_m("vor"), ph_m("Schwarztape"), ph_m("zwischen"), ph_m("Alufolie")))
+```{r radbias-verdict, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
+cat(sprintf("**Differentieller Fehler (fest gemessen):** NTC-Spread nachts **%.2f °C**, bei hoher Sonne (>25°) **%.2f °C** — Faktor ~%.0f. Das ist die *Untergrenze* des Warm-Bias.\n\n",
+            sp_night, sp_day, ifelse(sp_night > 0, sp_day / sp_night, NA)))
+cat(sprintf("**Gleichsinniger Fehler (eingegrenzt):** Tag-Nacht-Hub des Profilmedians **%.1f °C** (%.1f → %+.1f °C). Ein solcher Hub ist über schmelznahem Schnee keine reale Lufttemperatur — der Großteil der Nachmittagsspitze ist Strahlungsaufheizung. Größenordnung zur Sonnenspitze **grob +4…+6 °C**, bei Tiefsonne/Nacht ≲ 0,1 °C.\n\n",
+            swing, t_night, t_daypk))
+cat("**Praktisch:** Nacht-/Tiefsonnenwerte (elev ≲ 5°) sind ~unverzerrt; die Tagesspitzen um mehrere °C zu warm. Eine echte, zeitpunktgenaue Korrektur braucht Wind oder einen belüfteten/beschatteten Referenzfühler — hier bewusst nicht hartkodiert.\n")
 ```
 
 ---

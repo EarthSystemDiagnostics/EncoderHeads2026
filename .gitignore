@@ -6,7 +6,8 @@
 
 # Generated files
 *.html
-!Greenland2026/decode_snowmelt.html
+!Greenland2026/decode_snowmelt_newgrip.html
+!Greenland2026/decode_snowmelt_dye3.html
 !Greenland2026/decode_chain.html
 !Greenland2026/tape_experiment.html
 *_files/
@@ -18,3 +19,7 @@ Rplots.pdf
 
 # Internal NTC2 investigation (hypotheses, tests, lab discussion) — NOT published
 Greenland2026/ntc2_investigation/
+
+# Rockblock CSV exports — transient input staging; the .bin files in testdata/ are
+# the tracked data of record (see README "Greenland field use").
+download/

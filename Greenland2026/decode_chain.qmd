@@ -398,12 +398,19 @@ Erst **ab Nachricht -142** (Einbau in die Bohrlöcher); die früheren Nachrichte
 zeitliche Verlauf **gegenüber der Tiefe**: je Nachricht ein Tiefenprofil, Farbe = Zeit.
 
 ```{r ts-build}
-TS_FROM_MSG <- 142L   # Zeitreihe erst ab dieser .bin-Nachrichtennummer
-msg_num <- as.integer(sub(".*-(\\d+)\\.bin$", "\\1", basename(bin_files)))
+TS_FROM_MSG <- 142L   # Zeitreihe erst ab dieser .bin-Nachricht (Einbau in Bohrlöcher)
+# Nummer aus dem Dateinamen (Cloudloop-Nummerierung); Rockblock-Dateien heißen
+# `-rb<datum>` und tragen keine Nummer → msg = NA. Deshalb wird die Schwelle NICHT
+# über die Nummer gefiltert, sondern über die ZEIT der Nachricht -142 abgeleitet;
+# so werden auch namenlose spätere Nachrichten korrekt eingeschlossen.
+msg_num <- suppressWarnings(as.integer(sub(".*-(\\d+)\\.bin$", "\\1", basename(bin_files))))
+times   <- unix2utc(sapply(all_bin, `[[`, "time_unix"))
+ts_from_time <- if (any(msg_num == TS_FROM_MSG, na.rm = TRUE))
+  min(times[which(msg_num == TS_FROM_MSG)]) else min(times)
 series <- bind_rows(Map(function(b, num)
   enrich(b) |> mutate(time = unix2utc(b$time_unix), msg = num),
   all_bin, msg_num)) |>
-  filter(!is.na(depth_m), msg >= TS_FROM_MSG)
+  filter(!is.na(depth_m), time >= ts_from_time)
 series$tlab <- factor(format(series$time, "%m-%d %H:%M"),
                       levels = format(sort(unique(series$time)), "%m-%d %H:%M"))
 n_ts  <- length(unique(series$time))
@@ -441,6 +448,35 @@ ts_depth_plot(series_zoom,
                       n_ts_zoom, imei))
 ```
 
+Dasselbe Zoom-Fenster, aber als **Anomalie gegenüber dem zeitgemittelten Profil von
+Kette 1**: von *beiden* Ketten wird bei jeder Tiefe das über die Zeit gemittelte
+Profil von **Kette 1** abgezogen (Kette 1 − Mittel(Kette 1), Kette 2 − Mittel(Kette 1)).
+Das linke Panel zeigt so die zeitliche Abweichung von Kette 1 vom eigenen Mittel (per
+Konstruktion um 0), das rechte, wie Kette 2 relativ zu diesem Referenzprofil liegt —
+also die Bohrloch-zu-Bohrloch-Differenz plus deren zeitliche Entwicklung.
+
+```{r ts-depth-anom, eval=multi, fig.height=6, fig.width=11}
+# Referenz = zeitgemitteltes Tiefenprofil von KETTE 1 (gleiches Zoom-Fenster).
+ref1 <- series_zoom |> filter(chain == "Kette 1") |>
+  group_by(depth_m) |> summarise(ref_C = mean(ntc_C, na.rm = TRUE), .groups = "drop")
+
+series_anom <- series_zoom |>
+  left_join(ref1, by = "depth_m") |>
+  mutate(anom_C = ntc_C - ref_C)
+
+ggplot(series_anom, aes(anom_C, depth_m, group = time, colour = tlab)) +
+  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.4) +
+  geom_path(linewidth = 0.5, alpha = 0.8) + geom_point(size = 1.6) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_x_continuous(name = "Temperatur − Zeitmittel Kette 1 (°C)") +
+  scale_colour_viridis_d(name = "Zeit (UTC)", option = "C", end = 0.9, drop = FALSE) +
+  facet_wrap(~ chain) +
+  labs(title = sprintf("Anomalie ggü. Zeitmittel Kette 1 — %s", cfg$label),
+       subtitle = sprintf("Kette 1 − Mittel(Kette 1) & Kette 2 − Mittel(Kette 1) | %d Messungen | IMEI %s",
+                          n_ts_zoom, imei)) +
+  theme_bw(base_size = 13)
+```
+
 ```{r ts-hov, eval=multi, fig.height=6, fig.width=11}
 # Hovmöller: Tiefe × Zeit, Farbe = Temperatur, je Kette.
 tlevels <- format(sort(unique(series$time)), "%m-%d %H:%M")
@@ -453,6 +489,104 @@ ggplot(hov, aes(tlab, depth_m, fill = ntc_C)) +
   labs(title = sprintf("Tiefe–Zeit Hovmöller — %s", cfg$label), x = NULL) +
   theme_bw(base_size = 13) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid = element_blank())
+```
+
+## Zeitverläufe an festen Tiefen
+
+Temperatur über die Zeit an **3, 5, 10 und 30 m**, beide Ketten je Panel
+(Kette 1 orange, Kette 2 blau). Der **Einbau-Datensatz (07-08)** ist ausgeschlossen —
+er streckt sonst jede Achse um >30 °C und verdeckt die eigentliche Entwicklung. Freie
+y-Achse pro Tiefe (jede Tiefe ~1 °C Spanne, aber ganz anderes Niveau: oben ~−28 °C,
+unten ~−31 °C), so bleibt die **Äquilibrierung der Bohrlöcher** überall sichtbar.
+
+```{r ts-depth-lines, eval=multi, fig.height=7, fig.width=11}
+FIXED_DEPTHS <- c(3, 5, 10, 30)
+depth_ts <- series |>
+  filter(depth_m %in% FIXED_DEPTHS, !is.na(ntc_C), time > min(time)) |>  # ohne 07-08
+  mutate(depth_lab = factor(sprintf("%d m", depth_m),
+                            levels = sprintf("%d m", FIXED_DEPTHS)))
+
+ggplot(depth_ts, aes(time, ntc_C, colour = chain)) +
+  geom_line(linewidth = 0.5) + geom_point(size = 1.8) +
+  scale_colour_manual(values = chain_cols, name = NULL) +
+  scale_x_datetime(date_labels = "%d.%m") +
+  facet_wrap(~ depth_lab, scales = "free_y") +
+  labs(title = sprintf("Zeitverläufe an festen Tiefen — %s", cfg$label),
+       subtitle = sprintf("Kette 1 vs. Kette 2 bei 3 / 5 / 10 / 30 m (ohne Einbau 07-08) | IMEI %s", imei),
+       x = "Zeit (UTC)", y = "Temperatur (°C, Mittel NTC1/NTC2)") +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+### Angleichung als exponentielle Relaxation (Log-Skala)
+
+Ein frisch eingebautes Bohrloch **relaxiert exponentiell** zur
+Gleichgewichtstemperatur: `T(t) = T_eq + A·e^(−t/τ)`. Trägt man die **Abweichung
+von der Asymptote** `|T − T_eq|` halblogarithmisch auf, wird eine einfache
+Exponentielle zur **Geraden**, deren Steigung die Zeitkonstante τ liefert.
+
+Der sinnvolle „Nullpunkt" der Log-Achse ist dabei **T_eq (die Asymptote), nicht 0
+und nicht das Zeitmittel** — sonst wird der Logarithmus sinnlos. T_eq wird pro
+(Kette, Tiefe) aus einem nichtlinearen Fit `Teq + A·exp(−t/τ)` geschätzt. Das
+funktioniert für die **tiefen** Sensoren (klare Relaxation); der oberste (3 m)
+gleicht sich zuerst schnell an und wird dann von der **Oberflächenvariation**
+überlagert — dort knickt die Log-Kurve ab (keine reine Exponentielle mehr).
+
+```{r ts-depth-relax, eval=multi, fig.height=7, fig.width=11}
+relax_d <- series |>
+  filter(depth_m %in% FIXED_DEPTHS, !is.na(ntc_C), time > min(time))
+t0 <- min(relax_d$time)
+relax_d$tdays <- as.numeric(difftime(relax_d$time, t0, units = "days"))
+
+# Exp-Relaxation je (Kette, Tiefe); robust, tolerant gegen Nicht-Konvergenz.
+grid <- seq(0, max(relax_d$tdays), length.out = 80)
+fit_rows <- list(); fit_line <- list()
+for (ch in unique(relax_d$chain)) for (dp in FIXED_DEPTHS) {
+  g <- relax_d |> filter(chain == ch, depth_m == dp) |> arrange(tdays)
+  if (nrow(g) < 4L) next
+  Teq0 <- min(g$ntc_C); A0 <- max(g$ntc_C[1] - Teq0, 0.05)
+  fit <- tryCatch(nls(ntc_C ~ Teq + A * exp(-k * tdays), data = g,
+                      start = list(Teq = Teq0, A = A0, k = 0.7),
+                      control = nls.control(maxiter = 300, warnOnly = TRUE)),
+                  error = function(e) NULL)
+  if (is.null(fit)) next
+  co <- coef(fit); tau <- unname(1 / co["k"])
+  r2 <- 1 - sum(resid(fit)^2) / sum((g$ntc_C - mean(g$ntc_C))^2)
+  clean <- is.finite(tau) && tau > 0.2 && tau < 30 && r2 > 0.9 && co["A"] > 0.10
+  fit_rows[[paste(ch, dp)]] <- data.frame(chain = ch, depth_m = dp,
+    Teq = unname(co["Teq"]), tau = tau, r2 = r2, clean = clean)
+  if (clean) fit_line[[paste(ch, dp)]] <- data.frame(chain = ch, depth_m = dp,
+    tdays = grid, dep = unname(co["A"]) * exp(-grid / tau))
+}
+fit_tab <- bind_rows(fit_rows); fit_ln <- bind_rows(fit_line)
+
+lv <- sprintf("%d m", FIXED_DEPTHS)
+relax_p <- relax_d |> inner_join(fit_tab |> select(chain, depth_m, Teq),
+                                 by = c("chain", "depth_m")) |>
+  mutate(dep = abs(ntc_C - Teq),
+         depth_lab = factor(sprintf("%d m", depth_m), levels = lv))
+fit_ln$depth_lab <- factor(sprintf("%d m", fit_ln$depth_m), levels = lv)
+
+ggplot(relax_p, aes(tdays, dep, colour = chain)) +
+  { if (nrow(fit_ln)) geom_line(data = fit_ln, linewidth = 0.55, linetype = "dashed") } +
+  geom_point(size = 2) +
+  scale_y_log10(name = expression("|T - T"[eq]*"|  (°C, log)"), limits = c(2e-3, 3)) +
+  scale_colour_manual(values = chain_cols, name = NULL) +
+  facet_wrap(~ depth_lab) +
+  labs(title = sprintf("Angleichung als exponentielle Relaxation — %s", cfg$label),
+       subtitle = "Gerade ⇔ einfache Exponentielle; gestrichelt = Fit T_eq + A·exp(−t/τ). 3 m knickt ab → oberflächengetrieben.",
+       x = "Tage seit erstem Profil (nach Einbau)") +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r ts-depth-relax-tab, eval=multi}
+knitr::kable(
+  fit_tab |> filter(clean) |> arrange(depth_m, chain) |>
+    transmute(Kette = chain, `Tiefe (m)` = depth_m,
+              `T_eq (°C)` = round(Teq, 2), `τ (Tage)` = round(tau, 2),
+              `R²` = round(r2, 3)),
+  caption = "Fit T_eq + A·exp(−t/τ), nur Serien mit sauberer Relaxation (τ = Zeitkonstante der Angleichung).")
 ```
 
 ---

@@ -1,0 +1,699 @@
+---
+title: "SnowMelt Decoder — Encoder Heads Greenland 2026"
+subtitle: "Vertikales Schmelzprofil (IMEI 300434065508020) — Decode, Diagnostik & Plots"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Der **SnowMelt-Kopf** (IMEI **300434065508020**) steht vertikal im Schnee: 24 Knoten
+mit je NTC1 / NTC2 / NTC3 (TestSB), Abstand 4 cm. Dieses Dokument decodiert die
+`.bin`-Nachrichten und zeichnet das Schmelz-/Temperaturprofil. Die Kette
+(IMEI 301434062008130) hat ihr eigenes Dokument `decode_chain.qmd`. Die gemeinsamen
+Decode- und Kalibrierfunktionen liegen in `decode_core.R`.
+
+```{r core}
+source("decode_core.R")
+```
+
+## Parameters
+
+Edit this block, then re-render (`Ctrl+Shift+K`).
+
+```{r params}
+# Identification is purely by IMEI — the "IMEI: <id>" line in the Cloudloop mail,
+# which is also the .bin filename prefix (e.g. 300434065508020-2.bin). For a .bin
+# attachment the IMEI is auto-detected from the filename; the head's n_nodes /
+# fields / type / spacing then come from head_config[[IMEI]].
+IMEI <- ""   # "" = auto-detect from BIN_FILE; set manually for a hex payload
+
+# Path(s) to the .bin attachment(s) from the Cloudloop email ------------------
+# One file → single decode. A VECTOR of files → a time series: the newest message
+# drives the single-message sections (summary, table, profile), and ALL files
+# feed the "Zeitlicher Verlauf" plot. All files must be the same head (same IMEI).
+# -2 excluded: head was not yet erected at that time, so its profile is invalid.
+BIN_FILE <- setdiff(Sys.glob("../testdata/300434065508020-*.bin"),
+                    "../testdata/300434065508020-2.bin")
+
+# OR paste hex payload(s) from the email (set IMEI above, leave BIN_FILE = "")--
+MSG1 <- ""
+MSG2 <- ""
+```
+
+```{r head-config}
+head_config <- list(
+  # SnowMelt head, KEYED BY IMEI. `label` is a human name; n_nodes / fields /
+  # type / spacing_cm are authoritative for decoding & plots. `calibration` =
+  # path to a per-sensor lab table (position,node,ntc,a,b,c,d); NA → decode with
+  # the universal mean lab-S4 curve.
+  "300434065508020" = list(label = "Snowmelt NEWGRIP", n_nodes = 24L,
+                 fields = c("ntc1", "ntc2", "testSB"),
+                 type = "snowmelt", spacing_cm = 4L,
+                 calibration = "../meta/GRIP_calibration_assignment.csv")
+)
+
+# --- Identify head by IMEI ---------------------------------------------------
+bin_files <- BIN_FILE[nzchar(BIN_FILE)]
+use_bin   <- length(bin_files) > 0L
+
+imei <- if (IMEI != "") {
+  IMEI
+} else if (use_bin) {
+  imeis <- unique(sub("-.*$", "", basename(bin_files)))
+  if (length(imeis) > 1L)
+    stop("BIN_FILE mixes IMEIs (", paste(imeis, collapse = ", "),
+         ") — a time series must be one head.")
+  imeis
+} else {
+  stop("Set IMEI (hex payload) or BIN_FILE (.bin attachment).")
+}
+cfg  <- head_config[[imei]]
+if (is.null(cfg))
+  stop(sprintf("IMEI '%s' is not in head_config (this is the SnowMelt document; the chain lives in decode_chain.qmd).", imei))
+
+n_nodes <- cfg$n_nodes
+fields  <- cfg$fields
+
+# --- Per-sensor lab calibration (optional, keyed by head) --------------------
+# NTC_s4 per sensor where a lab fit exists (and is numerically sane), else the
+# universal mean lab-S4 curve (NTC_mean). See decode_core.R::calibrate_channel.
+cal_path <- cfg$calibration
+lab_cal  <- load_lab_cal(cal_path, n_nodes)     # nested [field][position] coefs, or NULL
+
+n_lab_sensors <- if (is.null(lab_cal)) 0L else
+  sum(sapply(names(lab_cal), function(ch)
+    if (ch %in% fields) sum(!vapply(lab_cal[[ch]], is.null, logical(1))) else 0L))
+n_ntc_sensors <- n_nodes * sum(fields %in% names(ntc_channel))
+cal_method <- if (is.null(lab_cal)) "Mittlere Lab-S4-Kurve (universeller Fallback)" else
+  sprintf("Lab-S4 pro Sensor (%d/%d) mit Mean-S4-Fallback", n_lab_sensors, n_ntc_sensors)
+
+# --- File-size sanity check (sep vs nosep variant) ---------------------------
+if (!use_bin) {
+  n_hex_node   <- sum(ifelse(fields %in% c("ntc1", "ntc2", "testSB", "pressure"), 6L, 4L))
+  expected_hex <- 8L + 6L + n_nodes * n_hex_node + 4L
+} else {
+  exp_len <- bin_expected_len(n_nodes, fields)
+  for (bf in bin_files) {
+    n_file  <- file.info(bf)$size
+    surplus <- n_file - exp_len$sep
+    ok <- n_file == exp_len$nosep || (surplus >= 0L && surplus <= n_nodes)
+    if (!ok)
+      warning(sprintf("%s is %d B but IMEI %s (%s) implies %d B (with) or %d B (without separators) for %d nodes — check head_config",
+                      basename(bf), n_file, imei, paste(fields, collapse = "/"),
+                      exp_len$sep, exp_len$nosep, n_nodes))
+    else if (surplus > 0L)
+      message(sprintf("%s is %d B (+%d over %d) — likely a defective sensor sending an oversized value; affected field(s) will read NA.",
+                      basename(bf), n_file, surplus, exp_len$sep))
+  }
+}
+```
+
+---
+
+## Decode
+
+```{r decode}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+
+if (use_bin) {
+  # ---- Binary snowchain path ------------------------------------------------
+  # Decode every file, order oldest → newest. The NEWEST message is the "primary"
+  # one shown in the single-message sections; all feed "Zeitlicher Verlauf".
+  all_bin <- lapply(bin_files, read_snowchain_bin, fields = fields, n_nodes = n_nodes)
+  ord       <- order(sapply(all_bin, `[[`, "time_unix"))
+  all_bin   <- all_bin[ord]
+  bin_files <- bin_files[ord]
+  n_msg     <- length(all_bin)
+
+  bin          <- all_bin[[n_msg]]
+  primary_file <- bin_files[n_msg]
+  time_utc   <- unix2utc(bin$time_unix)
+  adc_temp_C <- adc2temp(bin$adc_temp)
+  battery_mv <- bin$battery_mv
+  battery_lo <- bin$battery_lo
+  battery_hi <- bin$battery_hi
+  battery_partial <- bin$battery_partial
+  bin_fmt    <- if (bin$has_sep) "0x7C-separated" else "no separators"
+
+  nodes <- bin_to_nodes(bin, fields, lab_cal)
+
+} else {
+  # ---- Hex email path -------------------------------------------------------
+  hex <- toupper(trimws(paste0(MSG1, MSG2)))
+
+  if (nchar(hex) == 0) {
+    cat("No payload — set BIN_FILE or paste hex into MSG1 / MSG2 above and re-render.\n")
+    knitr::knit_exit()
+  }
+
+  if (nchar(hex) != expected_hex) {
+    warning(sprintf(
+      "Expected %d hex chars (%d bytes) for IMEI %s, got %d. Payload may be incomplete.",
+      expected_hex, expected_hex %/% 2L, imei, nchar(hex)
+    ))
+  }
+
+  schema <- build_schema(n_nodes, fields)
+  raw    <- decode_hex(schema, hex)
+
+  time_utc   <- unix2utc(raw$time_unix)
+  adc_temp_C <- adc2temp(raw$adc_temp)
+  battery_mv <- as.integer(raw$battery_mv)
+  battery_lo <- battery_mv; battery_hi <- battery_mv; battery_partial <- FALSE
+}
+```
+
+---
+
+## Diagnostics
+
+```{r diagnostics}
+check <- function(val, lo, hi, label, unit) {
+  ok  <- !is.na(val) && val >= lo && val <= hi
+  col <- if (ok) "#2ecc71" else "#e74c3c"
+  tag <- if (ok) "OK" else "CHECK"
+  cat(sprintf('<span style="color:%s">%s</span>  **%s**: %.1f %s  *(expected %g – %g)*\n\n',
+              col, tag, label, val, unit, lo, hi))
+}
+```
+
+::: {.callout-note}
+## Message summary — `r cfg$label` (IMEI `r imei`)
+
+| | |
+|---|---|
+| **Time (UTC)** | `r format(time_utc, "%Y-%m-%d %H:%M:%S")` |
+| **Battery** | `r if (battery_partial) sprintf("%d–%d mV (low byte lost — defective-sensor shift)", battery_lo, battery_hi) else paste0(battery_mv, " mV")` |
+| **ADC temp** | `r round(adc_temp_C, 2)` °C |
+| **Kalibrierung** | `r cal_method` |
+| **Source** | `r if (use_bin) paste0("binary: ", basename(primary_file), " (", bin_fmt, ")") else paste0("hex: ", nchar(hex), " chars / ", nchar(hex) %/% 2, " bytes")` |
+| **Messages loaded** | `r if (use_bin) sprintf("%d file(s)%s", n_msg, if (n_msg > 1) " — newest shown below; see Zeitlicher Verlauf for the series" else "") else "1 (hex)"` |
+:::
+
+```{r diag-checks, results='asis'}
+check(battery_mv,  5500, 7200, "Battery",  "mV")
+check(adc_temp_C, -60,   40,   "ADC temp", "°C")
+```
+
+---
+
+## Node data
+
+```{r node-table}
+if (!use_bin) {
+  # Build nodes dataframe from hex-decoded raw list
+  ntc_fields <- fields[fields != "gnd"]
+  gnd_field  <- if ("gnd" %in% fields) "gnd" else NULL
+
+  nodes <- data.frame(node = seq_len(n_nodes))
+
+  for (f in ntc_fields) {
+    col_raw <- paste0("n", nodes$node, ".", f)
+    cnts    <- sapply(col_raw, function(nm) raw[[nm]])
+    nodes[[paste0(f, "_counts")]] <- cnts          # raw counts (pre-calibration)
+    if (f == "pressure") nodes$pressure_hPa  <- pressure2hPa(cnts)
+    else                 nodes[[paste0(f, "_C")]] <- calibrate_channel(cnts, f, lab_cal)
+  }
+
+  if (!is.null(gnd_field)) {
+    col_raw <- paste0("n", nodes$node, ".gnd")
+    nodes$gnd <- sapply(col_raw, function(nm) raw[[nm]])
+  }
+}
+
+# CSV gets the raw counts too; the on-page table stays calibrated for readability.
+src_label <- if (use_bin) basename(primary_file) else cfg$label
+knitr::kable(nodes |> select(-ends_with("_counts")), digits = 2,
+             caption = sprintf("All nodes — %s | %s UTC",
+                               src_label, format(time_utc, "%Y-%m-%d %H:%M")))
+```
+
+---
+
+## Profil
+
+```{r plot-snowmelt, fig.height=8, fig.width=6}
+# NTC rank within node: NTC1=1, NTC2=2, TestSB=3; height = (node-1)*3*s + rank*s
+s <- cfg$spacing_cm
+long <- nodes |>
+  select(node, ends_with("_C")) |>
+  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C") |>
+  filter(!is.na(temp_C)) |>          # drop defective sensors (sentinel → NA, e.g. topmost NTC3)
+  mutate(
+    sensor   = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
+    ntc_rank = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
+    hoehe_cm = (node - 1L) * 3L * s + ntc_rank * s
+  )
+
+max_h <- n_nodes * 3L * s
+ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
+  geom_path(data = arrange(long, hoehe_cm), colour = "grey65", linewidth = 0.4) +
+  geom_point(aes(colour = sensor, shape = sensor), size = 2.5) +
+  scale_y_continuous(
+    name   = "Höhe (cm)",
+    limits = c(0, max_h),
+    breaks = seq(0, max_h, by = max(s, 8L))
+  ) +
+  scale_x_continuous(name = "Temperatur (°C)") +
+  scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c",
+                                 "NTC3 (TestSB)" = "#27ae60")) +
+  labs(
+    title    = sprintf("Temperaturprofil — %s", cfg$label),
+    subtitle = sprintf("%s UTC  |  IMEI %s", format(time_utc, "%Y-%m-%d %H:%M"), imei),
+    colour   = NULL, shape = NULL
+  ) +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+---
+
+## Zeitlicher Verlauf
+
+Only shown when more than one `.bin` file is loaded (a time series). Every message
+contributes; the single-message sections above show the newest one.
+
+```{r ts-flag}
+multi <- use_bin && exists("all_bin") && n_msg > 1L
+```
+
+```{r ts-build, eval=multi}
+# Long table across all messages: one row per (time, node, sensor), carrying
+# both the calibrated temperature and the raw counts (pre-calibration).
+series_wide <- bind_rows(lapply(all_bin, function(b)
+  bin_to_nodes(b, fields, lab_cal) |> mutate(time = unix2utc(b$time_unix))))
+
+temp_l <- series_wide |> select(node, time, ends_with("_C")) |>
+  pivot_longer(ends_with("_C"), names_to = "sensor", values_to = "temp_C")
+cnt_l  <- series_wide |> select(node, time, ends_with("_counts")) |>
+  pivot_longer(ends_with("_counts"), names_to = "sensor", values_to = "counts") |>
+  mutate(sensor = sub("_counts$", "_C", sensor))
+
+series_long <- left_join(temp_l, cnt_l, by = c("node", "time", "sensor")) |>
+  filter(!is.na(temp_C))
+```
+
+```{r ts-snowmelt, eval=multi, fig.height=11, fig.width=15}
+# Two stacked panels over the same time series:
+#  (top)    Hovmöller heatmap — Höhe (same axis as the profile plot) × time,
+#           fill = temperature. Each measurement is one evenly-spaced column.
+#  (bottom) Line plot — temperature vs real time, one line per sensor height,
+#           coloured by Höhe; reads the diurnal cooling directly.
+s   <- cfg$spacing_cm
+ts  <- series_long |>
+  mutate(
+    sensor    = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3 (TestSB)"),
+    ntc_rank  = case_when(sensor == "NTC1" ~ 1L, sensor == "NTC2" ~ 2L, TRUE ~ 3L),
+    hoehe_cm  = (node - 1L) * 3L * s + ntc_rank * s,
+    height_id = paste(node, sensor)
+  )
+tlevels <- format(sort(unique(ts$time)), "%m-%d %H:%M")
+ts  <- ts |> mutate(tlab = factor(format(time, "%m-%d %H:%M"), levels = tlevels))
+max_h <- n_nodes * 3L * s
+
+# Companion strip (left of the heatmap, same y-axis): sensor type at each height.
+sensor_cols <- c(NTC1 = "#2980b9", NTC2 = "#e74c3c", "NTC3 (TestSB)" = "#27ae60")
+strip_df <- expand.grid(node = seq_len(n_nodes), ntc_rank = 1:3) |>
+  mutate(sensor   = factor(c("NTC1", "NTC2", "NTC3 (TestSB)")[ntc_rank],
+                           levels = names(sensor_cols)),
+         hoehe_cm = (node - 1L) * 3L * s + ntc_rank * s)
+
+p_sensor <- ggplot(strip_df, aes(x = 1, y = hoehe_cm, fill = sensor)) +
+  geom_tile() +
+  scale_fill_manual(values = sensor_cols, name = NULL) +
+  scale_y_continuous(name = "Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  scale_x_continuous(name = "Sensor", breaks = NULL, expand = c(0, 0)) +
+  labs(title = " ", subtitle = " ") +
+  theme_bw(base_size = 13) +
+  theme(panel.grid = element_blank(), legend.position = "left",
+        legend.key.size = unit(0.8, "lines"))
+
+# Two companion curves on the same height axis (variance & mean−trend residual).
+sensor_by_h <- strip_df |> select(hoehe_cm, sensor)
+
+var_df <- ts |> group_by(hoehe_cm) |>
+  summarise(sd_t = 1.4826 * mad(temp_C, na.rm = TRUE), .groups = "drop") |>
+  left_join(sensor_by_h, by = "hoehe_cm") |> arrange(hoehe_cm)
+
+# Mittel−Trend = per-height time-median minus a single LINEAR height trend, once
+# with the lab calibration and once with the fixed Beta curve (from counts).
+ts <- ts |> mutate(temp_beta = NTC_beta(counts))
+lin_offset <- function(col) {
+  d <- ts |> select(time, hoehe_cm, y = all_of(col)) |> filter(is.finite(y)) |>
+    group_by(time) |> mutate(r = 1000 * (y - fitted(lm(y ~ hoehe_cm)))) |> ungroup()
+  d |> group_by(hoehe_cm) |>
+    summarise(off_mK = mean(r), se_mK = sd(r) / sqrt(n()), .groups = "drop") |>
+    left_join(sensor_by_h, by = "hoehe_cm")
+}
+off_lab  <- lin_offset("temp_C")
+off_beta <- lin_offset("temp_beta")
+xr_off   <- range(c(off_lab$off_mK  + 2 * off_lab$se_mK,  off_lab$off_mK  - 2 * off_lab$se_mK,
+                    off_beta$off_mK + 2 * off_beta$se_mK, off_beta$off_mK - 2 * off_beta$se_mK),
+                  na.rm = TRUE)
+
+ybreaks <- seq(0, max_h, by = max(s, 8L))
+p_var <- ggplot(var_df, aes(sd_t, hoehe_cm)) +
+  geom_path(colour = "grey75", linewidth = 0.3) +
+  geom_point(aes(colour = sensor), size = 1.5) +
+  scale_colour_manual(values = sensor_cols, guide = "none") +
+  scale_y_continuous(name = NULL, limits = c(0, max_h), breaks = ybreaks, expand = c(0, 0)) +
+  scale_x_continuous(name = "SD/Zeit (°C)") +
+  labs(title = "Varianz", subtitle = "NTC2 ↑") +
+  theme_bw(base_size = 13) +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        panel.grid.minor = element_blank())
+
+# NTC3 calibration outliers (nodes 71/77/80/50/51/26) at their NTC3-row heights.
+cal_outlier_h <- c(144, 180, 192, 216, 228, 288)
+
+mk_mean <- function(d, ttl, sub) {
+  out <- d |> filter(hoehe_cm %in% cal_outlier_h)
+  ggplot(d, aes(off_mK, hoehe_cm)) +
+    geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+    geom_errorbarh(aes(xmin = off_mK - 2 * se_mK, xmax = off_mK + 2 * se_mK),
+                   height = 0, colour = "grey70", linewidth = 0.3) +
+    geom_path(colour = "grey80", linewidth = 0.3) +
+    geom_point(aes(colour = sensor), size = 1.5) +
+    geom_point(data = out, shape = 21, size = 3.6, stroke = 0.9,
+               colour = "black", fill = NA) +
+    scale_colour_manual(values = sensor_cols, guide = "none") +
+    scale_y_continuous(name = NULL, limits = c(0, max_h), breaks = ybreaks, expand = c(0, 0)) +
+    scale_x_continuous(name = "Mittel−Trend ±2·SE (mK)", limits = xr_off) +
+    labs(title = ttl, subtitle = sub) +
+    theme_bw(base_size = 13) +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+          panel.grid.minor = element_blank())
+}
+p_mean_lab  <- mk_mean(off_lab,  "Mittel−Trend", "lab-kal. (○ = Kal-Outlier)")
+p_mean_beta <- mk_mean(off_beta, "Mittel−Trend", "Beta (fix)")
+
+p_heat <- ggplot(ts, aes(x = tlab, y = hoehe_cm, fill = temp_C)) +
+  geom_tile() +
+  scale_fill_distiller(palette = "RdYlBu", direction = -1, name = "T (°C)") +
+  scale_y_continuous(name = NULL, limits = c(0, max_h),
+                     breaks = seq(0, max_h, by = max(s, 8L)), expand = c(0, 0)) +
+  labs(title    = sprintf("Zeitlicher Verlauf — %s", cfg$label),
+       subtitle = sprintf("%d Messungen  |  IMEI %s", n_msg, imei),
+       x = NULL) +
+  theme_bw(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        panel.grid  = element_blank())
+
+p_line <- ggplot(ts, aes(x = time, y = temp_C,
+                         group = height_id, colour = hoehe_cm)) +
+  geom_line(alpha = 0.5, linewidth = 0.4) +
+  geom_point(size = 1) +
+  scale_colour_viridis_c(name = "Höhe (cm)") +
+  labs(x = "Zeit (UTC)", y = "Temperatur (°C)") +
+  theme_bw(base_size = 13)
+
+(p_sensor + p_var + p_mean_lab + p_mean_beta + p_heat +
+   plot_layout(widths = c(0.5, 1.3, 1.3, 1.3, 5))) / p_line +
+  plot_layout(heights = c(3, 2))
+```
+
+---
+
+## Zoom — die 5 untersten Sensoren
+
+Frage: **werden die untersten Stäbe allmählich vom Schnee eingegraben?** Schnee
+dämpft den Tagesgang, ein zugeschneiter Sensor müsste seine Tagesamplitude also
+verlieren und sich vom Rest der Säule **flach abkoppeln**. Der Zoom nimmt die
+fünf tiefsten Sensoren (4 / 8 / 12 / 16 / 20 cm; Höhe steigt → Farbe dunkler)
+und stellt zwei Panels übereinander: oben die absolute Temperatur, unten die
+Abweichung vom Median der ganzen Säule (= „Umgebung").
+
+```{r zoom-bottom, eval=multi, fig.height=8, fig.width=11}
+s        <- cfg$spacing_cm
+ntc_rank <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
+
+# Referenz = Median der ganzen Säule je Zeitpunkt (die "Umgebung").
+ref_med <- series_long |> group_by(time) |>
+  summarise(refT = median(temp_C, na.rm = TRUE), .groups = "drop")
+
+zb <- series_long |>
+  mutate(rank = ntc_rank[sensor], hoehe_cm = (node - 1L) * 3L * s + rank * s) |>
+  filter(hoehe_cm <= 5L * s) |>                       # die 5 untersten Sensoren
+  left_join(ref_med, by = "time") |>
+  mutate(anom = temp_C - refT,
+         lab  = factor(sprintf("%2d cm — K%d %s", hoehe_cm, node,
+                               c("NTC1", "NTC2", "NTC3")[rank])))
+zb$lab <- factor(zb$lab, levels = unique(zb$lab[order(zb$hoehe_cm)]))
+
+# Höhe ist GEORDNET → sequenzielle Ein-Ton-Rampe (dunkler = höher), keine 5
+# beliebigen Kategoriefarben.
+zcols <- setNames(colorRampPalette(c("#9ecae1", "#08306b"))(nlevels(zb$lab)),
+                  levels(zb$lab))
+
+p_abs <- ggplot(zb, aes(time, temp_C, colour = lab)) +
+  geom_line(linewidth = 0.5) +
+  scale_colour_manual(values = zcols, name = NULL) +
+  labs(title    = sprintf("Die 5 untersten Sensoren — %s", cfg$label),
+       subtitle = "Absolute Temperatur; alle fünf folgen weiter dem vollen Tagesgang",
+       x = NULL, y = "Temperatur (°C)") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+
+p_anom <- ggplot(zb, aes(time, anom, colour = lab)) +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  geom_line(linewidth = 0.5) +
+  scale_colour_manual(values = zcols, guide = "none") +
+  labs(subtitle = "Abweichung vom Median der ganzen Säule — ein eingegrabener Sensor müsste sich hier flach abkoppeln",
+       x = "Zeit (UTC)", y = "Sensor − Säulen-Median (°C)") +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+p_abs / p_anom + plot_layout(heights = c(1, 0.85))
+```
+
+```{r zoom-bottom-verdict, eval=multi, results='asis'}
+# Wächst die Höhen-Spreizung der Anomalie über die Zeit? Tagesspitze (max) der
+# Anomalie je Tag für den untersten (4 cm) und den fünften Sensor (20 cm).
+zday <- zb |> mutate(day = as.Date(time)) |>
+  group_by(day) |> filter(n_distinct(time) >= 5L) |> ungroup()
+sp <- zday |> filter(hoehe_cm %in% c(s, 5L * s)) |>
+  group_by(day, hoehe_cm) |> summarise(amax = max(anom, na.rm = TRUE), .groups = "drop") |>
+  pivot_wider(names_from = hoehe_cm, values_from = amax, names_prefix = "h") |>
+  mutate(spread = .data[[paste0("h", s)]] - .data[[paste0("h", 5L * s)]])
+first_sp <- head(sp, 1); last_sp <- tail(sp, 1)
+cat(sprintf(
+  "**Kein Eingraben — im Gegenteil.** Die Amplitude bleibt am **untersten** Sensor am größten und nimmt nach oben glatt ab; kein Sensor glättet sich. In der Anomalie koppelt sich der unterste Sensor über die Zeit **nach oben** ab (nicht flach): die Spitzen-Spreizung 4 cm gegenüber 20 cm wächst von **%+.2f °C** (%s) auf **%+.2f °C** (%s). Das ist die Signatur zunehmender Strahlungsaufheizung am untersten, oberflächennahen Ende — die Schneeoberfläche unter dem Kopf schmilzt eher ab, als dass sie die Stäbe zudeckt.\n",
+  first_sp$spread, format(first_sp$day, "%d.%m."),
+  last_sp$spread,  format(last_sp$day,  "%d.%m.")))
+```
+
+---
+
+## NTC2-Diagnose
+
+NTC1 / NTC2 / NTC3 sind je Node quasi am selben Ort, sollten also denselben
+Tagesgang sehen. Hier wird geprüft, ob **NTC2 systematisch einen stärkeren
+Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten).
+
+```{r ntc2-diag, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
+safe_amp <- function(x) { x <- x[is.finite(x)]; if (length(x) < 2L) NA_real_ else diff(range(x)) }
+
+diag_long <- series_long |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3"))
+
+common_df <- diag_long |> group_by(time) |>
+  summarise(common = mean(temp_C, na.rm = TRUE), .groups = "drop")
+
+per_node <- diag_long |>
+  left_join(common_df, by = "time") |>
+  group_by(node, sensor) |>
+  summarise(
+    amp   = safe_amp(temp_C),
+    slope = if (sum(is.finite(temp_C)) >= 2L)
+              cov(temp_C, common, use = "complete.obs") / var(common) else NA_real_,
+    .groups = "drop"
+  )
+
+amp_w <- per_node |> select(node, sensor, amp) |>
+  pivot_wider(names_from = sensor, values_from = amp) |>
+  mutate(ref = (NTC1 + NTC3) / 2, d = NTC2 - ref)
+
+summary_tab <- per_node |> group_by(sensor) |>
+  summarise(`Amplitude ⌀ (°C)` = mean(amp,   na.rm = TRUE),
+            `Slope ⌀`          = mean(slope, na.rm = TRUE),
+            `n Nodes`          = sum(!is.na(amp)), .groups = "drop")
+
+n_ok       <- sum(!is.na(amp_w$d))
+n_strong   <- sum(amp_w$NTC2 > amp_w$NTC1 & amp_w$NTC2 > amp_w$NTC3, na.rm = TRUE)
+amp_diff   <- mean(amp_w$d, na.rm = TRUE)
+pval       <- tryCatch(t.test(amp_w$NTC2, amp_w$ref, paired = TRUE)$p.value,
+                       error = function(e) NA_real_)
+ntc2_amp   <- summary_tab$`Amplitude ⌀ (°C)`[summary_tab$sensor == "NTC2"]
+others_amp <- max(summary_tab$`Amplitude ⌀ (°C)`[summary_tab$sensor != "NTC2"])
+ntc2_stronger <- isTRUE(ntc2_amp > others_amp) && isTRUE(!is.na(pval) && pval < 0.05)
+```
+
+```{r ntc2-table, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
+knitr::kable(summary_tab, digits = c(0, 2, 3, 0),
+             caption = sprintf("Pro-Sensor-Mittel über %d Messungen", n_msg))
+```
+
+```{r ntc2-verdict, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
+col <- if (ntc2_stronger) "#e67e22" else "#2ecc71"
+tag <- if (ntc2_stronger) "AUFFÄLLIG" else "unauffällig"
+cat(sprintf(
+  '<span style="color:%s">**%s**</span> — NTC2 vs. Mittel(NTC1, NTC3), paarweise je Node:\n\n',
+  col, tag))
+cat(sprintf("- Amplitude im Mittel **%+.2f °C** stärker als NTC1/NTC3.\n", amp_diff))
+cat(sprintf("- NTC2 am stärksten in **%d / %d** Nodes.\n", n_strong, n_ok))
+cat(sprintf("- Paired t-Test (Amplitude): **p = %s**.\n",
+            if (is.na(pval)) "n/a" else formatC(pval, format = "g", digits = 2)))
+cat(sprintf("\n%s\n",
+  if (ntc2_stronger)
+    "→ NTC2 zeigt einen systematisch stärkeren Tagesgang (wahrscheinlich Kanal-/Sensor-Effekt). Mit mehr vollen Tageszyklen bestätigen."
+  else
+    "→ Kein systematischer Mehr-Tagesgang von NTC2 in diesen Daten."))
+```
+
+```{r ntc2-plot, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.5, fig.width=9}
+ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
+  geom_line(alpha = 0.6, linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_hline(data = summary_tab,
+             aes(yintercept = `Amplitude ⌀ (°C)`, colour = sensor),
+             linetype = "dashed", linewidth = 0.4, show.legend = FALSE) +
+  scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c", NTC3 = "#27ae60")) +
+  labs(title = "Tagesgang-Amplitude je Node und Sensor",
+       subtitle = "gestrichelt: Sensor-Mittel — NTC2 (rot) liegt systematisch leicht höher",
+       x = "Node", y = "Amplitude max−min (°C)", colour = NULL) +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## Tape- & Alufolie-Experiment
+
+An denselben oberen Knoten wurden nacheinander zwei **optische** Manipulationen
+angebracht: zuerst **schwarzes Tape** (absorbiert Sonne → heizt die Stäbe), später
+**Alufolie** (reflektiert Sonne → kühlt sie im Sonnenlicht). Beide zeigen sich klar
+als Solar-Anomalie (NTC1 − Median aller Knoten) der betroffenen Knoten — mit
+**entgegengesetztem Vorzeichen**.
+
+| Behandlung | Knoten | von (UTC) | bis (UTC) | Solar-Signatur |
+|---|---|---|---|---|
+| **Schwarztape** | 6, 7, 8 | Do 2026-07-02 22:00 | Mo 2026-07-06 00:00 | **+3 … +16 °C** (heizt) |
+| **Alufolie** | 6, 7 | Do 2026-07-09 ~20:00 | So 2026-07-12 Nacht¹ | **−1 … −1.5 °C** (kühlt) |
+
+¹ Zum Zeitpunkt der neuesten Nachricht (07-12 06:15) ist die Folie noch angebracht;
+die Entfernung Sonntag Nacht liegt nach dem letzten Datensatz. **Knoten 8** war nur
+getapt (keine Folie): im Folien-Fenster ist seine Anomalie ~0/erratisch (separates
+Kontakt-/Sitz-Problem) — foliert sind **Knoten 6 und 7**.
+
+```{r tape-alu-setup, eval=multi}
+BLACK_NODES <- c(6L, 7L, 8L)
+ALU_NODES   <- c(6L, 7L)
+win <- data.frame(
+  treatment = c("Schwarztape", "Alufolie"),
+  start = as.POSIXct(c("2026-07-02 22:00", "2026-07-09 20:00"), tz = "UTC"),
+  end   = as.POSIXct(c("2026-07-06 00:00", "2026-07-12 22:00"), tz = "UTC"))
+
+# Näherung Sonnenhöhe (Grad) am GRIP-Standort, ohne Paket.
+solar_elev <- function(t, lat = 72.58, lon = -37.64) {
+  doy  <- as.numeric(format(t, "%j", tz = "UTC"))
+  hh   <- as.numeric(format(t, "%H", tz = "UTC")) + as.numeric(format(t, "%M", tz = "UTC")) / 60
+  decl <- 23.45 * sin(2 * pi * (284 + doy) / 365) * pi / 180
+  H    <- ((hh + lon / 15) - 12) * 15 * pi / 180; latr <- lat * pi / 180
+  asin(sin(latr) * sin(decl) + cos(latr) * cos(decl) * cos(H)) * 180 / pi
+}
+
+# NTC1 pro Knoten & Zeit → Anomalie ggü. Median aller Knoten (= Umgebung).
+ntc1_w  <- series_long |> filter(sensor == "ntc1_C") |> select(node, time, temp_C)
+med     <- ntc1_w |> group_by(time) |>
+  summarise(refT = median(temp_C, na.rm = TRUE), .groups = "drop")
+anom_df <- ntc1_w |> left_join(med, by = "time") |>
+  mutate(anom  = temp_C - refT,
+         elev  = solar_elev(time),
+         phase = factor(case_when(
+           time <  win$start[1] ~ "vor",
+           time <  win$end[1]   ~ "Schwarztape",
+           time <  win$start[2] ~ "zwischen",
+           time <  win$end[2]   ~ "Alufolie",
+           TRUE                 ~ "nach"),
+           levels = c("vor", "Schwarztape", "zwischen", "Alufolie", "nach")))
+```
+
+```{r tape-alu-timeline, eval=multi, fig.height=5, fig.width=12}
+treated <- anom_df |> filter(node %in% union(BLACK_NODES, ALU_NODES)) |>
+  mutate(Knoten = factor(node))
+ggplot(treated, aes(time, anom, colour = Knoten, group = node)) +
+  annotate("rect", xmin = win$start[1], xmax = win$end[1], ymin = -Inf, ymax = Inf,
+           fill = "grey30", alpha = 0.12) +
+  annotate("rect", xmin = win$start[2], xmax = win$end[2], ymin = -Inf, ymax = Inf,
+           fill = "#2980b9", alpha = 0.12) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_line(alpha = 0.7) + geom_point(size = 1.3) +
+  annotate("text", x = win$start[1], y = Inf, label = " Schwarztape", hjust = 0,
+           vjust = 1.4, size = 3.2, colour = "grey30") +
+  annotate("text", x = win$start[2], y = Inf, label = " Alufolie", hjust = 0,
+           vjust = 1.4, size = 3.2, colour = "#2980b9") +
+  scale_colour_brewer(palette = "Set1") +
+  labs(title = "Solar-Anomalie der behandelten Knoten (NTC1 − Median aller Knoten)",
+       subtitle = "Schwarztape heizt (+, grau schattiert), Alufolie kühlt (−, blau schattiert); dazwischen ~0",
+       x = "Zeit (UTC)", y = "NTC1 − Umgebung (°C)") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+```{r tape-alu-bars, eval=multi, fig.height=4.5, fig.width=11}
+phase_tab <- anom_df |>
+  filter(elev > 25, phase %in% c("vor", "Schwarztape", "zwischen", "Alufolie")) |>
+  group_by(node, phase) |>
+  summarise(anom = mean(anom, na.rm = TRUE), .groups = "drop") |>
+  mutate(behandelt = node %in% union(BLACK_NODES, ALU_NODES))
+ggplot(phase_tab, aes(node, anom, fill = behandelt)) +
+  geom_col() +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  facet_wrap(~ phase, nrow = 1) +
+  scale_fill_manual(values = c(`FALSE` = "grey75", `TRUE` = "#c0392b"),
+                    labels = c("blank", "behandelt (6/7/8)"), name = NULL) +
+  labs(title = "Solar-Anomalie je Knoten und Phase (hohe Sonne > 25°)",
+       subtitle = "nur die behandelten Knoten 6/7/8 heben sich ab — Tape positiv, Folie negativ",
+       x = "Knoten", y = "NTC1 − Umgebung (°C)") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom")
+```
+
+```{r tape-alu-verdict, eval=multi, results='asis'}
+hs     <- anom_df |> filter(elev > 25, node %in% ALU_NODES)
+ph_m   <- function(p) mean(hs$anom[hs$phase == p], na.rm = TRUE)
+cat(sprintf("**Ja — deutlich sichtbar, mit umgekehrtem Vorzeichen zum Tape.** Knoten 6/7 bei hoher Sonne (>25°) im Mittel: **vor %+.2f °C**, **Schwarztape %+.2f °C**, **zwischen %+.2f °C**, **Alufolie %+.2f °C**. Die reflektierende Folie kühlt die Stäbe im Sonnenlicht (weniger absorbierte Strahlung), während das schwarze Tape sie als Schwarzkörper aufheizte. Onset der Folie exakt in der Nacht Do→Fr (erste Hochsonnen-Nachricht 07-10 10:15 bereits ≈ −1.2 °C).\n",
+            ph_m("vor"), ph_m("Schwarztape"), ph_m("zwischen"), ph_m("Alufolie")))
+```
+
+---
+
+## Save result
+
+```{r save}
+# Newest message → per-node table.
+slug    <- if (use_bin) tools::file_path_sans_ext(basename(primary_file)) else paste0("imei", imei)
+outfile <- sprintf("data/decoded_%s_%s.csv", slug, format(time_utc, "%Y%m%d_%H%M%S"))
+write.csv(nodes, outfile, row.names = FALSE)
+cat("Saved:", outfile, "\n")
+
+# Whole time series → one long CSV (time, node, sensor, temp_C).
+if (exists("multi") && multi) {
+  ts_file <- sprintf("data/series_imei%s_%s.csv", imei, format(time_utc, "%Y%m%d_%H%M%S"))
+  write.csv(series_long, ts_file, row.names = FALSE)
+  cat("Saved series:", ts_file, "\n")
+}
+```

@@ -1,0 +1,30 @@
+# SnowMelt head 2, IMEI 301434062008160 — satellite position (1 = lowest, the
+# first node in the message stream) -> physical node number. Reported by TL,
+# 2026-07-15. All 24 nodes are calibrated in SM2_CalibrationCoefficients.csv.
+# Node 26 sits here at position 6; the GRIP head's table still lists node 26 at
+# its position 24 — that GRIP entry is the wrong one (TL, 2026-07-15).
+position,node
+1,28
+2,13
+3,18
+4,19
+5,25
+6,26
+7,95
+8,35
+9,62
+10,85
+11,86
+12,87
+13,88
+14,89
+15,90
+16,91
+17,92
+18,93
+19,94
+20,96
+21,97
+22,98
+23,99
+24,29
