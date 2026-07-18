@@ -26,6 +26,7 @@ EncoderHeads2026/
     ├── decode_snowmelt_newgrip.qmd  # ← SnowMelt GRIP (IMEI 300434065508020): melt profile
     ├── decode_snowmelt_dye3.qmd     # ← SnowMelt Dye3 (IMEI 301434062008160): melt profile
     ├── decode_chain.qmd       # ← Doppelkette (IMEI 301434062008130): borehole depth profile
+    ├── system_state.qmd       # ← Betriebs-Dashboard: Latenz (Uhr-Offset) & Batterie, alle 3
     ├── tape_experiment.qmd    # Black-tape solar-absorption experiment (SnowMelt)
     ├── derive_mean_calibration.R  # Universal mean lab-S4 fallback coefficients
     └── data/                  # Field decode outputs (tracked; filenames keyed by message time)

@@ -1,0 +1,187 @@
+---
+title: "System-State — Encoder Heads Greenland 2026"
+subtitle: "Betriebszustand der drei aktiven Sender: Latenz & Batterie (keine Wissenschaft)"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 10
+    fig-height: 5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Dieses Dokument ist **kein** wissenschaftliches Profil, sondern ein
+**Betriebs-Dashboard** der drei aktiven Systeme:
+
+1. **Latenz** = Empfangszeit (aus dem Rockblock-Export) − interne Messzeit (aus dem
+   Payload mitgesendet). Positiv = Nachricht kommt nach der Messung an (normale
+   Übertragungsverzögerung); **negativ = die interne Uhr läuft der Realzeit voraus**
+   (Empfang „vor" der Messung ist physikalisch unmöglich → Uhr-Offset).
+2. **Batteriespannung** (letztes Feld jeder Nachricht) über die Zeit.
+
+Beides je System, direkt vergleichbar.
+
+```{r core}
+source("decode_core.R")
+suppressMessages({library(dplyr); library(tidyr); library(ggplot2); library(patchwork)})
+```
+
+```{r config}
+# Die drei aktiven Systeme: IMEI (= .bin-Präfix), Rockblock-Modemseriennr. (so
+# heißen sie im CSV-Export), Kopf-Layout (für den robusten Decoder) und Anzeigefarbe.
+# Liste (kein tribble) — `fields` ist ein Zeichenvektor pro System.
+systems <- list(
+  list(key = "grip",  label = "SnowMelt GRIP", imei = "300434065508020",
+       modem = "234048", n_nodes = 24L, fields = c("ntc1","ntc2","testSB"),          colour = "#0072B2"),
+  list(key = "dye3",  label = "SnowMelt Dye3", imei = "301434062008160",
+       modem = "228679", n_nodes = 24L, fields = c("ntc1","ntc2","testSB"),          colour = "#E69F00"),
+  list(key = "chain", label = "Doppelkette",   imei = "301434062008130",
+       modem = "228680", n_nodes = 20L, fields = c("ntc1","ntc2","gnd","pressure"),  colour = "#009E73")
+)
+sys_df   <- bind_rows(lapply(systems, function(s)
+  data.frame(key = s$key, label = s$label, imei = s$imei, modem = s$modem, colour = s$colour)))
+sys_cols <- setNames(sys_df$colour, sys_df$label)
+
+DOWNLOAD_GLOB <- "../download/*.csv"   # Rockblock-Exporte (Empfangszeit lebt nur hier)
+TESTDATA_DIR  <- "../testdata"         # .bin (Daten of record) für Zeit + Batterie
+```
+
+```{r decode-bins}
+# Für jedes System alle .bin dekodieren → interne Zeit + Batteriespannung.
+# Größen-Filter: gültig, wenn die Datei auf nosep ODER sep passt, jeweils zzgl.
+# 0…n_nodes Defekt-Überlaufbytes (ein defekter Sensor sendet ein Byte zu viel).
+# Verwirft Garbage (16 B, 47 B …), behält 225/226 (nosep+Defekt) & 300 (sep).
+decode_system <- function(s) {
+  fields <- s$fields; n_nodes <- s$n_nodes
+  exp <- bin_expected_len(n_nodes, fields)
+  files <- Sys.glob(file.path(TESTDATA_DIR, paste0(s$imei, "-*.bin")))
+  out <- lapply(files, function(f) {
+    n <- file.info(f)$size
+    ok <- (n - exp$nosep) %in% 0:n_nodes || (n - exp$sep) %in% 0:n_nodes
+    if (!ok) return(NULL)
+    b <- tryCatch(read_snowchain_bin(f, fields, n_nodes), error = function(e) NULL)
+    if (is.null(b)) return(NULL)
+    data.frame(imei = s$imei, label = s$label,
+               internal = unix2utc(b$time_unix), time_unix = b$time_unix,
+               battery_mv = b$battery_mv, battery_partial = b$battery_partial)
+  })
+  bind_rows(out)
+}
+bins <- bind_rows(lapply(systems, decode_system))
+# battery_partial: ein Defekt-Überlauf hat das Batterie-Lowbyte verschluckt; der
+# Wert ist auf ±256 mV rekonstruiert — für einen Zustands-Trend brauchbar, bleibt
+# also erhalten (nur als grober markiert).
+```
+
+```{r receipt-latency}
+# Empfangszeit aus dem Rockblock-CSV, je Modem, verschlüsselt über die interne Zeit
+# des Payloads (erste 4 Byte) → damit an die .bin gejoint. Überlappende Exporte
+# werden dedupliziert (gleiche interne Zeit = gleiche Nachricht).
+old_lc <- Sys.getlocale("LC_TIME"); Sys.setlocale("LC_TIME", "C")
+csv <- bind_rows(lapply(Sys.glob(DOWNLOAD_GLOB), read.csv, check.names = FALSE))
+
+recv <- csv |>
+  filter(Direction == "MO", nchar(trimws(Payload)) >= 400L) |>
+  transmute(
+    # Modemseriennr. aus "RockBLOCK <nr> - Head_..": Teil vor " -" nehmen, Ziffern
+    # behalten (robuster als ein Backreference-sub, das hier leer zurückgab).
+    modem   = gsub("[^0-9]", "", sub(" -.*", "", Device)),
+    payload = trimws(Payload),
+    receipt = as.POSIXct(`Date Time (UTC)`, format = "%d/%b/%Y %H:%M:%S", tz = "UTC")) |>
+  filter(modem %in% sys_df$modem) |>
+  mutate(time_unix = strtoi(substr(payload, 1L, 8L), 16L),
+         imei      = setNames(sys_df$imei, sys_df$modem)[modem]) |>
+  distinct(imei, time_unix, .keep_all = TRUE) |>
+  select(imei, time_unix, receipt)
+Sys.setlocale("LC_TIME", old_lc)
+
+state <- bins |>
+  left_join(recv, by = c("imei", "time_unix")) |>
+  mutate(latency_min = as.numeric(difftime(receipt, internal, units = "mins")),
+         battery_V   = battery_mv / 1000)
+```
+
+## Übersicht
+
+```{r status-table}
+status <- state |> group_by(System = label) |>
+  summarise(
+    `Nachrichten`      = n(),
+    `Letzte Messung (UTC)` = format(max(internal), "%m-%d %H:%M"),
+    `Batterie zuletzt (V)` = round(battery_V[which.max(internal)], 2),
+    `Batterie min (V)`     = round(min(battery_V, na.rm = TRUE), 2),
+    `Latenz Median (min)`  = round(median(latency_min, na.rm = TRUE), 1),
+    `mit Empfangszeit`     = sum(!is.na(latency_min)),
+    .groups = "drop")
+knitr::kable(status, caption = "Betriebszustand je System (Batterie über die gesamte .bin-Historie; Latenz nur wo der Rockblock-Export die Nachricht enthält).")
+```
+
+## Latenz — Empfang minus interne Zeit
+
+Nur Nachrichten, die im Rockblock-Export enthalten sind (dort steht die
+Empfangszeit). Gestrichelt = 0 (Empfang = Messzeit). Werte **unter** 0 heißen: die
+interne Uhr des Senders läuft der Realzeit voraus.
+
+```{r plot-latency, fig.height=5}
+# Punkte statt Linie: die Latenz ist pro Nachricht ein diskreter Uhr-Offset; eine
+# verbindende Linie über Datenlücken würde einen Drift vortäuschen, den es nicht gibt.
+lat <- state |> filter(!is.na(latency_min))
+ggplot(lat, aes(internal, latency_min, colour = label)) +
+  geom_hline(yintercept = 0, colour = "grey55", linetype = "dashed") +
+  geom_point(size = 1.9) +
+  scale_colour_manual(values = sys_cols, name = NULL) +
+  labs(title = "Latenz: Empfangszeit − interne Messzeit",
+       subtitle = "positiv = Übertragungsverzögerung · negativ = interne Uhr läuft vor (konstanter Offset ⇒ reine Uhr-Fehlstellung)",
+       x = "Interne Messzeit (UTC)", y = "Empfang − intern (Minuten)") +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r latency-note, results='asis'}
+sm <- lat |> group_by(label) |>
+  summarise(med = median(latency_min), lo = min(latency_min), hi = max(latency_min), .groups = "drop")
+cat("Median-Latenz je System: ",
+    paste(sprintf("**%s %+.0f min**", sm$label, sm$med), collapse = ", "),
+    ". Ein konstant negativer Wert ist ein reiner **Uhr-Offset** (interne Uhr zu schnell gestellt), ",
+    "kein Übertragungsproblem — die Uhr ließe sich per `SC`-Kommando neu setzen.\n", sep = "")
+```
+
+## Batteriespannung
+
+Offene Symbole = **nur Highbyte** rekonstruiert (ein Defektsensor hat das
+Batterie-Lowbyte verschluckt): der Wert stimmt auf **±256 mV**, ist aber auf
+256-mV-Stufen quantisiert — daher wirkt so eine Reihe künstlich konstant. Bei GRIP
+betrifft das praktisch alle Nachrichten; Dye3 und Chain haben die volle Auflösung.
+
+```{r plot-battery, fig.height=5}
+batt <- state |> filter(!is.na(battery_V)) |>
+  mutate(Auflösung = ifelse(battery_partial, "±256 mV (Highbyte)", "genau"))
+ggplot(batt, aes(internal, battery_V, colour = label)) +
+  geom_line(linewidth = 0.5, alpha = 0.6) +
+  geom_point(aes(shape = Auflösung), size = 1.8) +
+  scale_colour_manual(values = sys_cols, name = NULL) +
+  scale_shape_manual(values = c("genau" = 16, "±256 mV (Highbyte)" = 1), name = NULL) +
+  labs(title = "Batteriespannung über die Zeit",
+       subtitle = "letztes Feld jeder Nachricht · gesamte .bin-Historie je System",
+       x = "Interne Messzeit (UTC)", y = "Batterie (V)") +
+  theme_bw(base_size = 13) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r battery-note, results='asis'}
+bs <- batt |> group_by(label) |>
+  summarise(first = battery_V[which.min(internal)], last = battery_V[which.max(internal)],
+            min = min(battery_V), .groups = "drop") |>
+  mutate(trend = last - first)
+cat("Batterie zuletzt / Trend über den Zeitraum: ",
+    paste(sprintf("**%s %.2f V (%+.2f V)**", bs$label, bs$last, bs$trend), collapse = ", "),
+    ". Der Abfall der Doppelkette (~0,5 V um den Einbau) ist echt (volle Auflösung); ",
+    "GRIPs scheinbar konstante Linie ist das Highbyte-Artefakt.\n", sep = "")
+```
