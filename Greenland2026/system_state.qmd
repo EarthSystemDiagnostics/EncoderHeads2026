@@ -153,6 +153,42 @@ cat("Median-Latenz je System: ",
     "kein Übertragungsproblem — die Uhr ließe sich per `SC`-Kommando neu setzen.\n", sep = "")
 ```
 
+### Feinstruktur — Offset abgezogen
+
+Der große Offset (GRIP ~−2 h, Dye3/Chain ~+1 h) überdeckt die eigentliche
+Variation. Hier ist je System der **eigene Median abgezogen**, freie y-Achse pro
+System, damit die **Tag-zu-Tag-Streuung in Sekunden** sichtbar wird. So sieht man,
+wie stabil Uhr + Übertragung tatsächlich sind (und wo einzelne Nachrichten später
+ankommen — spätere Satellitenpässe/Retries).
+
+```{r plot-latency-fine, fig.height=7}
+LAT_FINE_S <- 120   # Ausreißer über ±2 min = Uhr-Neustellung / erster Fix, nicht Alltag
+fine <- lat |> group_by(label) |>
+  mutate(resid_s = (latency_min - median(latency_min)) * 60) |> ungroup()
+n_out <- sum(abs(fine$resid_s) > LAT_FINE_S)
+fine_in <- fine |> filter(abs(resid_s) <= LAT_FINE_S)
+
+ggplot(fine_in, aes(internal, resid_s, colour = label)) +
+  geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+  geom_line(linewidth = 0.4, alpha = 0.5) + geom_point(size = 1.9) +
+  scale_colour_manual(values = sys_cols, guide = "none") +
+  facet_wrap(~ label, scales = "free_y", ncol = 1) +
+  labs(title = "Latenz-Feinstruktur — System-Offset abgezogen",
+       subtitle = sprintf("Latenz minus System-Median; %d Ausreißer >±%d s (Uhr-Neustellung / erster Fix) ausgeblendet",
+                          n_out, LAT_FINE_S),
+       x = "Interne Messzeit (UTC)", y = "Abweichung vom System-Offset (s)") +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+```
+
+```{r latency-fine-note, results='asis'}
+sd_tab <- fine_in |> group_by(label) |>
+  summarise(sd = round(sd(resid_s), 1), hi = round(max(resid_s), 0), .groups = "drop")
+cat("Streuung um den Offset (SD / Maximum): ",
+    paste(sprintf("**%s %.1f s / %+.0f s**", sd_tab$label, sd_tab$sd, sd_tab$hi), collapse = ", "),
+    ". Uhr und Übertragung sind auf wenige Sekunden stabil; einzelne Spitzen = später ",
+    "abgesetzte Nachricht (nächster Iridium-Pass).\n", sep = "")
+```
+
 ## Batteriespannung
 
 Offene Symbole = **nur Highbyte** rekonstruiert (ein Defektsensor hat das
