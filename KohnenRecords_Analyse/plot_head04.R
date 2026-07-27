@@ -5,7 +5,7 @@ library(ggplot2)
 library(lubridate)
 library(patchwork)
 
-d <- read_csv("./data/decoded_head04_231710.csv", show_col_types = FALSE) |>
+d <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALSE) |>
   mutate(time_utc = as_datetime(time_utc))
 
 # ---- Node metadata (adjust depths once known) ----

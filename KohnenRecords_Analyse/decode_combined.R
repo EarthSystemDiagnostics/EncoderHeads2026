@@ -71,6 +71,31 @@ schema_head04 <- paste(
     collapse = " "),
   "battery_mv")
 
+# ---- head04 per-node lab calibration (2023, variant 'Both'; head04 ONLY) --------
+# The Kohnen borehole sensors were lab-calibrated in 2023 (Nora Hirsch); the S4
+# coefficients live in data/head04_calibration.csv (built by
+# build_head04_calibration.R). counts→R and S4→°C are identical to NTCcounts2temp's
+# resistance step, so we only swap the ln(R) polynomial for the per-sensor one.
+# head03 has no such table and keeps the universal Beta curve (NTCcounts2temp).
+NTC_s4 <- function(cnt, co) {
+  H <- (-cnt * 1e6) / (cnt - 33554432); r <- (H * 499000) / (499000 - H)
+  1 / (co[1] + co[2]*log(r) + co[3]*log(r)^2 + co[4]*log(r)^3) - 273.15
+}
+h04_cal  <- read_csv("./data/head04_calibration.csv", show_col_types = FALSE)
+h04_coef <- setNames(
+  lapply(seq_len(nrow(h04_cal)),
+         function(i) c(h04_cal$a[i], h04_cal$b[i], h04_cal$c[i], h04_cal$d[i])),
+  sprintf("n%d.ntc%d", h04_cal$node, h04_cal$ntc))
+# Add n<node>.ntc<k>_temp_C via the per-sensor S4 fit (Beta fallback if a sensor
+# is absent from the table).
+calibrate_head04 <- function(df) {
+  for (cc in grep("^n[0-9]+\\.ntc[12]$", names(df), value = TRUE)) {
+    co <- h04_coef[[cc]]
+    df[[paste0(cc, "_temp_C")]] <- if (is.null(co)) NTCcounts2temp(df[[cc]]) else NTC_s4(df[[cc]], co)
+  }
+  df
+}
+
 # ---- Read old CSV (pre-Cloudloop) ----
 
 old_raw <- read_csv(
@@ -179,9 +204,9 @@ decoded_10 <- df_10 |>
   mutate(
     time_utc   = unix2utc(time_unix),
     adc_temp_C = adc2temp(adc_temp),
-    across(matches("\\.ntc[12]$"), ~ NTCcounts2temp(.x), .names = "{.col}_temp_C"),
     across(matches("\\.testSB$"),  ~ pressure2hPa(.x),   .names = "{.col}_hPa")
   ) |>
+  calibrate_head04() |>   # per-node 2023 lab S4 (not Beta)
   select(modem, recv_time_utc, start_time_utc, time_utc,
          battery_mv, adc_temp_C,
          matches("\\.ntc[12]_temp_C$"),

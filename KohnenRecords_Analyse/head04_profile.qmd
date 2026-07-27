@@ -1,6 +1,6 @@
 ---
 title: "head04 — Borehole Temperature Profile (Kohnen 2026)"
-subtitle: "Modem 231710 | Sensors at 5–200 m depth | Decoded from Rockblock SBD"
+subtitle: "Modem 231710 | borehole 1–201 m + shallow chain | Cloudloop API, 2023 lab calibration"
 author: "Thom Laepple"
 date: today
 format:
@@ -35,26 +35,31 @@ d <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALS
 ## Overview
 
 Modem **231710** (head04) transmits once daily (~17:38 UTC). The chain carries
-NTC thermistors at 5–200 m depth in the firn/ice at Kohnen station, Antarctica.
-All **n1–n25** are decoded: the data come from the **Cloudloop API**
-(`fetch_antarctic_cloudloop.R`), which returns the full 284-byte payload. (The
-earlier n1–n11 limit was an artefact of the 128-byte **web-export** truncation.)
+NTC thermistors in the firn/ice at Kohnen station, Antarctica: **n1–n20 = the
+borehole chain (1–201 m)** and **n21–n25 = a shallow 10 m-chain (1–6 m)**. All
+n1–n25 are decoded from the full 284-byte payload via the **Cloudloop API**
+(`fetch_antarctic_cloudloop.R`).
+
+**Calibration:** per-sensor **2023 lab S4** coefficients (Nora Hirsch, variant
+"Both" = Fluke + climate-chamber), applied in `decode_combined.R` from
+`data/head04_calibration.csv`. This replaces the universal Beta curve, which read
+~3.7 °C too warm at these temperatures — the lab calibration puts the deep firn at
+≈ −44.5 °C, matching Kohnen's known mean-annual temperature. (head03 has no
+per-sensor table and keeps the Beta curve.)
 
 **Data range:** `r format(min(d$time_utc), "%d %b %Y")` – `r format(max(d$time_utc), "%d %b %Y")`
 (`r nrow(d)` daily observations)
 
 ```{r node-metadata}
-# Placeholder depths: evenly spaced 5–200 m across all 25 nodes.
-# (All 25 now decode via the Cloudloop API; under the old 128-B truncation only
-# n1–n11 were available, so this table used to stop at n11.)
-# Adjust node_depths once true installation depths are available.
-depth_step <- (200 - 5) / (25 - 1)
-node_depths <- tibble(
-  node  = 1:25,
-  depth = round(5 + (0:24) * depth_step, 1)
-)
-knitr::kable(node_depths, col.names = c("Node", "Depth (m) [placeholder]"),
-             caption = "Assumed sensor depths — replace with true values")
+# Real installation depths + node order from the 2023 lab calibration
+# (data/head04_calibration.csv, built by build_head04_calibration.R).
+# n1–n20 = borehole 1–201 m; n21–n25 = shallow 10 m-chain 1–6 m. The node order
+# (kept from the deployment Excel sheet) is confirmed by the SD-vs-depth check:
+# per-node SD falls monotonically with depth (Spearman ≈ −0.99).
+node_depths <- read_csv("./data/head04_calibration.csv", show_col_types = FALSE) |>
+  distinct(node, depth = depth_m) |> arrange(node)
+knitr::kable(node_depths, col.names = c("Node", "Depth (m)"),
+             caption = "Sensor depths (2023 deployment).")
 ```
 
 ---
@@ -70,8 +75,7 @@ ntc_long <- d |>
 
 ggplot(ntc_long, aes(time_utc, temp_C, colour = depth, group = node)) +
   geom_line(linewidth = 0.8) +
-  scale_colour_viridis_c(option = "plasma", direction = -1,
-                         name = "Tiefe (m)\n[Platzhalter]") +
+  scale_colour_viridis_c(option = "plasma", direction = -1, name = "Depth (m)") +
   scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
   labs(
     title    = "NTC1 temperatures by depth — head04 (modem 231710)",
@@ -81,8 +85,8 @@ ggplot(ntc_long, aes(time_utc, temp_C, colour = depth, group = node)) +
   theme_minimal(base_size = 13)
 ```
 
-The near-surface nodes (n1, n2) cool rapidly as the Antarctic winter sets in.
-Below ~21 m (n3 onward) the amplitude decreases sharply and the signal becomes
+The near-surface nodes (n1, n2; 1–2 m) cool rapidly as the Antarctic winter sets
+in. Below ~10 m the amplitude decreases sharply and the signal becomes
 quasi-stationary, reflecting the thermal diffusion length-scale in firn.
 
 ---
@@ -102,7 +106,7 @@ profiles <- ntc_long |>
 ggplot(profiles, aes(temp_C, depth, colour = date, group = date)) +
   geom_path(linewidth = 1, alpha = 0.9) +
   geom_point(size = 2.5) +
-  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_y_reverse(name = "Depth (m)") +
   scale_colour_viridis_d(option = "turbo", name = "Date") +
   labs(
     title    = "Temperature–depth profiles at selected dates",
@@ -135,7 +139,7 @@ p_sd <- ggplot(node_stats, aes(sd_T, depth)) +
   geom_point(aes(colour = sd_T), size = 4) +
   geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
   scale_colour_viridis_c(option = "plasma", direction = -1, guide = "none") +
-  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_y_reverse(name = "Depth (m)") +
   scale_x_log10() +
   labs(title = "Temperature variability vs. depth",
        subtitle = "Log scale: each additional ~8 m reduces SD by ~50%",
@@ -147,7 +151,7 @@ p_mean <- ggplot(node_stats, aes(mean_T, depth)) +
   geom_point(aes(colour = depth), size = 4, show.legend = FALSE) +
   scale_colour_viridis_c(option = "plasma", direction = -1) +
   geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
-  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_y_reverse(name = "Depth (m)") +
   labs(title = "Mean temperature vs. depth",
        subtitle = sprintf("Deep mean annual temperature: ~%.2f°C (n11)",
                           node_stats$mean_T[node_stats$node == 11]),
@@ -206,7 +210,7 @@ ggplot(trends, aes(slope_mK_month, depth)) +
   geom_point(aes(colour = sig, size = log10(abs(slope_mK_month) + 1))) +
   geom_text(aes(label = paste0("n", node, "  ", sig_label)),
             hjust = -0.15, size = 3.2) +
-  scale_y_reverse(name = "Depth (m) [placeholder]") +
+  scale_y_reverse(name = "Depth (m)") +
   scale_colour_manual(values = c("FALSE" = "grey60", "TRUE" = "firebrick"),
                       labels = c("n.s. (p ≥ 0.05)", "p < 0.05"), name = NULL) +
   scale_size_continuous(range = c(2, 7), guide = "none") +
@@ -343,8 +347,11 @@ ggplot(sb_long, aes(time_utc, value, colour = factor(node), group = node)) +
 
 ## Notes and caveats
 
-- **Depth values are placeholders** — replace `node_depths` in the setup chunk
-  with true installation depths once available.
+- **Depths are the 2023 deployment values** (from `head04_calibration.csv`):
+  n1–n20 borehole 1–201 m, n21–n25 shallow 10 m-chain 1–6 m. Node order confirmed
+  by the SD-vs-depth check (Spearman ≈ −0.99).
+- **Per-sensor 2023 lab calibration** (variant "Both") — replaces the Beta curve
+  (which was ~3.7 °C too warm); deep firn ≈ −44.5 °C = Kohnen mean-annual.
 - **All n1–n25 + battery decoded** — via the Cloudloop API (full 284-byte payload);
   the former n1–n11 limit was the 128-byte web-export truncation, now resolved.
 - **Once-daily sampling** — one measurement per day (~17:38 UTC) gives no
