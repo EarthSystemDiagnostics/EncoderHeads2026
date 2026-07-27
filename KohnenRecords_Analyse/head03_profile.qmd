@@ -28,17 +28,14 @@ library(patchwork)
 d <- read_csv("./data/decoded_head03_231709_combined.csv", show_col_types = FALSE) |>
   mutate(time_utc = as_datetime(time_utc))
 
-# Payload coverage: old CSV = full 680-hex (all 35 nodes + battery_mv)
-#                   new CSV = truncated 256-hex (n1-n11 valid, n12-n15 artefacts, n16-n35 NA)
+# Payloads now come from the Cloudloop API for the WHOLE record (see
+# fetch_antarctic_cloudloop.R + decode_combined.R): every node n1–n35 + battery is
+# valid throughout. The former 128-B web-export truncation (which invalidated
+# n12+ after 2026-03-06) NO LONGER APPLIES. CUTOFF_FULL now just marks the source
+# switch (old Rockblock export → Cloudloop API) for reference lines.
 CUTOFF_FULL <- as_datetime("2026-03-06 00:00:00", tz = "UTC")
 
-d <- d |>
-  mutate(
-    full_payload = time_utc < CUTOFF_FULL,
-    # Mask pressure artefacts: n12-n15 in new period have wrong values (>800 hPa)
-    across(matches("^n(1[2-9]|[2-9][0-9])\\.pressure_hPa$"),
-           ~ if_else(!full_payload, NA_real_, .x))
-  )
+d <- d |> mutate(full_payload = TRUE)   # full payload everywhere → no masking
 ```
 
 ## Overview
@@ -47,12 +44,16 @@ Modem **231709** (head03) sends **two messages per transmission** (~09:03 and ~2
 a 340-byte primary message and a 54-byte continuation message that must be concatenated
 before decoding. The chain carries NTC thermistors and pressure sensors.
 
-**Data coverage:**
+**Data coverage:** full payload (all **n1–n35** + battery) across the whole record.
+Earlier the Rockblock/Cloudloop **web CSV** export truncated payloads at 128 B, so
+only n1–n11 survived after 6 Mar; the data now come from the **Cloudloop API**
+(`fetch_antarctic_cloudloop.R` → `decode_combined.R`), which returns the full
+340 + 54 byte message, so all nodes are valid end-to-end.
 
 | Period | Date range | Nodes decoded | Source |
 |--------|-----------|---------------|--------|
-| Full payload | 18 Jan – 5 Mar 2026 | n1–n35 + battery | Old Rockblock export (untruncated) |
-| Truncated | 6 Mar – 12 Jun 2026 | n1–n11 valid; n12–n15 artefacts | results-3.csv (128-byte cap) |
+| Old export | 18 Jan – 5 Mar 2026 | n1–n35 + battery | Old Rockblock export (untruncated) |
+| Cloudloop API | 6 Mar 2026 – present | n1–n35 + battery | Cloudloop API (full payload) |
 
 **Total:** `r nrow(d)` transmissions,
 `r format(min(d$time_utc), "%d %b %Y")` – `r format(max(d$time_utc), "%d %b %Y")`
@@ -80,10 +81,10 @@ ggplot(ntc_long |> filter(!is.na(temp_C), temp_C > -70),
   scale_colour_viridis_c(option = "turbo", name = "Node") +
   scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
   geom_vline(xintercept = CUTOFF_FULL, linetype = "dashed", colour = "grey50") +
-  annotate("text", x = CUTOFF_FULL, y = -25, label = " truncated\n from here",
+  annotate("text", x = CUTOFF_FULL, y = -25, label = " Cloudloop API\n from here",
            hjust = 0, size = 3, colour = "grey40") +
   labs(title = "head03 (231709): all NTC temperatures",
-       subtitle = "n1 (red) = atmosphere  |  subsurface nodes show seasonal cooling  |  dashed = payload truncation starts",
+       subtitle = "n1 (red) = atmosphere  |  subsurface nodes show seasonal cooling  |  dashed = source switch (web export → API)",
        x = NULL, y = "Temperature (°C)") +
   theme_minimal(base_size = 13)
 ```
@@ -144,10 +145,10 @@ ggplot(pres_long, aes(time_utc, hPa, colour = node, group = node)) +
   scale_colour_viridis_c(option = "plasma", direction = -1, name = "Node") +
   scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
   geom_vline(xintercept = CUTOFF_FULL, linetype = "dashed", colour = "grey50") +
-  annotate("text", x = CUTOFF_FULL, y = 800, label = " n1-n11 only\n from here",
+  annotate("text", x = CUTOFF_FULL, y = 800, label = " Cloudloop API\n from here",
            hjust = 0, size = 3, colour = "grey40") +
   labs(title = "head03: pressure all nodes (plausible values 600–800 hPa only)",
-       subtitle = "Seasonal pressure increase Jan → Jun visible; n1 most variable",
+       subtitle = "Seasonal pressure increase Jan → Jul visible; n1 most variable; dashed = source switch (web export → API)",
        x = NULL, y = "Pressure (hPa)") +
   theme_minimal(base_size = 13)
 ```
@@ -296,8 +297,8 @@ completeness <- tibble(
 completeness |>
   filter(n_old > 0 | n_new > 0) |>
   knitr::kable(
-    col.names = c("Node", "N (Jan–Mar)", "N (Mar–Jun)", "Has pressure", "Coverage"),
-    caption   = "Data availability per node. Old period = untruncated payload (all nodes). New period = truncated (n1-n11 only)."
+    col.names = c("Node", "N (Jan–5 Mar)", "N (6 Mar–now)", "Has pressure", "Coverage"),
+    caption   = "Data availability per node. Both periods carry full payloads (all nodes) — old Rockblock export before 6 Mar, Cloudloop API after."
   )
 ```
 
@@ -306,9 +307,9 @@ completeness |>
 ## Notes
 
 - **n1** = atmospheric temperature sensor (most variable; the red line in all plots)
-- **n12–n15** in the new period (Mar–Jun): excluded as truncation artefacts
-  (values in the raw data reach 3000–5400 hPa — unphysical)
-- **n16–n35** in the new period: all NA (beyond truncation boundary)
-- **battery_mv** only available old period; range `r paste(range(d$battery_mv, na.rm=TRUE), collapse="–")` mV
+- **All nodes n1–n35 valid across the whole record** — the data now come from the
+  Cloudloop **API** (full 340 + 54 byte payload). The earlier n12+ artefacts were an
+  artefact of the 128-B **web-export** truncation, which no longer applies.
+- **battery_mv** available throughout; range `r paste(range(d$battery_mv, na.rm=TRUE), collapse="–")` mV
 - Pressure increase Jan → Jun (~+15 hPa for n2–n11) is consistent with known seasonal
   atmospheric pressure cycle at Kohnen and possible firn compaction signal

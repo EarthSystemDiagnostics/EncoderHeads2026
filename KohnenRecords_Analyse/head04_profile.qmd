@@ -36,20 +36,22 @@ d <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALS
 
 Modem **231710** (head04) transmits once daily (~17:38 UTC). The chain carries
 NTC thermistors at 5–200 m depth in the firn/ice at Kohnen station, Antarctica.
-Due to a 128-byte payload truncation in the Rockblock CSV export, only nodes
-**n1–n11** are reliably decoded from the current dataset; nodes n12–n25 require
-the full payload via the Cloudloop API.
+All **n1–n25** are decoded: the data come from the **Cloudloop API**
+(`fetch_antarctic_cloudloop.R`), which returns the full 284-byte payload. (The
+earlier n1–n11 limit was an artefact of the 128-byte **web-export** truncation.)
 
 **Data range:** `r format(min(d$time_utc), "%d %b %Y")` – `r format(max(d$time_utc), "%d %b %Y")`
 (`r nrow(d)` daily observations)
 
 ```{r node-metadata}
-# Placeholder depths: evenly spaced 5–200 m across 25 total nodes
-# Adjust node_depths once true installation depths are available
+# Placeholder depths: evenly spaced 5–200 m across all 25 nodes.
+# (All 25 now decode via the Cloudloop API; under the old 128-B truncation only
+# n1–n11 were available, so this table used to stop at n11.)
+# Adjust node_depths once true installation depths are available.
 depth_step <- (200 - 5) / (25 - 1)
 node_depths <- tibble(
-  node  = 1:11,
-  depth = round(5 + (0:10) * depth_step, 1)
+  node  = 1:25,
+  depth = round(5 + (0:24) * depth_step, 1)
 )
 knitr::kable(node_depths, col.names = c("Node", "Depth (m) [placeholder]"),
              caption = "Assumed sensor depths — replace with true values")
@@ -168,8 +170,10 @@ node_stats |>
 
 ## Linear trends and thermal diffusion
 
-The 98-day record is long enough to reveal the phase structure of the seasonal
-wave in the firn.
+The `r round(max(d$t_days))`-day record (now full-length via the Cloudloop API)
+is long enough to reveal the phase structure of the seasonal wave in the firn —
+and, at the deep nodes, weak but statistically significant trends that the earlier
+short record could not resolve.
 
 ```{r trends}
 ntc_cols <- grep("^n[0-9]+\\.ntc1_temp_C$", names(d), value = TRUE)
@@ -249,10 +253,26 @@ ggplot(d_mid, aes(time_utc, temp_C, colour = factor(node), group = node)) +
   theme_minimal(base_size = 13)
 ```
 
-### Deep nodes (n7–n11): quasi-constant
+### Deep nodes (n7–n11): trend over the full record
+
+Zoomed to the deep, near-constant nodes. Over the **full `r round(max(d$t_days))`-day
+record** the deep-node trend (dashed = linear fit) is re-evaluated per node — the
+earlier 98-day window was too short to separate any trend from noise.
 
 ```{r deep-nodes}
-deep_cols <- grep("^n([7-9]|1[01])\\.ntc1_temp_C$", names(d), value = TRUE)
+deep_nodes <- 7:11
+deep_cols  <- sprintf("n%d.ntc1_temp_C", deep_nodes)
+
+# Per-node linear fit over the WHOLE record (mK/month + significance).
+deep_trends <- lapply(deep_nodes, function(n) {
+  dat <- na.omit(data.frame(t = d$t_days, y = d[[sprintf("n%d.ntc1_temp_C", n)]]))
+  s   <- summary(lm(y ~ t, dat))
+  tibble(node = n, slope_mK_month = s$coefficients[2, 1] * 30 * 1000,
+         se = s$coefficients[2, 2] * 30 * 1000, pval = s$coefficients[2, 4],
+         sd_T = sd(dat$y))
+}) |> bind_rows()
+n_sig <- sum(deep_trends$pval < 0.05)
+
 d_deep <- d |>
   select(time_utc, all_of(deep_cols)) |>
   pivot_longer(-time_utc, names_to = "sensor", values_to = "temp_C") |>
@@ -264,21 +284,35 @@ ggplot(d_deep, aes(time_utc, temp_C, colour = factor(node), group = node)) +
   geom_smooth(method = "lm", se = FALSE, linetype = "dashed",
               linewidth = 0.4, alpha = 0.6) +
   scale_colour_viridis_d(option = "viridis", direction = -1,
-                          name = "Node", labels = paste0("n", 7:11)) +
-  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
+                          name = "Node", labels = paste0("n", deep_nodes)) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%d %b") +
   labs(
-    title    = "Deep nodes n7–n11 (zoomed)",
-    subtitle = sprintf("Total range < 0.1°C  |  n11 SD = %.4f°C  |  No significant trend detectable",
-                       node_stats$sd_T[node_stats$node == 11]),
+    title    = "Deep nodes n7–n11 — full record",
+    subtitle = sprintf("n11 SD = %.4f°C  |  %d of 5 deep nodes show a significant trend (p<0.05) over %d days",
+                       deep_trends$sd_T[deep_trends$node == 11], n_sig, round(max(d$t_days))),
     x = NULL, y = "Temperature (°C)"
   ) +
   theme_minimal(base_size = 13)
 ```
 
-No statistically significant trend is detectable in nodes n7–n11 within the
-98-day window. The estimated trends are < 5 mK/month with p > 0.05. Detecting
-a geothermal baseline trend of ~0.1 mK/month would require at least ~1 year of
-continuous data.
+```{r deep-trend-table}
+deep_trends |>
+  mutate(across(c(slope_mK_month, se, sd_T), \(x) round(x, 3)),
+         pval = formatC(pval, digits = 2, format = "g"),
+         sig  = ifelse(pval < 0.05, "yes", "—")) |>
+  knitr::kable(col.names = c("Node", "Trend (mK/mon)", "SE", "p-value", "SD (°C)", "p<0.05"),
+    caption = "Deep-node linear trend over the full record.")
+```
+
+Unlike the earlier 98-day window (where no deep-node trend was resolvable), the
+full `r round(max(d$t_days))`-day record reveals **weak but significant warming**
+at the deepest nodes — **n9 ≈ `r sprintf("%+.1f", deep_trends$slope_mK_month[deep_trends$node==9])`**,
+**n10 ≈ `r sprintf("%+.1f", deep_trends$slope_mK_month[deep_trends$node==10])`** and
+**n11 ≈ `r sprintf("%+.1f", deep_trends$slope_mK_month[deep_trends$node==11])` mK/month**
+(all p < 0.05). The sign and downward-decreasing magnitude are consistent with the
+**phase-lagged summer wave still diffusing to depth**, not a geothermal baseline
+(which would be ~0.1 mK/month and needs multi-year data). n11 remains the most
+stable sensor (SD `r sprintf("%.4f", deep_trends$sd_T[deep_trends$node==11])` °C).
 
 ---
 
@@ -311,8 +345,8 @@ ggplot(sb_long, aes(time_utc, value, colour = factor(node), group = node)) +
 
 - **Depth values are placeholders** — replace `node_depths` in the setup chunk
   with true installation depths once available.
-- **Only n1–n11 decoded** — the Rockblock CSV export truncates payloads at
-  128 bytes; full data (n1–n25 + battery_mv) requires the Cloudloop API.
+- **All n1–n25 + battery decoded** — via the Cloudloop API (full 284-byte payload);
+  the former n1–n11 limit was the 128-byte web-export truncation, now resolved.
 - **Once-daily sampling** — one measurement per day (~17:38 UTC) gives no
   information on the diurnal cycle at depth, but at these depths the diurnal
   signal is negligible.

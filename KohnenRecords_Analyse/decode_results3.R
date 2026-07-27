@@ -86,7 +86,7 @@ schema_head04 <- paste(
 # ---- Read data ----
 
 df_raw <- read_csv(
-  "./data/results-2.csv",   # Cloudloop export through 2026-07 (supersedes results-3.csv)
+  "./data/results-api-full.csv",  # FULL payloads from the Cloudloop API (fetch_antarctic_cloudloop.R)
   show_col_types = FALSE,
   col_types = cols(
     `At (UTC)` = col_character(),

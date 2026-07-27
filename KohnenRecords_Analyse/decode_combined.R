@@ -87,16 +87,15 @@ old_raw <- read_csv(
     source       = "old"
   )
 
-# ---- Read new CSV (Cloudloop export results-2.csv, through 2026-07) ----
-# Supersedes the earlier results-3.csv (Mar–Jun) in time; `Thing` here may carry a
-# "RockBLOCK " prefix, so pull the 6-digit modem serial out of it. NOTE: the
-# Cloudloop web CSV truncates payloads at 128 B (256 hex) — head03 decodes ~15 of
-# 35 nodes, head04 ~11 of 25, battery_mv = NA. Full payloads need the API
-# (fetch_cloudloop.R). The `Size` column still reports the TRUE message length, so
-# the 340+54 pairing and the 284-byte filter below stay correct.
+# ---- Read new source: FULL payloads from the Cloudloop API ----
+# data/results-api-full.csv is produced by fetch_antarctic_cloudloop.R and holds
+# UNtruncated payloads (head03 680+108 hex = all 35 nodes; head04 568 hex = all 25
+# nodes, battery included). This replaces the old web-export path (results-2.csv,
+# 128-B truncation → only ~15/~11 nodes). Same column shape (At (UTC) dmy, Thing =
+# serial, Size, Payload), so the pairing/decoding below is unchanged.
 
 new_raw <- read_csv(
-  "./data/results-2.csv",
+  "./data/results-api-full.csv",
   show_col_types = FALSE,
   col_types = cols(Size = col_integer(), .default = col_character())
 ) |>
