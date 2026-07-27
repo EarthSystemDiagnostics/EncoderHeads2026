@@ -337,10 +337,10 @@ anom <- ntc_long |>
   mutate(day = as.numeric(difftime(time_utc, min(time_utc), units = "days"))) |>
   group_by(node) |> mutate(anom = temp_C - mean(temp_C, na.rm = TRUE)) |> ungroup()
 
-C    <- 0.01                                   # linear threshold ≈ 10 mK
-slog <- function(x) sign(x) * log10(1 + abs(x) / C)
-brkK <- c(-10, -1, -0.1, -0.01, 0, 0.01, 0.1, 1, 10)
-labK <- c("−10", "−1", "−0.1", "−10 mK", "0", "10 mK", "0.1", "1", "10")
+C    <- 5e-4                                   # linear threshold ≈ 0.5 mK
+slog <- function(x) sign(x) * log10(1 + abs(x) / C)  # whole mK range gets colour
+brkK <- c(-10, -1, -0.1, -0.01, -0.001, 0, 0.001, 0.01, 0.1, 1, 10)
+labK <- c("−10", "−1", "−0.1", "−10 mK", "−1 mK", "0", "1 mK", "10 mK", "0.1", "1", "10")
 lim  <- max(abs(slog(range(anom$anom, na.rm = TRUE)))) * c(-1, 1)
 ord  <- order(bore$depth)
 anom$rank <- match(anom$node, bore$node[ord])  # equal-height bands, ordered by depth
