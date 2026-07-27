@@ -334,7 +334,6 @@ sichtbar. Nur die Bohrlochkette (1–201 m); weiße Streifen = Sendelücken.
 bore <- node_depths |> filter(node <= 20)
 anom <- ntc_long |>
   semi_join(bore, by = "node") |>
-  mutate(day = as.numeric(difftime(time_utc, min(time_utc), units = "days"))) |>
   group_by(node) |> mutate(anom = temp_C - mean(temp_C, na.rm = TRUE)) |> ungroup()
 
 C    <- 1e-4                                   # linear threshold ≈ 0.1 mK
@@ -347,17 +346,17 @@ ord  <- order(bore$depth)
 anom$rank <- match(anom$node, bore$node[ord])  # equal-height bands, ordered by depth
 ybr  <- c(1, 3, 5, 8, 11, 14, 17, 20); ylab <- round(bore$depth[ord][ybr])
 
-ggplot(anom, aes(day, rank, fill = slog(anom))) +
+ggplot(anom, aes(time_utc, rank, fill = slog(anom))) +
   geom_tile() +
   scale_fill_gradientn(
     colours = rev(c("#67001f","#b2182b","#d6604d","#f4a582","#fddbc7","#f7f7f7",
                     "#d1e5f0","#92c5de","#4393c3","#2166ac","#053061")),
     limits = lim, breaks = slog(brkK), labels = labK, name = "T-Anomalie [K]") +
   scale_y_reverse(breaks = ybr, labels = ylab, expand = c(0, 0)) +
-  scale_x_continuous(expand = c(0, 0)) +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b %Y", expand = c(0, 0)) +
   labs(title = "Temperatur-Anomalien mit der Zeit — Bohrloch",
        subtitle = "Anomalie vom Zeitmittel je Tiefe · signierte Log-Farbskala (0.1 mK → 10 K)",
-       x = "Tage seit erster Messung", y = "Tiefe (m)") +
+       x = "Datum (UTC)", y = "Tiefe (m)") +
   theme_minimal(base_size = 12) +
   theme(panel.grid = element_blank(), legend.key.height = unit(1.3, "cm"))
 ```
