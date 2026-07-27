@@ -57,8 +57,10 @@ per-sensor table and keeps the Beta curve.)
 # (kept from the deployment Excel sheet) is confirmed by the SD-vs-depth check:
 # per-node SD falls monotonically with depth (Spearman ≈ −0.99).
 node_depths <- read_csv("./data/head04_calibration.csv", show_col_types = FALSE) |>
-  distinct(node, depth = depth_m) |> arrange(node)
-knitr::kable(node_depths, col.names = c("Node", "Depth (m)"),
+  distinct(node, depth = depth_m) |> arrange(node) |>
+  # Two physically separate chains — never connect a profile line ACROSS them:
+  mutate(chain = if_else(node <= 20, "Bohrloch (1–201 m)", "Nebenkette (1–6 m)"))
+knitr::kable(node_depths, col.names = c("Node", "Depth (m)", "Chain"),
              caption = "Sensor depths (2023 deployment).")
 ```
 
@@ -103,14 +105,14 @@ profiles <- ntc_long |>
   mutate(date = as.character(as.Date(time_utc))) |>
   filter(date %in% profile_dates)
 
-ggplot(profiles, aes(temp_C, depth, colour = date, group = date)) +
-  geom_path(linewidth = 1, alpha = 0.9) +
+ggplot(profiles, aes(temp_C, depth, colour = date, group = interaction(date, chain))) +
+  geom_path(linewidth = 1, alpha = 0.9) +   # per (date, chain): never link across the two chains
   geom_point(size = 2.5) +
   scale_y_reverse(name = "Depth (m)") +
   scale_colour_viridis_d(option = "turbo", name = "Date") +
   labs(
     title    = "Temperature–depth profiles at selected dates",
-    subtitle = "Cooling progresses from the surface downward; deep nodes remain stable",
+    subtitle = "Borehole chain (1–201 m); the shallow 10 m-chain (1–6 m) is drawn as a separate profile",
     x = "Temperature (°C)"
   ) +
   theme_minimal(base_size = 13)
@@ -126,7 +128,7 @@ asymptotically flat at depth, consistent with thermal diffusion in firn.
 
 ```{r variability}
 node_stats <- ntc_long |>
-  group_by(node, depth) |>
+  group_by(node, depth, chain) |>
   summarise(
     mean_T  = mean(temp_C, na.rm = TRUE),
     sd_T    = sd(temp_C,   na.rm = TRUE),
@@ -135,7 +137,7 @@ node_stats <- ntc_long |>
   )
 
 p_sd <- ggplot(node_stats, aes(sd_T, depth)) +
-  geom_path(colour = "grey60", linewidth = 0.6) +
+  geom_path(aes(group = chain), colour = "grey60", linewidth = 0.6) +
   geom_point(aes(colour = sd_T), size = 4) +
   geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
   scale_colour_viridis_c(option = "plasma", direction = -1, guide = "none") +
@@ -147,7 +149,7 @@ p_sd <- ggplot(node_stats, aes(sd_T, depth)) +
   theme_minimal(base_size = 13)
 
 p_mean <- ggplot(node_stats, aes(mean_T, depth)) +
-  geom_path(colour = "grey60", linewidth = 0.6) +
+  geom_path(aes(group = chain), colour = "grey60", linewidth = 0.6) +
   geom_point(aes(colour = depth), size = 4, show.legend = FALSE) +
   scale_colour_viridis_c(option = "plasma", direction = -1) +
   geom_text(aes(label = paste0("n", node)), hjust = -0.35, size = 3.2) +
@@ -163,6 +165,7 @@ p_mean | p_sd
 
 ```{r variability-table}
 node_stats |>
+  select(node, depth, mean_T, sd_T, range_T) |>
   mutate(across(where(is.numeric), \(x) round(x, 3))) |>
   knitr::kable(
     col.names = c("Node", "Depth (m)", "Mean T (°C)", "SD (°C)", "Range (°C)"),
@@ -317,6 +320,51 @@ at the deepest nodes — **n9 ≈ `r sprintf("%+.1f", deep_trends$slope_mK_month
 **phase-lagged summer wave still diffusing to depth**, not a geothermal baseline
 (which would be ~0.1 mK/month and needs multi-year data). n11 remains the most
 stable sensor (SD `r sprintf("%.4f", deep_trends$sd_T[deep_trends$node==11])` °C).
+
+---
+
+## Anomalien mit der Zeit (Hovmöller, Log-Farbskala)
+
+Tiefe × Zeit als Farbfläche, Farbe = Temperatur-**Anomalie** vom Zeitmittel je
+Tiefe. Die **signierte Log-Skala** (linear innerhalb ±10 mK, darüber log10) macht
+das mK-kleine Tiefensignal und die K-große Oberflächenschwankung **gleichzeitig**
+sichtbar. Nur die Bohrlochkette (1–201 m); weiße Streifen = Sendelücken.
+
+```{r anomaly-hovmoller, fig.height=5, fig.width=11}
+bore <- node_depths |> filter(node <= 20)
+anom <- ntc_long |>
+  semi_join(bore, by = "node") |>
+  mutate(day = as.numeric(difftime(time_utc, min(time_utc), units = "days"))) |>
+  group_by(node) |> mutate(anom = temp_C - mean(temp_C, na.rm = TRUE)) |> ungroup()
+
+C    <- 0.01                                   # linear threshold ≈ 10 mK
+slog <- function(x) sign(x) * log10(1 + abs(x) / C)
+brkK <- c(-10, -1, -0.1, -0.01, 0, 0.01, 0.1, 1, 10)
+labK <- c("−10", "−1", "−0.1", "−10 mK", "0", "10 mK", "0.1", "1", "10")
+lim  <- max(abs(slog(range(anom$anom, na.rm = TRUE)))) * c(-1, 1)
+ord  <- order(bore$depth)
+anom$rank <- match(anom$node, bore$node[ord])  # equal-height bands, ordered by depth
+ybr  <- c(1, 3, 5, 8, 11, 14, 17, 20); ylab <- round(bore$depth[ord][ybr])
+
+ggplot(anom, aes(day, rank, fill = slog(anom))) +
+  geom_tile() +
+  scale_fill_gradientn(
+    colours = rev(c("#67001f","#b2182b","#d6604d","#f4a582","#fddbc7","#f7f7f7",
+                    "#d1e5f0","#92c5de","#4393c3","#2166ac","#053061")),
+    limits = lim, breaks = slog(brkK), labels = labK, name = "T-Anomalie [K]") +
+  scale_y_reverse(breaks = ybr, labels = ylab, expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(title = "Temperatur-Anomalien mit der Zeit — Bohrloch",
+       subtitle = "Anomalie vom Zeitmittel je Tiefe · signierte Log-Farbskala (mK → K)",
+       x = "Tage seit erster Messung", y = "Tiefe (m)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank(), legend.key.height = unit(1.3, "cm"))
+```
+
+Die Oberfläche (1 m) kippt um ~Tag 90 von warm (rot) auf kalt (blau) — der
+Herbst-/Winter-Einbruch —, und die Anomalie wandert dabei phasenverzögert nach
+unten (die abwärts geneigten Bänder). Unter ~40 m ist alles nahe null (weiß): das
+Jahressignal ist dort weggedämpft.
 
 ---
 
