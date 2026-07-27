@@ -86,16 +86,17 @@ schema_head04 <- paste(
 # ---- Read data ----
 
 df_raw <- read_csv(
-  "./data/results-3.csv",
+  "./data/results-2.csv",   # Cloudloop export through 2026-07 (supersedes results-3.csv)
   show_col_types = FALSE,
   col_types = cols(
     `At (UTC)` = col_character(),
-    Thing      = col_integer(),
     Size       = col_integer(),
     Payload    = col_character(),
     .default   = col_character()
   )
 ) %>%
+  # `Thing` may carry a "RockBLOCK " prefix here → pull the 6-digit modem serial.
+  mutate(Thing = as.integer(sub(".*?(\\d{6}).*", "\\1", Thing))) %>%
   rename(
     datetime_utc = `At (UTC)`,
     modem        = Thing,

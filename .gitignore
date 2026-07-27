@@ -24,3 +24,6 @@ Greenland2026/ntc2_investigation/
 # Rockblock CSV exports — transient input staging; the .bin files in testdata/ are
 # the tracked data of record (see README "Greenland field use").
 download/
+
+# Cloudloop CSV exports — transient input staging (like download/)
+cloudloop/

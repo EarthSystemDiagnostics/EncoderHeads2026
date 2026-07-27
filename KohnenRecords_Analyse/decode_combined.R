@@ -87,17 +87,24 @@ old_raw <- read_csv(
     source       = "old"
   )
 
-# ---- Read new CSV (results-3.csv) ----
+# ---- Read new CSV (Cloudloop export results-2.csv, through 2026-07) ----
+# Supersedes the earlier results-3.csv (Mar–Jun) in time; `Thing` here may carry a
+# "RockBLOCK " prefix, so pull the 6-digit modem serial out of it. NOTE: the
+# Cloudloop web CSV truncates payloads at 128 B (256 hex) — head03 decodes ~15 of
+# 35 nodes, head04 ~11 of 25, battery_mv = NA. Full payloads need the API
+# (fetch_cloudloop.R). The `Size` column still reports the TRUE message length, so
+# the 340+54 pairing and the 284-byte filter below stay correct.
 
 new_raw <- read_csv(
-  "./data/results-3.csv",
+  "./data/results-2.csv",
   show_col_types = FALSE,
-  col_types = cols(Thing = col_integer(), Size = col_integer(), .default = col_character())
+  col_types = cols(Size = col_integer(), .default = col_character())
 ) |>
-  filter(Thing %in% c(231709L, 231710L)) |>
+  mutate(modem = as.integer(sub(".*?(\\d{6}).*", "\\1", Thing))) |>
+  filter(modem %in% c(231709L, 231710L)) |>
   transmute(
     datetime_utc = dmy_hms(`At (UTC)`, tz = "UTC"),
-    modem        = Thing,
+    modem        = modem,
     nbytes       = Size,
     payload      = Payload,
     source       = "new"
