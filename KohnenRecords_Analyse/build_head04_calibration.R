@@ -13,10 +13,13 @@
 # head04 ONLY — head03 keeps the universal (Beta) curve.
 # Run from KohnenRecords_Analyse/:  Rscript build_head04_calibration.R
 
-suppressMessages({library(dplyr); library(readr); library(tidyr)})
+suppressMessages({library(dplyr); library(readr); library(tidyr); library(readxl)})
 
 VARIANT <- "Both"     # chosen 2026-07-27 (Fluke+CC combined; deep firn → −44.5 °C = Kohnen mean-annual)
 RDATA   <- "/Users/tlaepple/data/KohnenThermal/Calibrations.RData"
+# Authoritative node↔sensor↔depth sheet (Belegung). Borehole ("Tiefe ist") depths
+# come from here; the shallow 10 m-chain has no depth here → fall back to Calibrations.R.
+BELEGUNG <- "/Users/tlaepple/data/KohnenThermal/data/Temp-Node-Sensor_Belegung_AWI.xlsx"
 
 e <- new.env(); load(RDATA, envir = e)
 K1 <- e$Calibrations$Kette1[[VARIANT]]        # 50×4 (a,b,c,d)
@@ -31,6 +34,22 @@ d_10m  <- c(1.000,1.355,1.865,2.879,5.904)
 
 cal_row <- c(r_main, r_10m); depth <- c(d_main, d_10m)          # head04 n1..n25 order
 stopifnot(length(cal_row) == 25L)
+
+# Override the borehole depths with the authoritative "Tiefe ist" from the Belegung
+# sheet (keyed by physical node = cal_row + 4); keep Calibrations.R for the shallow
+# chain (n21–n25), where the sheet has no depth. Only differs by ~7 cm at n19/n20.
+if (file.exists(BELEGUNG)) {
+  tz <- suppressMessages(as.data.frame(read_excel(BELEGUNG, sheet = "Tiefenzuordnung")))
+  names(tz) <- as.character(unlist(tz[1, ])); tz <- tz[-1, 1:4]
+  names(tz) <- c("position", "node", "tiefe_ist", "tiefe_soll")
+  tz$node <- suppressWarnings(as.integer(tz$node))
+  tz$tiefe_ist <- suppressWarnings(as.numeric(tz$tiefe_ist))
+  d_ist <- setNames(tz$tiefe_ist, tz$node)              # physical node → actual depth
+  phys  <- cal_row + 4L
+  hit   <- !is.na(d_ist[as.character(phys)])
+  depth[hit] <- unname(d_ist[as.character(phys)][hit])
+  cat(sprintf("Depths from Belegung 'Tiefe ist' for %d borehole nodes.\n", sum(hit)))
+}
 
 # NTC1 = row cal_row; NTC2 = row cal_row + 25 (per predictChain)
 mk <- function(ntc, rowoff) {
