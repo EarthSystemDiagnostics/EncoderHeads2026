@@ -374,6 +374,285 @@ Kalibration) ist.
 
 ---
 
+# Das Tiefensignal (> 20 m): Messgrössen und Fehlerbudget
+
+Unter ~20 m ist das Jahressignal weggedämpft. Das Profil dort ist ein Gedächtnis
+der Oberflächentemperatur der vergangenen Jahrzehnte bis Jahrhunderte, und die
+Kette misst zusätzlich dessen zeitliche Änderung.
+
+Dieser Abschnitt behandelt die beiden **Messgrössen** — das Tiefenprofil $T(z)$
+und das Ratenprofil $\partial T/\partial t\,(z)$ — sowie ihr Fehlerbudget. Die
+Inversion auf eine Oberflächentemperatur-Geschichte, das Vorwärtsmodell und der
+Vergleich mit Hirsch et al. stehen in **`b40_inversion.qmd`**.
+
+Alle Auswertungen verwenden den **Mittelwert aus NTC1 und NTC2** je Knoten: zwei
+baugleiche Thermistoren am selben Ort halbieren das Rauschen, und ihre Differenz
+liefert den relativen Kalibrationsfehler.
+
+## Das gemessene Tiefenprofil
+
+```{r deep-profile-data}
+# Jahresgang-freies Mittel je Knoten: harmonische Regression, Achsenabschnitt.
+# rho = AR(1) der Residuen -> effektiver Stichprobenumfang für Mittel und Trend.
+tt_yr <- as.numeric(difftime(d$time_utc, min(d$time_utc), units = "days")) / 365.25
+Trec  <- max(tt_yr) * 365.25
+
+prof <- lapply(node_depths$node[node_depths$node <= 20], function(n) {
+  a <- d[[sprintf("n%d.ntc1_temp_C", n)]]; b <- d[[sprintf("n%d.ntc2_temp_C", n)]]
+  y <- rowMeans(cbind(a, b), na.rm = TRUE)
+  ok <- !is.na(y); x <- tt_yr[ok]; y <- y[ok]
+  h  <- lm(y ~ sin(2*pi*x) + cos(2*pi*x))
+  lt <- summary(lm(y ~ x))
+  r  <- resid(lm(y ~ x)); rho <- cor(r[-1], r[-length(r)])
+  nef <- max(length(y)*(1-rho)/(1+rho), 3)
+  dd <- a - b
+  tibble(node = n, depth = node_depths$depth[node_depths$node == n],
+         T_mean = coef(h)[1], amp_fit = sqrt(sum(coef(h)[2:3]^2)),
+         sd_T = sd(y), se_mean = sd(y)/sqrt(nef),
+         trend = lt$coefficients[2, 1],
+         trend_se = lt$coefficients[2, 2]*sqrt(length(y)/nef),
+         pair_offset = mean(dd, na.rm = TRUE),
+         pair_drift  = coef(lm(dd ~ tt_yr))[2])
+}) |> bind_rows()
+```
+
+```{r deep-profile-plot, fig.height=5.5, fig.width=10}
+deep <- prof |> filter(depth >= 16)
+zmin <- deep$depth[which.min(deep$T_mean)]
+
+ggplot(deep, aes(T_mean, depth)) +
+  geom_path(colour = "grey60", linewidth = 0.6) +
+  geom_point(aes(colour = depth), size = 3.5, show.legend = FALSE) +
+  geom_hline(yintercept = zmin, linetype = "dotted", colour = "firebrick") +
+  annotate("text", x = min(deep$T_mean), y = zmin - 6, hjust = 0, colour = "firebrick",
+           size = 3.5, label = sprintf("Minimum bei %.0f m", zmin)) +
+  geom_text(aes(label = paste0("n", node)), hjust = -0.5, size = 3) +
+  scale_colour_viridis_c(option = "plasma", direction = -1) +
+  scale_y_reverse(name = "Tiefe (m)") +
+  labs(title = "Temperaturprofil unter 16 m (Jahresgang entfernt)",
+       subtitle = sprintf("T(21 m) − T(%.0f m) = %+.0f mK", zmin,
+                          (deep$T_mean[deep$node == 8] - min(deep$T_mean)) * 1000),
+       x = "Temperatur (°C)") +
+  theme_minimal(base_size = 13)
+```
+
+Das Profil hat ein Minimum bei **~`r round(zmin)` m** und wird nach oben wie nach
+unten wärmer. Nach unten entspricht das dem geothermischen Gradienten. Im
+stationären Zustand — konstante Oberflächentemperatur, Advektion, Wärmestrom von
+unten — gilt $\partial T/\partial z > 0$ über die gesamte Tiefe; ein
+Zwischenminimum ist dort nicht möglich. Die Umkehr über den obersten ~60 m
+entspricht damit einem transienten Signal einer Oberflächenerwärmung. Diese
+Aussage ist von der Wahl des Vorwärtsmodells unabhängig.
+
+## Fehlerbudget
+
+Für die Inversion ist nicht die Absolutgenauigkeit massgeblich — ein für alle
+Sensoren gleicher Offset verschiebt nur die Referenz — sondern der
+**Sensor-zu-Sensor-Fehler**. NTC1 und NTC2 sitzen im selben Knoten und messen
+dieselbe Temperatur; ihre Differenz ist der relative Kalibrationsfehler.
+
+```{r error-budget}
+sig_cal <- sd(prof$pair_offset[prof$depth >= 5]) / sqrt(2)   # je Sensor
+noise_w <- median(sapply(prof$node[prof$depth >= 90], function(n) {
+  y <- rowMeans(cbind(d[[sprintf("n%d.ntc1_temp_C", n)]],
+                      d[[sprintf("n%d.ntc2_temp_C", n)]]), na.rm = TRUE)
+  sd(diff(y), na.rm = TRUE)/sqrt(2) }))
+tibble(
+  Quelle = c("relative Kalibration (NTC1−NTC2-Paare, > 5 m)",
+             "Relativdrift (Trend von NTC1−NTC2, > 20 m)",
+             "weisses Sensorrauschen (Folgedifferenzen, > 90 m)",
+             "Gesamt-SD inkl. langsamer Variabilität (21 m / 92 m)"),
+  Wert = c(sprintf("%.1f mK (1σ je Sensor)", sig_cal*1000),
+           sprintf("%.2f mK/Jahr (Median |·|)",
+                   median(abs(prof$pair_drift[prof$depth >= 20]))*1000),
+           sprintf("%.2f mK", noise_w*1000),
+           sprintf("%.1f / %.2f mK", prof$sd_T[prof$node==8]*1000,
+                   prof$sd_T[prof$node==15]*1000))
+) |> knitr::kable(caption = "Fehlerbudget des Tiefenprofils.")
+```
+
+Der Sensor-zu-Sensor-Fehler beträgt **σ ≈ `r sprintf("%.1f", sig_cal*1000)` mK**,
+im Wesentlichen tiefenunabhängig. Hirsch et al. geben für ihr Winch-System 2.7 mK
+bei Verwendung eines zweiten, unabhängigen Geräts an — derselbe Wert auf
+unabhängigem Weg bestimmt. Das weisse Sensorrauschen liegt unter 90 m bei
+`r sprintf("%.2f", noise_w*1000)` mK, die Relativdrift zwischen zwei Sensoren bei
+`r sprintf("%.2f", median(abs(prof$pair_drift[prof$depth >= 20]))*1000)` mK/Jahr.
+
+## Vorwärtsmodell zur Einordnung der Messgrössen
+
+Für die Trennung von diffusivem und nicht-diffusivem Anteil der Variabilität und
+für die Skalierung der Raten wird das Vorwärtsmodell aus `b40_inversion.qmd` in
+kompakter Form benötigt (Parameter nach Hirsch et al.: volle Eissäule,
+$\theta_b = -1.85$ °C bei $H = 2775$ m, Lliboutry $m = 11$, Akkumulation
+66 mm/a, temperaturabhängige Eisleitfähigkeit).
+
+```{r fwd-model, cache=TRUE}
+Ts <- -45.3; Tb <- -1.85; H <- 2775; ws <- 0.066; wb <- 0.0028; mm <- 11
+rho0 <- 340; rhoi <- 917; Rg <- 8.314; SPY <- 365.25*24*3600
+k0 <- 11*exp(-10160/(Rg*(Ts+273.15))); k1 <- 575*exp(-21400/(Rg*(Ts+273.15)))
+h55 <- 1000*(log(550/(rhoi-550)) - log(rho0/(rhoi-rho0)))/(rhoi*k0)
+dens <- function(zz) {
+  Z0 <- exp(rhoi*k0*zz/1000 + log(rho0/(rhoi-rho0))); r <- rhoi*Z0/(1+Z0)
+  i <- zz > h55
+  if (any(i)) { Z1 <- exp(rhoi*k1*(zz[i]-h55)/(1000*sqrt(ws)) + log(550/(rhoi-550)))
+                r[i] <- rhoi*Z1/(1+Z1) }
+  pmin(r, rhoi) }
+# stationärer Hintergrund über die volle Säule
+dzb <- 1; zb <- seq(0, H, by = dzb); rb <- dens(zb)
+zie <- cumsum(rb/rhoi)*dzb; ze <- zie/zie[length(zb)]
+Mb  <- (wb + (ws-wb)*(1 - (mm+2)/(mm+1)*ze + ze^(mm+2)/(mm+1)))*rhoi
+Tbg <- seq(Ts, Tb, length.out = length(zb))
+for (it in 1:40) {
+  Kb <- 9.828*exp(-0.0057*(Tbg+273.15))*(rb/rhoi)^1.885; Cb <- 152.5 + 7.122*(Tbg+273.15)
+  I <- c(0, cumsum(Mb[-1]*Cb[-1]/SPY/Kb[-1])*dzb); sh <- exp(I)/Kb
+  Tn <- Ts + (Tb-Ts)*cumsum(sh)*dzb/(sum(sh)*dzb)
+  if (max(abs(Tn-Tbg)) < 1e-6) { Tbg <- Tn; break }; Tbg <- Tn }
+# Störungsgitter für Jahresgang und Ratenskalierung
+dz <- 1; zg <- seq(0, 400, by = dz); nz <- length(zg)
+rz <- dens(zg); Tz <- approx(zb, Tbg, zg)$y
+cp <- 152.5 + 7.122*(Tz+273.15); K <- 9.828*exp(-0.0057*(Tz+273.15))*(rz/rhoi)^1.885
+Kh <- (K[-nz] + K[-1])/2; kap <- K/(rz*cp)*SPY
+wz <- approx(zb, Mb, zg)$y/rz; dtm <- 0.2*dz^2/max(kap)
+stepT <- function(Tp, Tsurf) {
+  F  <- Kh*diff(Tp)/dz
+  dv <- numeric(nz); dv[2:(nz-1)] <- (F[2:(nz-1)] - F[1:(nz-2)])/dz
+  av <- numeric(nz); av[2:(nz-1)] <- -wz[2:(nz-1)]*(Tp[3:nz] - Tp[1:(nz-2)])/(2*dz)
+  Tn <- Tp + dtm*(dv/(rz*cp)*SPY + av); Tn[1] <- Tsurf; Tn[nz] <- 0; Tn }
+# (a) Jahresgang-Amplitudenprofil je 1 K Oberflächenamplitude
+Tp <- numeric(nz); nt <- ceiling(12/dtm); rec <- matrix(0, ceiling(1/dtm), nz); j <- 0
+for (i in seq_len(nt)) { Tp <- stepT(Tp, sin(2*pi*i*dtm))
+  if (i > nt - nrow(rec)) { j <- j + 1; rec[j, ] <- Tp } }
+amp_mod <- apply(rec, 2, \(x) (max(x)-min(x))/2)
+# (b) erwartetes dT/dt heute für eine Oberflächenrampe von +2 K/Jahrhundert
+ramp_rate <- function(L, r = 0.02) {
+  Tp <- numeric(nz); nt <- ceiling(L/dtm); keep <- NULL
+  for (i in seq_len(nt)) { Tp <- stepT(Tp, r*(i*dtm))
+    if (i == nt - ceiling(1/dtm)) keep <- Tp }
+  Tp - keep }
+rates_mod <- lapply(c(30, 60, 100), ramp_rate)
+```
+
+```{r model-check, fig.height=4.5, fig.width=9}
+prof$amp_mod <- approx(zg, amp_mod, prof$depth)$y
+As <- prof$amp_fit[prof$node == 1] / prof$amp_mod[prof$node == 1]
+ggplot(prof |> filter(depth <= 21), aes(depth)) +
+  geom_line(aes(y = amp_mod*As*1000, colour = "Modell"), linewidth = 0.9) +
+  geom_point(aes(y = amp_fit*1000, colour = "gemessen"), size = 3) +
+  scale_y_log10() +
+  scale_colour_manual(values = c(Modell = "firebrick", gemessen = "grey25"), name = NULL) +
+  labs(title = "Dämpfung des Jahresgangs mit der Tiefe",
+       subtitle = sprintf("Oberflächenamplitude auf %.1f K skaliert (1 m-Sensor)", As),
+       x = "Tiefe (m)", y = "Jahresamplitude (mK, log)") +
+  theme_minimal(base_size = 13)
+```
+
+Das Modell gibt die beobachtete Dämpfung über 1–16 m innerhalb ~15 % wieder;
+$\kappa(z)$ ist damit auf diese Grössenordnung geprüft
+(`r sprintf("%.0f", kap[3])` m²/a bei 2 m, `r sprintf("%.0f", kap[93])` m²/a bei
+92 m). Der modellierte Hintergrundgradient über 158–201 m beträgt
+`r sprintf("%.2f", (approx(zb,Tbg,201.24)$y - approx(zb,Tbg,157.66)$y)/43.58*1000)` K/km
+gegenüber gemessenen
+`r sprintf("%.2f", (prof$T_mean[20]-prof$T_mean[18])/(prof$depth[20]-prof$depth[18])*1000)` ±
+`r sprintf("%.2f", sig_cal*sqrt(2)/(prof$depth[20]-prof$depth[18])*1000)` K/km.
+
+## Nicht-diffusive Bohrlochvariabilität
+
+Die Sensoren hängen in einem geschlossenen, aber luftgefüllten Bohrloch.
+Atmosphärische Druckschwankungen komprimieren die Luftsäule und verschieben die
+Sensoren im Temperaturgradienten. Die gemessene Streuung übersteigt die
+diffusive Vorhersage entsprechend: bei 21 m 45.7 mK gegenüber 1.7 mK. Die
+Differenz wird als eigener Fehlerterm geführt,
+
+$$\sigma_\text{BL}(z)=\sqrt{\max\!\left(0,\;\mathrm{sd}_\text{gemessen}^2-\mathrm{sd}_\text{diffusiv}^2\right)},$$
+
+und über eine Dekorrelationszeit $\tau$ in Fehler auf Zeitmittel und Trend
+umgerechnet: $\sigma_{\bar T}=\sigma_\text{BL}\sqrt{\tau/T}$ und
+$\sigma_{\dot T}=\sigma_\text{BL}\sqrt{12\tau/T}\,/\,T$.
+
+```{r borehole-noise}
+TAU <- 30                                    # Dekorrelationszeit (Tage), angenommen
+prof <- prof |> mutate(
+  sd_diff = amp_mod*As/sqrt(2),
+  sd_bh   = sqrt(pmax(0, sd_T^2 - sd_diff^2)),
+  sigT    = sqrt(sig_cal^2 + (sd_bh*sqrt(TAU/Trec))^2 + (0.02*amp_fit)^2),
+  sigR    = sqrt(trend_se^2 + (sd_bh*sqrt(12*TAU/Trec)/(Trec/365.25))^2))
+prof |> filter(depth >= 16) |>
+  transmute(`Tiefe (m)` = round(depth,1), `sd gemessen (mK)` = round(sd_T*1000,2),
+            `sd diffusiv (mK)` = round(sd_diff*1000,2), `σ_BL (mK)` = round(sd_bh*1000,2),
+            `σ auf T̄ (mK)` = round(sigT*1000,2),
+            `Rate (mK/a)` = round(trend*1000,2), `σ auf Rate (mK/a)` = round(sigR*1000,2)) |>
+  knitr::kable(caption = sprintf("Fehlerbudget mit Bohrlochvariabilität (τ = %d d).", TAU))
+```
+
+Die Dekorrelationszeit $\tau$ ist angenommen, nicht gemessen; 185 Tage reichen zu
+ihrer Bestimmung nicht aus. Sie skaliert die gesamte Ratenunsicherheit: für die
+Rate bei 92 m ergibt τ = 10 d ein Verhältnis von 4σ, τ = 30 d 2.4σ und τ = 90 d
+1.4σ. Ein Versuch, die Variabilität über den von head03 gemessenen Luftdruck zu
+erklären, ergibt tiefenübergreifend $R^2 \approx 0.15\!-\!0.23$ gegen
+$\mathrm{d}p/\mathrm{d}t$ und nahezu keinen Zusammenhang mit $p$ selbst; bei
+8.5 h Zeitversatz zwischen den Ketten und einmal-täglicher Abtastung ist dieser
+Befund nicht belastbar.
+
+## Das gemessene Ratenprofil
+
+```{r rate-plot, fig.height=5, fig.width=10}
+det <- function(s, N) s*sqrt(12)/(N*sqrt(365*N))
+kk <- prof$depth >= 16
+rr <- tibble(depth = rep(prof$depth[kk], 3),
+             val = unlist(lapply(rates_mod, \(x) approx(zg, x, prof$depth[kk])$y))*1000,
+             grp = rep(paste0("Rampe seit ", c(30,60,100), " a"), each = sum(kk)))
+dd2 <- tibble(depth = rep(prof$depth[kk], 3),
+              val = unlist(lapply(c(1,3,10), \(N) det(prof$sd_T[kk], N)))*1000,
+              grp = rep(paste0("Rauschgrenze nach ", c(1,3,10), " a"), each = sum(kk)))
+FLOOR <- 3e-4
+ob <- prof |> filter(kk) |>
+  transmute(depth, val = pmax(abs(trend)*1000, FLOOR),
+            lo = pmax(abs(trend)*1000 - sigR*1000, FLOOR),
+            hi = abs(trend)*1000 + sigR*1000,
+            vz = if_else(trend > 0, "Erwärmung", "Abkühlung"))
+ggplot(mapping = aes(val, depth)) +
+  geom_path(data = rr, aes(colour = grp), linewidth = 1) +
+  geom_path(data = dd2, aes(linetype = grp), colour = "grey35", linewidth = 0.6) +
+  geom_errorbarh(data = ob, aes(xmin = lo, xmax = hi), height = 3, colour = "grey45") +
+  geom_point(data = ob, aes(shape = vz), size = 2.8, fill = "white",
+             colour = "grey10", stroke = 0.9) +
+  scale_shape_manual(values = c("Erwärmung" = 21, "Abkühlung" = 25),
+                     name = "gemessen (185 d)") +
+  scale_x_log10(breaks = c(1e-3,1e-2,1e-1,1,10,100),
+                labels = c("0.001","0.01","0.1","1","10","100")) +
+  scale_y_reverse(name = "Tiefe (m)") +
+  scale_colour_viridis_d(option = "plasma", end = 0.8, name = NULL) +
+  scale_linetype_manual(values = c(3,2,1), name = NULL) +
+  labs(title = "Gemessenes ∂T/∂t (z), Modellerwartung und Rauschgrenze",
+       subtitle = "Modellkurven: Oberflächenrampe +2 K/Jahrhundert · Punkte = |Trend| über 185 d ± 1σ",
+       x = "|∂T/∂t| (mK/Jahr, log)") +
+  theme_minimal(base_size = 13)
+```
+
+```{r rate-table}
+prof |> filter(kk) |>
+  transmute(Knoten = paste0("n", node), `Tiefe (m)` = round(depth, 1),
+            `gemessen (mK/a)` = round(trend*1000, 2),
+            `1σ` = round(sigR*1000, 2),
+            `Modell, 60-a-Rampe` = round(approx(zg, rates_mod[[2]], depth)$y*1000, 2)) |>
+  knitr::kable(caption = "Gemessene lineare Rate über 185 Tage gegen die Modellerwartung.")
+```
+
+Oberhalb ~40 m ist der lineare Trend über 185 Tage nicht als Klimasignal
+interpretierbar: das Fenster deckt nur eine halbe Jahresperiode ab, der Fit misst
+dort die Flanke der Jahreswelle. Ab ~50 m fällt die Jahresamplitude unter 0.5 mK,
+ab 92 m unter 0.05 mK. Die Raten liegen dort bei 0.8–5.3 mK/a bei einer
+Unsicherheit von 0.4–1.7 mK/a.
+
+Das Ratenprofil ist eine gegenüber $T(z)$ eigenständige Messgrösse: der
+Sensor-zu-Sensor-Offset von `r sprintf("%.1f", sig_cal*1000)` mK geht nicht ein,
+und der stationäre Hintergrund erfüllt $\partial_t T_\text{bg} \equiv 0$, so dass
+die Rate strukturell unabhängig vom geothermischen Wärmestrom ist. Die
+Unsicherheit skaliert mit $T^{-3/2}$; nach 3 Jahren liegt sie bei 92 m bei
+~0.12 mK/a. Die Auswertung beider Kanäle steht in `b40_inversion.qmd`.
+
+---
+
 ## testSB channel (calibration reference)
 
 The `testSB` field is a firmware calibration reference — it should be constant

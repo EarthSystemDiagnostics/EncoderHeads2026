@@ -1,0 +1,850 @@
+---
+title: "EDML-Bohrloch B40: Oberflächentemperatur aus T(z) **und** ∂T/∂t(z)"
+subtitle: "head04-Thermistorkette (Modem 231710) · Inversion und Vergleich mit Hirsch et al."
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    fig-width: 11
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(readr); library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
+```
+
+## Was dieses Dokument macht
+
+Die head04-Kette hängt seit 2023/24 im **selben Bohrloch B40**, das Hirsch,
+Shaju, Zaspel & Laepple (unveröff., *Quantifying recent temperature trends on the
+plateau of Dronning Maud Land*) im Januar 2024 mit einer Winde profiliert haben.
+Damit liegen zwei unabhängige Messungen derselben Grösse vor, ergänzt um eine
+weitere Messgrösse aus der Kette: das **Ratenprofil** $\partial T/\partial t\,(z)$.
+
+Das Vorwärtsmodell folgt Hirsch et al.: volle Eissäule, Dirichlet-Randbedingung
+an der Basis, Lliboutry-Geschwindigkeitsprofil. Messgrössen und Fehlerbudget der
+Kette sind in `head04_profile.qmd` dokumentiert.
+
+Die Inversion ist **analytisch** statt MCMC: das Vorwärtsproblem ist in der
+Oberflächengeschichte *fast* linear (siehe Abschnitt 2.3), also ist der Posterior
+bei gaussschem Prior und gaussschem Fehler geschlossen verfügbar. Das entspricht
+dem Posterior, den Hirschs Sampler zieht, solange Basis und Rauschmodell fest
+sind; es fehlt die Marginalisierung über Hyperparameter.
+
+::: {.callout-important}
+## Kernaussage
+Mit dem Vorwärtsmodell von Hirsch et al. ergeben Profil und Ratenprofil dieselbe
+Struktur wie ihre Rekonstruktion. Auf der Grösse, die beide Verfahren bestimmen
+können — die letzten 20 Jahre gegenüber dem vorbeobachtungszeitlichen Mittel —
+liegen die Ergebnisse bei +1.15 bis +1.45 K gegen ihre ~1.1 K.
+
+Die Vorhersage ihrer Kurve reproduziert das hier gemessene Profil nicht
+vollständig (RMS 58 mK bei σ = 2.8–7.8 mK) und unterschätzt die gemessenen Raten
+unterhalb 92 m um Faktor ~2. Die daraus abgeleitete Korrektur beträgt
++1.29 ± 0.83 K im Kontrast jung-gegen-alt, also **1.6σ**. Ohne Glättungsprior ist
+kein einzelnes Zeitfenster signifikant, und jenseits von 300 Jahren enthält das
+201-m-Loch keine auflösbare Information (Abschnitt 6.5).
+
+Als Ursachen kommen ein zu stark gedämpfter Posterior in Hirsch et al. oder ein
+tiefenabhängiger systematischer Messfehler der Kette bei 111–201 m in Betracht;
+letzteren können die NTC1/NTC2-Paare nicht ausschliessen. Eine Entscheidung erfordert den direkten
+Vergleich der beiden gemessenen Profile.
+:::
+
+---
+
+## 1 Daten
+
+```{r data}
+cal <- read_csv("./data/head04_calibration.csv", show_col_types = FALSE)
+nd  <- cal |> distinct(node, depth = depth_m) |> arrange(node) |> filter(node <= 20)
+d   <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALSE)
+tt  <- as.numeric(difftime(d$time_utc, min(d$time_utc), units = "days"))/365.25
+Trec <- max(tt)*365.25
+
+P <- lapply(nd$node, function(n) {
+  a <- d[[sprintf("n%d.ntc1_temp_C", n)]]; b <- d[[sprintf("n%d.ntc2_temp_C", n)]]
+  y <- rowMeans(cbind(a, b)); ok <- !is.na(y); x <- tt[ok]; y <- y[ok]
+  h <- lm(y ~ sin(2*pi*x) + cos(2*pi*x))          # Jahresgang entfernen
+  s <- summary(lm(y ~ x))                          # linearer Trend
+  r <- resid(lm(y ~ x)); rho <- cor(r[-1], r[-length(r)])
+  tibble(node = n, depth = nd$depth[nd$node == n], T = coef(h)[1],
+         amp = sqrt(sum(coef(h)[2:3]^2)), sd = sd(y), rate = s$coefficients[2,1],
+         rse = s$coefficients[2,2]*sqrt(length(y)/(length(y)*(1-rho)/(1+rho))),
+         off = mean(a - b, na.rm = TRUE))
+}) |> bind_rows()
+sig_cal <- sd(P$off[P$depth >= 5])/sqrt(2)
+```
+
+Verwendet wird der **Mittelwert aus NTC1 und NTC2** je Knoten. Zwei baugleiche
+Thermistoren am selben Ort halbieren das Rauschen; ihre Differenz gibt den
+relativen Kalibrationsfehler, da sie dieselbe Temperatur messen.
+
+`r nrow(d)` Tagesmessungen, `r format(min(d$time_utc), "%d %b %Y")` bis
+`r format(max(d$time_utc), "%d %b %Y")`.
+
+### Fehlerbudget
+
+Die Sensoren hängen in einem geschlossenen, aber **luftgefüllten** Bohrloch. Die
+gemessene Streuung übersteigt im oberen Teil die diffusive Vorhersage um mehr als eine Grössenordnung;
+atmosphärische Druckschwankungen verschieben die Luftsäule und damit die Sensoren
+im Temperaturgradienten. Dieser nicht-diffusive Anteil wird als eigener
+Fehlerterm behandelt und über eine Dekorrelationszeit $\tau$ in Fehler auf
+Zeitmittel und Trend umgerechnet.
+
+```{r errbudget}
+TAU <- 30   # Dekorrelationszeit (Tage)
+```
+
+| Quelle | Wert |
+|---|---|
+| relative Kalibration (NTC1−NTC2, > 5 m) | **`r sprintf("%.1f", sig_cal*1000)` mK** je Sensor |
+| Relativdrift (Trend von NTC1−NTC2, > 20 m) | 0.04 mK/Jahr |
+| weisses Sensorrauschen (> 90 m) | 0.13 mK |
+| Bohrlochvariabilität | 46 mK (21 m) … 0.16 mK (201 m) |
+
+Zum Vergleich: Hirsch et al. erreichen mit der Winde ~1 mK Reproduzierbarkeit
+(gleiches Gerät) und **2.7 mK mit einem zweiten, unabhängigen Gerät**, also
+denselben Wert wie die `r sprintf("%.1f", sig_cal*1000)` mK der Kette,
+auf unabhängigem Weg bestimmt.
+
+---
+
+## 2 Vorwärtsmodell nach Hirsch et al.
+
+Stationärer Hintergrund über die **volle Eissäule** mit Dirichlet-Rand oben
+($\theta_s$) und unten ($\theta_b = -1.85$ °C bei $H = 2775$ m). Der Wärmestrom
+ist damit keine freie Grösse, sondern folgt aus den beiden Randwerten. Ein frei
+geschätzter Wärmestrom wäre gegenüber dem Jahrhundertsignal entartet.
+
+```{r background, cache=TRUE}
+bgmod <- function(Ts=-45.3, Tb=-1.85, H=2775, ws=0.066, wb=0.0028, mm=11, ksc=1, fs=1) {
+  rho0 <- 340; rhoi <- 917; Rg <- 8.314; Tk0 <- Ts + 273.15
+  k0 <- 11*exp(-10160/(Rg*Tk0)); k1 <- 575*exp(-21400/(Rg*Tk0))
+  h55 <- 1000*(log(550/(rhoi-550)) - log(rho0/(rhoi-rho0)))/(rhoi*k0)
+  dn <- function(z) {                                    # Herron–Langway
+    Z0 <- exp(rhoi*k0*z/1000 + log(rho0/(rhoi-rho0))); r <- rhoi*Z0/(1+Z0)
+    i <- z > h55
+    if (any(i)) { Z1 <- exp(rhoi*k1*(z[i]-h55)/(1000*sqrt(ws)) + log(550/(rhoi-550)))
+                  r[i] <- rhoi*Z1/(1+Z1) }
+    pmin(r, rhoi) }
+  dz <- 1; z <- seq(0, H, by = dz); nz <- length(z); rz <- dn(z)
+  zie <- cumsum(rz/rhoi)*dz; ze <- zie/zie[nz]           # ice-equivalent Tiefe
+  M <- (wb + (ws-wb)*(1 - (mm+2)/(mm+1)*ze + ze^(mm+2)/(mm+1)))*rhoi   # Lliboutry
+  SPY <- 365.25*24*3600; Tp <- seq(Ts, Tb, length.out = nz)
+  for (it in 1:40) {                                     # K hängt von T ab -> iterieren
+    K <- ksc*9.828*exp(-0.0057*(Tp+273.15))*(rz/rhoi)^1.885*(1 + (fs-1)*(1-rz/rhoi))
+    C <- 152.5 + 7.122*(Tp+273.15)
+    I <- c(0, cumsum(M[-1]*C[-1]/SPY/K[-1])*dz); sh <- exp(I)/K
+    Tn <- Ts + (Tb-Ts)*cumsum(sh)*dz/(sum(sh)*dz)
+    if (max(abs(Tn-Tp)) < 1e-6) { Tp <- Tn; break }; Tp <- Tn }
+  list(z = z, T = Tp, rz = rz, M = M, K = K)
+}
+BG <- bgmod()
+```
+
+```{r bgcheck}
+gm <- function(z1, z2, TT, zz) (approx(zz,TT,z2)$y - approx(zz,TT,z1)$y)/(z2-z1)*1000
+gmes <- function(i, j) c((P$T[j]-P$T[i])/(P$depth[j]-P$depth[i])*1000,
+                         sig_cal*sqrt(2)/(P$depth[j]-P$depth[i])*1000)
+tibble(Intervall = c("158–201 m","134–201 m","111–201 m","92–201 m"),
+       `gemessen (K/km)` = sapply(list(c(18,20),c(17,20),c(16,20),c(15,20)),
+                                  \(p) sprintf("%.2f ± %.2f", gmes(p[1],p[2])[1], gmes(p[1],p[2])[2])),
+       `Hintergrundmodell (K/km)` = round(sapply(list(c(18,20),c(17,20),c(16,20),c(15,20)),
+         \(p) gm(P$depth[p[1]], P$depth[p[2]], BG$T, BG$z)), 2)) |>
+  knitr::kable(caption = "Der Tiefengradient prüft das Hintergrundmodell.")
+```
+
+Das Modell reproduziert den tiefsten Gradienten auf 5 %. Die gemessenen
+Gradienten nehmen nach oben ab (3.66 → 4.75 K/km), während das Modell nahezu
+konstant bleibt; dieses Verhalten entspricht einem mit der Tiefe abklingenden
+Erwärmungssignal.
+
+### Green-Funktionen für Profil und Rate
+
+```{r kernels, cache=TRUE}
+dz <- 1; z <- seq(0, 1400, by = dz); nz <- length(z)
+rz <- approx(BG$z, BG$rz, z)$y; Tb <- approx(BG$z, BG$T, z)$y
+cp <- 152.5 + 7.122*(Tb+273.15)
+K  <- 9.828*exp(-0.0057*(Tb+273.15))*(rz/917)^1.885
+Kh <- (K[-nz] + K[-1])/2; SPY <- 365.25*24*3600
+kap <- K/(rz*cp)*SPY; wz <- approx(BG$z, BG$M, z)$y/rz; dtm <- 0.2*dz^2/max(kap)
+
+stepT <- function(Tp, Ts) {
+  F  <- Kh*diff(Tp)/dz
+  dv <- numeric(nz); dv[2:(nz-1)] <- (F[2:(nz-1)] - F[1:(nz-2)])/dz
+  av <- numeric(nz); av[2:(nz-1)] <- -wz[2:(nz-1)]*(Tp[3:nz] - Tp[1:(nz-2)])/(2*dz)
+  Tn <- Tp + dtm*(dv/(rz*cp)*SPY + av); Tn[1] <- Ts; Tn[nz] <- 0; Tn
+}
+EDG <- c(0, 2, 5, 10, 20, 40, 80, 150, 300, 600, 1200)
+GTz <- GRz <- NULL
+for (k in seq_len(length(EDG)-1)) {
+  t1 <- EDG[k+1]; t2 <- EDG[k]; Tp <- numeric(nz); keep <- NULL; nt <- ceiling(t1/dtm)
+  for (i in seq_len(nt)) { age <- t1 - i*dtm
+    Tp <- stepT(Tp, if (age <= t1 && age > t2) 1 else 0)
+    if (i == nt - ceiling(1/dtm)) keep <- Tp }
+  GTz <- cbind(GTz, Tp); GRz <- cbind(GRz, Tp - keep) }
+LB <- sprintf("%g–%g", EDG[-length(EDG)], EDG[-1]); nb <- length(LB)
+# Jahresgang zur kappa-Pruefung
+Tp <- numeric(nz); nt <- ceiling(12/dtm); rec <- matrix(0, ceiling(1/dtm), nz); j <- 0
+for (i in seq_len(nt)) { Tp <- stepT(Tp, sin(2*pi*i*dtm))
+  if (i > nt - nrow(rec)) { j <- j+1; rec[j,] <- Tp } }
+ampm <- apply(rec, 2, \(x) (max(x)-min(x))/2)
+```
+
+```{r kappa-check, fig.height=4, fig.width=9}
+P$ampm <- approx(z, ampm, P$depth)$y; As <- P$amp[1]/P$ampm[1]
+ggplot(P |> filter(depth <= 21), aes(depth)) +
+  geom_line(aes(y = ampm*As*1000, colour = "Modell"), linewidth = 0.9) +
+  geom_point(aes(y = amp*1000, colour = "gemessen"), size = 3) +
+  scale_y_log10() + scale_colour_manual(values = c(Modell="firebrick", gemessen="grey25"), name = NULL) +
+  labs(title = "κ-Prüfung: Dämpfung des Jahresgangs",
+       subtitle = sprintf("Oberflächenamplitude %.1f K · Modell dämpft ~13 %% zu langsam → κ eher etwas zu hoch", As),
+       x = "Tiefe (m)", y = "Jahresamplitude (mK, log)") +
+  theme_minimal(base_size = 12)
+```
+
+Die temperaturabhängige Eisleitfähigkeit ($K_{\text{Eis}} = 9.828\,e^{-0.0057T}$)
+hebt $\kappa$ gegenüber einer reinen Dichteskalierung um ~25 % an —
+`r sprintf("%.0f", kap[93])` m²/a bei 92 m. Der Jahresgang bestätigt das auf ~15 %.
+
+### 2.3 Linearität des Vorwärtsproblems
+
+Streng genommen **gar nicht**: $K$ und $c$ hängen von $T$ ab, also ist
+$\partial_t T = (\rho c(T))^{-1}\partial_z(K(T)\partial_z T) - w\,\partial_z T$
+nichtlinear. Die Green-Funktionen oben werten $K$ und $c$ auf dem *Hintergrund*
+aus — das ist die Linearisierung um $T_\text{bg}$, und ihr Fehler ist zweiter
+Ordnung in der Störung.
+
+Die Grössenordnung: $\mathrm{d}K/\mathrm{d}T = -0.0057\,K$ und
+$\mathrm{d}c/\mathrm{d}T = 7.12$ J kg⁻¹K⁻², also ändert eine Störung von 1 K die
+Diffusivität um ~1 %. Der Test ist direkt: dasselbe Forcing einmal mit
+eingefrorenen und einmal mit auf $T_\text{bg}+T'$ nachgeführten Materialgrössen.
+
+| Test | Abweichung linear ↔ nichtlinear |
+|---|---|
+| Profil, Signalamplitude 1.2 K | max **1.1 mK** über 26–201 m |
+| Profil, Signalamplitude 2.6 K | max **5.4 mK** |
+| Rate, Signalamplitude 1.2 K | max **0.03 mK/a** |
+| Superpositionstest: $T'(2.2\times)/T'(1\times)$ | 2.194 statt exakt 2.200 (**0.3 %**) |
+
+Für ein Signal der Grösse, um die es hier geht, liegt der Linearisierungsfehler
+also **unter der Messgenauigkeit** (σ = 2.8 mK) — bei einer doppelt so grossen
+Amplitude erreicht er sie. Die analytische Inversion ist damit gerechtfertigt,
+aber es ist eine Näherung, keine Identität. Hirsch et al. haben diesen Fehler
+nicht, weil ihr Sampler das volle nichtlineare Modell durchrechnet.
+
+---
+
+## 3 Die beiden Messgrössen
+
+```{r observables}
+P <- P |> mutate(
+  sd_diff = ampm*As/sqrt(2),
+  sd_bh   = sqrt(pmax(0, sd^2 - sd_diff^2)),
+  sigT    = sqrt(sig_cal^2 + (sd_bh*sqrt(TAU/Trec))^2 + (0.02*amp)^2),
+  sigR    = sqrt(rse^2 + (sd_bh*sqrt(12*TAU/Trec)/(Trec/365.25))^2),
+  Tbg     = approx(BG$z, BG$T, depth)$y,
+  anom    = T - Tbg)
+GT <- apply(GTz, 2, \(g) approx(z, g, P$depth)$y)
+GR <- apply(GRz, 2, \(g) approx(z, g, P$depth)$y)
+shp <- P$Tbg - BG$T[1]
+
+P |> filter(depth >= 16) |>
+  transmute(`Tiefe (m)` = round(depth,1), `T (°C)` = round(T,4),
+            `Hintergrund (°C)` = round(Tbg,4), `Anomalie (mK)` = round(anom*1000,0),
+            `σ_T (mK)` = round(sigT*1000,1), `Rate (mK/a)` = round(rate*1000,2),
+            `σ_Rate (mK/a)` = round(sigR*1000,2)) |>
+  knitr::kable(caption = "Profilanomalie gegen den Hirsch-Hintergrund (θ_s = −45.3 °C) und Rate.")
+```
+
+Die Anomalie fällt monoton von **+1.02 K bei 16 m** auf ~0 bei 92 m und wird
+darunter leicht negativ (−80 mK bei 201 m). Ein Zwischenminimum im Profil bei
+`r round(P$depth[which.min(P$T[P$depth>=16])+which(P$depth>=16)[1]-1])` m ist im
+stationären Zustand nicht möglich; die Erwärmung ist damit unabhängig vom
+Vorwärtsmodell belegt.
+
+---
+
+## 4 Inversion
+
+Modell: $T(z) = \theta_\text{pom} + c\cdot S(z) + \sum_k a_k G_k(z)$ für das Profil
+(mit $S$ = Form des Hintergrunds, $c$ = relative Korrektur, Prior ±5 %) und
+$\dot T(z) = \delta + \sum_k a_k \dot G_k(z)$ für die Rate (mit $\delta$ = Drift).
+Der stationäre Hintergrund fällt aus der Rate **exakt** heraus, sie ist daher
+strukturell unabhängig vom Wärmestrom.
+
+```{r inversion}
+kT <- P$depth >= 26   # wie Hirsch: obere ~20 m ausgelassen
+kR <- P$depth >= 50   # darunter verfälscht der halbe Jahreszyklus den Trend
+D  <- diff(diag(nb))
+LG <- function(X, y, s, Pi) { Si <- diag(1/s^2, nrow = length(s))
+  C <- solve(t(X) %*% Si %*% X + Pi)
+  list(mu = drop(C %*% (t(X) %*% Si %*% y)), C = C, X = X) }
+Pm <- function(nnu, nupr, lam) { M <- matrix(0, nnu+nb, nnu+nb); diag(M)[1:nnu] <- 1/nupr^2
+  M[nnu+(1:nb), nnu+(1:nb)] <- diag(1/2^2, nb) + lam*t(D) %*% D; M }
+XT <- cbind(1, shp[kT], GT[kT,]); XR <- cbind(1, GR[kR,])
+XJ <- rbind(cbind(1, shp[kT], 0, GT[kT,]), cbind(0, 0, 1, GR[kR,]))
+run <- function(lam) list(
+  T = LG(XT, P$anom[kT], P$sigT[kT], Pm(2, c(1e4, 0.05), lam)),
+  R = LG(XR, P$rate[kR], P$sigR[kR], Pm(1, 5e-3, lam)),
+  J = LG(XJ, c(P$anom[kT], P$rate[kR]), c(P$sigT[kT], P$sigR[kR]),
+         Pm(3, c(1e4, 0.05, 5e-3), lam)))
+F0 <- run(0); F4 <- run(4)
+iT <- 3:(nb+2); iR <- 2:(nb+1); iJ <- 4:(nb+3)
+wf <- function(t0,t1) { o <- pmax(0, pmin(EDG[-1],t1) - pmax(EDG[-length(EDG)],t0)); o/sum(o) }
+ff <- function(f,i,a) c(sum(a*f$mu[i]), sqrt(drop(t(a) %*% f$C[i,i] %*% a)))
+```
+
+```{r ts-plot, fig.height=6, fig.width=11}
+mk <- function(f, idx, nm, lam) tibble(
+  t0 = pmax(EDG[-length(EDG)], 0.7), t1 = EDG[-1], quelle = nm, glatt = lam,
+  mu = f$mu[idx] + f$mu[1], sd = sqrt(diag(f$C))[idx])
+ts <- bind_rows(
+  mk(F4$T, iT, "Profil T(z)",   "geglättet (λ=4)"), mk(F4$R, iR, "Rate ∂T/∂t(z)", "geglättet (λ=4)"),
+  mk(F4$J, iJ, "gemeinsam",     "geglättet (λ=4)"),
+  mk(F0$T, iT, "Profil T(z)",   "ungeglättet (λ=0)"), mk(F0$R, iR, "Rate ∂T/∂t(z)", "ungeglättet (λ=0)"),
+  mk(F0$J, iJ, "gemeinsam",     "ungeglättet (λ=0)")) |>
+  mutate(quelle = factor(quelle, levels = c("Profil T(z)","Rate ∂T/∂t(z)","gemeinsam")))
+# Hirsch-Kurve als Anomalie gegen theta_pom
+hy <- c(1500,1850,1900,1970,2000,2023,2026); ha <- c(0,0,0.10,0.60,0.75,1.17,1.20)
+hir <- tibble(t = 10^seq(0, log10(600), length.out = 200)) |>
+  mutate(a = approx(hy, ha, 2026 - t, rule = 2)$y)
+brk <- c(1,2,5,10,20,50,100,300,1000)
+ggplot() +
+  geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.4) +
+  geom_rect(data = ts, aes(xmin = log10(t0), xmax = log10(t1), ymin = mu-sd, ymax = mu+sd,
+                           fill = quelle), alpha = 0.22) +
+  geom_segment(data = ts, aes(x = log10(t0), xend = log10(t1), y = mu, yend = mu,
+                              colour = quelle), linewidth = 1) +
+  geom_line(data = hir, aes(log10(t), a, linetype = "Hirsch et al."), colour = "grey15", linewidth = 0.9) +
+  facet_wrap(~glatt, ncol = 1) +
+  scale_x_reverse(breaks = log10(brk), labels = brk, name = "Jahre vor heute (log)") +
+  scale_colour_manual(values = c("Profil T(z)"="#1f78b4","Rate ∂T/∂t(z)"="#e31a1c","gemeinsam"="#33a02c"),
+                      name = NULL, aesthetics = c("colour","fill")) +
+  scale_linetype_manual(values = "solid", name = NULL) +
+  labs(title = "Rekonstruierte Oberflächentemperatur-Anomalie, ±1σ",
+       subtitle = "Beide Kanäle auf gemeinsamer Basis · schwarz = Kurve aus Hirsch et al. (aus dem Text digitalisiert)",
+       y = "Anomalie (K) rel. θ_pom") +
+  theme_minimal(base_size = 13) + theme(panel.grid.minor = element_blank())
+```
+
+```{r functionals}
+A1 <- wf(0,20)-wf(50,150); A2 <- wf(0,20)-wf(100,300); A3 <- wf(0,20)
+tibble(Funktional = c("(0–20 a) rel. θ_pom","(0–20)−(50–150 a)","(0–20)−(100–300 a)"),
+       `Profil λ=0` = sapply(list(A3,A1,A2), \(a) sprintf("%+.2f ± %.2f", ff(F0$T,iT,a)[1], ff(F0$T,iT,a)[2])),
+       `Profil λ=4` = sapply(list(A3,A1,A2), \(a) sprintf("%+.2f ± %.2f", ff(F4$T,iT,a)[1], ff(F4$T,iT,a)[2])),
+       `Rate λ=4`   = sapply(list(A3,A1,A2), \(a) sprintf("%+.2f ± %.2f", ff(F4$R,iR,a)[1], ff(F4$R,iR,a)[2])),
+       `Hirsch et al.` = c("≈ +1.1", "≈ +0.6", "≈ +0.8")) |>
+  knitr::kable(caption = "Funktionale der rekonstruierten Oberflächengeschichte (K).")
+```
+
+Auf dem Funktional, das beide Verfahren am besten bestimmen — die letzten
+20 Jahre gegenüber dem vorbeobachtungszeitlichen Mittel — liegen wir bei
+**+1.2 bis +1.4 K** gegen Hirschs **~1.1 K**. Das ist Übereinstimmung.
+
+## 5 Sensitivität des Vorwärtsmodells
+
+```{r sensitivity, cache=TRUE}
+go <- function(lab, bg, ksc = 1, lam = 4) {
+  Tbz <- approx(bg$z, bg$T, P$depth)$y; an <- P$T - Tbz; sh <- Tbz - bg$T[1]
+  k <- kT; r <- LG(cbind(1, sh[k], GT[k,]*ksc), an[k], P$sigT[k], Pm(2, c(1e4,0.05), lam))
+  c(`(0–20) rel. θ_pom` = sum(A3*r$mu[iT]),
+    `Gesamt jung−ältestes` = sum(A3*r$mu[iT]) - r$mu[iT][nb],
+    `Anomalie 201 m (mK)` = an[20]*1000) }
+S <- rbind(
+  `Basis (Hirsch-Parameter)`      = go("", BG),
+  `Akkumulation 64 mm/a`          = go("", bgmod(ws = 0.064)),
+  `Akkumulation 68 mm/a`          = go("", bgmod(ws = 0.068)),
+  `Basistemperatur −1.75 °C`      = go("", bgmod(Tb = -1.75)),
+  `Basistemperatur −1.95 °C`      = go("", bgmod(Tb = -1.95)),
+  `Basisschmelze 1.2 mm/a`        = go("", bgmod(wb = 0.0012)),
+  `Basisschmelze 4.4 mm/a`        = go("", bgmod(wb = 0.0044)),
+  `Mächtigkeit ±5 m`              = go("", bgmod(H = 2770)),
+  `Firn-K ×0.7`                   = go("", bgmod(fs = 0.7)),
+  `Firn-K ×1.3`                   = go("", bgmod(fs = 1.3)),
+  `alle K ×0.85`                  = go("", bgmod(ksc = 0.85), ksc = 0.85),
+  `alle K ×1.15`                  = go("", bgmod(ksc = 1.15), ksc = 1.15))
+round(S, 2) |> knitr::kable(caption = "Sensitivität gegen die Vorwärtsmodell-Parameter (λ=4, z ≥ 26 m).")
+```
+
+Alle Parameter innerhalb der von Hirsch et al. angegebenen Unsicherheiten —
+Akkumulation, Basistemperatur, Basisschmelze, Mächtigkeit — verschieben das
+Ergebnis um **≤ 0.1 K**.
+
+Bei der Leitfähigkeit sind zwei verschiedene Grössen zu unterscheiden:
+
+- **Firn-Leitfähigkeit.** Hirsch et al. parametrisieren sie als
+  $K_\text{firn} = K_\text{Eis}\,(\rho/\rho_\text{Eis})^{\alpha-\beta(\rho/\rho_\text{Eis})}$
+  mit $\beta = 0$ und $\alpha = 2.4634 \pm 0.15$ (Muto et al. 2011). Wegen des
+  Exponenten auf dem Dichteverhältnis wirkt $\alpha$ **nur im Firn**: bei
+  $\rho = \rho_\text{Eis}$ ist der Faktor unabhängig von $\alpha$ gleich eins.
+  Der Effekt beträgt ~7 % bei 20 m Tiefe und ~0.3 % bei 200 m. Der Test „Firn-K
+  ×0.7–1.3" oben verschiebt entsprechend das Ergebnis um ≤ 0.1 K und den
+  Tiefengradienten gar nicht (4.50 K/km für alle Skalierungen). Die von Hirsch
+  et al. angegebenen ~23 mK für $\alpha \pm 0.15$ sind damit plausibel.
+- **Eis-Leitfähigkeit.** Eine *uniforme* Skalierung von $K$, die auch das reine
+  Eis erfasst, wirkt anders: ±15 % verschieben das Ergebnis um ∓0.3 K, ±5 % um
+  ∓0.1 K. Diese Grösse ist in der α-Sensitivität nicht enthalten. Für
+  $K_\text{Eis} = 9.828\,e^{-0.0057T}$ ist ±3–5 % ein realistischer Bereich.
+
+Die Differenz zwischen modelliertem (4.50 K/km) und gemessenem Tiefengradienten
+(4.75 ± 0.09 K/km über 158–201 m) lässt sich mit keiner der getesteten Varianten
+schliessen.
+
+---
+
+## 6 Vergleich mit Hirsch et al.
+
+### 6.1 Die Messungen stimmen überein
+
+| | Winch, Jan 2024 | Kette, Jan–Jul 2026 |
+|---|---|---|
+| Temperaturbereich | −44.15 … −44.6 °C | `r sprintf("%.2f … %.2f °C", max(P$T), min(P$T))` |
+| Tiefe des Minimums | ~70 m | `r round(P$depth[which.min(P$T)])` m |
+| relative Genauigkeit | 2.7 mK (2. Gerät) | `r sprintf("%.1f", sig_cal*1000)` mK (NTC1−NTC2) |
+
+Zwei getrennte Instrumente, Elektroniken und Kalibrationen, zwei Jahre
+auseinander — die Absoluttemperaturen decken sich auf ~40 mK. Das validiert die
+2023er Laborkalibration der Kette unabhängig.
+
+### 6.2 Drei Festlegungen des Vorwärtsmodells, die das Ergebnis bestimmen
+
+- **Hintergrund aus der vollen Eissäule mit physikalischem Basisrand.** Ein frei
+  geschätzter Oberflächen-Wärmestrom lässt den Jahrhundertkontrast je nach Prior
+  zwischen 1.0 und 3.2 K schwanken; mit der Dirichlet-Randbedingung ist er
+  bestimmt.
+- **Temperaturabhängige Eisleitfähigkeit**, +25 % in κ gegenüber reiner
+  Dichteskalierung.
+- **Auslassen der oberen ~20 m.** Werden die Sensoren bei 16 und 21 m
+  einbezogen, steigt das jüngste Fenster von +1.4 auf +3.1 K; dort dominieren
+  Bohrlochvariabilität und die aus 185 Tagen extrapolierte Jahresgangkorrektur.
+
+### 6.3 Vergleich der Amplituden
+
+Als Test wird ihre publizierte Kurve durch dasselbe Vorwärtsmodell gerechnet und
+gegen das hier gemessene Profil und die gemessene Rate gehalten, mit **freiem**
+$\theta_\text{pom}$ und **freier** Hintergrundform.
+
+```{r hirsch-forward, cache=TRUE}
+fh <- function(yr) approx(hy, ha, pmin(pmax(yr, 1500), 2026), rule = 2)$y
+Tp <- numeric(nz); nt <- ceiling(1200/dtm); keep <- NULL
+for (i in seq_len(nt)) { yr <- 2026 - 1200 + i*dtm; Tp <- stepT(Tp, fh(yr))
+  if (i == nt - ceiling(1/dtm)) keep <- Tp }
+hT <- approx(z, Tp, P$depth)$y; hR <- approx(z, Tp - keep, P$depth)$y
+```
+
+```{r hirsch-fit}
+k <- kT; X <- cbind(1, shp[k]); yv <- P$anom[k] - hT[k]
+b <- coef(lm(yv ~ 0 + X, weights = 1/P$sigT[k]^2)); res <- yv - drop(X %*% b)
+tibble(`Tiefe (m)` = round(P$depth[k],1),
+       `gemessen (mK)` = round(P$anom[k]*1000,0),
+       `Hirsch-Kurve (mK)` = round((hT[k] + drop(X %*% b))*1000,0),
+       `Residuum (mK)` = round(res*1000,0),
+       `σ (mK)` = round(P$sigT[k]*1000,1)) |>
+  knitr::kable(caption = sprintf(
+    "Hirsch-Kurve, vorwärts gerechnet, mit freiem θ_pom (%+.0f mK) und Formkorrektur (%+.1f %%). χ²/n = %.0f, RMS = %.0f mK.",
+    b[1]*1000, b[2]*100, mean((res/P$sigT[k])^2), sqrt(mean(res^2))*1000))
+
+tibble(`Tiefe (m)` = round(P$depth[kR],1),
+       `Rate gemessen (mK/a)` = round(P$rate[kR]*1000,2),
+       `Rate aus Hirsch-Kurve` = round(hR[kR]*1000,2),
+       Faktor = round(P$rate[kR]/hR[kR],2)) |>
+  knitr::kable(caption = "Das Ratenprofil als zweiter, unabhängiger Test.")
+```
+
+Die **Formkorrektur** $c$ ist dabei der Freiheitsgrad, der den Hintergrund
+nachjustieren darf: verwendet wird $T_\text{bg}(0) + (1+c)\,S(z)$ mit
+$S(z) = T_\text{bg}(z) - T_\text{bg}(0)$, dem Temperaturanstieg von der
+Oberfläche bis zur Tiefe $z$ ($S = 0.31$ K bei 26 m, 1.18 K bei 201 m).
+$c = -12\,\%$ heisst also: die gesamte Tiefenstruktur des Hintergrunds wird um
+12 % gestaucht, der Gradient überall mit 0.88 skaliert.
+
+Wie viel Formkorrektur erlauben die Modellparameter? Projiziert man jede Variante
+auf $S(z)$:
+
+| Parameter (Hirsch-Bereich) | erzwungenes $c$ |
+|---|---|
+| Akkumulation ±2 mm/a | ±3.5 % |
+| Basisschmelze ±1.6 mm/a | ±2.3 % |
+| Mächtigkeit ±5 m | ±0.4 % |
+| Basistemperatur ±0.1 °C | ±0.2 % |
+| Leitfähigkeit $\alpha \pm 6\,\%$ | ±7.7 % |
+| **alle zusammen (RSS)** | **±9.0 %** |
+| Leitfähigkeit ±15 % (weiter gefasster Bereich) | ±20 % |
+
+Die benötigten −12 % liegen damit innerhalb des Bereichs, den die Leitfähigkeit
+allein aufspannt. Der Misfit bleibt dennoch bestehen. Er sitzt nicht in der Gesamtneigung des
+Hintergrunds, sondern im Muster der Residuen, auf das die Leitfähigkeit kaum
+wirkt. Rechnet man alles konsistent mit skalierter Leitfähigkeit neu:
+
+```{r kscan, cache=TRUE}
+kscan <- function(ks) {
+  bg <- bgmod(ksc = ks); Tb2 <- approx(bg$z, bg$T, z)$y
+  K2 <- ks*9.828*exp(-0.0057*(Tb2+273.15))*(rz/917)^1.885; C2 <- 152.5 + 7.122*(Tb2+273.15)
+  kp <- K2/(rz*C2)*SPY; dt2 <- 0.2*dz^2/max(kp); Kh2 <- (K2[-nz] + K2[-1])/2
+  st <- function(Tp, Ts) { F <- Kh2*diff(Tp)/dz
+    dv <- numeric(nz); dv[2:(nz-1)] <- (F[2:(nz-1)] - F[1:(nz-2)])/dz
+    av <- numeric(nz); av[2:(nz-1)] <- -wz[2:(nz-1)]*(Tp[3:nz] - Tp[1:(nz-2)])/(2*dz)
+    Tn <- Tp + dt2*(dv/(rz*C2)*SPY + av); Tn[1] <- Ts; Tn[nz] <- 0; Tn }
+  Tp <- numeric(nz); nt <- ceiling(1200/dt2); keep <- NULL
+  for (i in seq_len(nt)) { yr <- 2026 - 1200 + i*dt2; Tp <- st(Tp, fh(yr))
+    if (i == nt - ceiling(1/dt2)) keep <- Tp }
+  k <- kT; Tbd <- approx(bg$z, bg$T, P$depth)$y
+  an <- P$T - Tbd; sh2 <- Tbd - bg$T[1]; pr <- approx(z, Tp, P$depth)$y
+  X <- cbind(1, sh2[k]); yv <- an[k] - pr[k]
+  bb <- coef(lm(yv ~ 0 + X, weights = 1/P$sigT[k]^2)); res <- yv - drop(X %*% bb)
+  rt <- approx(z, Tp - keep, P$depth)$y
+  c(`χ²/n` = mean((res/P$sigT[k])^2), `RMS (mK)` = sqrt(mean(res^2))*1000,
+    `Formkorrektur (%)` = bb[2]*100, `Ratenfaktor 92 m` = P$rate[15]/rt[15],
+    `Ratenfaktor 201 m` = P$rate[20]/rt[20]) }
+S2 <- t(sapply(c(0.85, 0.90, 0.94, 1.00, 1.10), kscan))
+rownames(S2) <- sprintf("K × %.2f", c(0.85, 0.90, 0.94, 1.00, 1.10))
+round(S2, 2) |> knitr::kable(caption = "Die Leitfähigkeit kann den Widerspruch nicht auflösen.")
+```
+
+Über den gesamten plausiblen Leitfähigkeitsbereich bleibt $\chi^2/n$ bei 152–174
+und der RMS bei 55–60 mK — die Formkorrektur wandert von +7 % auf −20 %, ohne
+dass die Anpassung besser wird. Und der Ratenfaktor bleibt bei 1.9–3.1.
+
+Damit lauten die beiden robusten Befunde:
+
+- **Das Profil** lässt sich mit ihrer Kurve nicht erklären: systematische
+  Residuen von +141 bis −43 mK, RMS 58 mK bei σ = 2.8–7.8 mK — und das
+  unabhängig von der Leitfähigkeit.
+- **Die Rate** übersteigt ihre Kurve bei allen neun Tiefen von 50 bis 201 m um
+  einen mit der Tiefe **konstanten Faktor 2.1–2.5**. Ein konstanter Faktor über
+  sieben unabhängige Tiefen heisst: die *Form* ihrer Rekonstruktion stimmt, die
+  *Amplitude* ist um etwa Faktor 2 kleiner. Auch nach Abzug eines
+  tiefenunabhängigen Drifts (201-m-Wert) bleibt der Faktor bei ~2.
+
+Ein Instrumentenfehler erklärt das schlecht: eine Drift wäre tiefen*unabhängig*,
+nicht proportional zum erwarteten Ratenprofil.
+
+### 6.4 Wo genau sitzt die fehlende Amplitude? — die Δ-Inversion
+
+Invertiert man die **Differenz** zwischen den hier gemessenen Grössen und der
+Vorhersage ihrer Kurve, erhält man die Korrektur, die ihre Rekonstruktion
+benötigen würde — aufgelöst nach Zeit und getrennt aus beiden Messkanälen.
+
+```{r delta-inversion}
+dTv <- P$anom - hT; dRv <- P$rate - hR
+rTd <- LG(cbind(1, shp[kT], GT[kT,]), dTv[kT], P$sigT[kT], Pm(2, c(1e4,0.05), 4))
+rRd <- LG(cbind(1, GR[kR,]),          dRv[kR], P$sigR[kR], Pm(1, 5e-3, 4))
+tibble(Fenster = LB, `Jahr AD` = round(2026 - (EDG[-1]+EDG[-length(EDG)])/2),
+       `Δ aus Profil (K)` = sprintf("%+.2f ± %.2f", rTd$mu[iT], sqrt(diag(rTd$C))[iT]),
+       `Δ aus Rate (K)`   = sprintf("%+.2f ± %.2f", rRd$mu[iR], sqrt(diag(rRd$C))[iR])) |>
+  knitr::kable(caption = "Korrektur zur Hirsch-Kurve: hier bestimmte Rekonstruktion minus ihre.")
+```
+
+::: {.callout-note}
+## Die σ dieser Tabelle sind auf den Glättungsprior konditioniert
+Die Tabelle steht bei λ=4; die Fehlerbalken enthalten dort einen erheblichen
+Beitrag der Glattheitsannahme. Die Werte ohne Glättung stehen in Abschnitt 6.6.
+:::
+
+### 6.5 Wie weit zurück sieht das Bohrloch überhaupt?
+
+Ein 200-m-Loch trägt jenseits einiger Jahrhunderte nichts Auflösbares mehr. Das
+lässt sich direkt ablesen: Posterior-σ je Zeitfenster gegen den Prior von 2.00 K,
+ohne Glättung.
+
+```{r resolution}
+mkP <- function(nn, np, lam, n2) { D2 <- diff(diag(n2)); M <- matrix(0, nn+n2, nn+n2)
+  diag(M)[1:nn] <- 1/np^2; M[nn+(1:n2), nn+(1:n2)] <- diag(1/2^2, n2) + lam*t(D2) %*% D2; M }
+r0d <- LG(cbind(1, shp[kT], GT[kT,]), dTv[kT], P$sigT[kT], mkP(2, c(1e4,0.05), 0, nb))
+tibble(Fenster = LB,
+       `σ ohne Glättung (K)` = round(sqrt(diag(r0d$C))[iT], 2),
+       `Informationsgewinn` = sprintf("%.0f %%", 100*(1 - sqrt(diag(r0d$C))[iT]/2))) |>
+  knitr::kable(caption = "Posterior-σ je Fenster gegen Prior 2.00 K (λ=0).")
+```
+
+Jenseits von 300 Jahren bleibt σ bei 1.75–1.81 K, entsprechend 9–12 %
+Informationsgewinn. Auch 80–300 Jahre sind mit 30–34 % nur schwach bestimmt.
+Aussagen über die Ausdehnung eines Kaltniveaus über 300 Jahre hinaus sind aus
+diesen Daten nicht ableitbar; sie folgen dort aus dem Glättungsprior.
+
+### 6.6 Was die Daten allein hergeben
+
+```{r delta-functionals}
+r4d <- LG(cbind(1, shp[kT], GT[kT,]), dTv[kT], P$sigT[kT], mkP(2, c(1e4,0.05), 4, nb))
+wg <- function(t0,t1) { o <- pmax(0, pmin(EDG[-1],t1) - pmax(EDG[-length(EDG)],t0)); o/sum(o) }
+fq <- function(r,a) sprintf("%+.2f ± %.2f", sum(a*r$mu[iT]), sqrt(drop(t(a) %*% r$C[iT,iT] %*% a)))
+AA <- list(`Δ (0–20 a)` = wg(0,20), `Δ (40–150 a)` = wg(40,150),
+           `Δ (80–300 a)` = wg(80,300), `Δ (300–1200 a)` = wg(300,1200),
+           `Δ Kontrast (0–20) − (80–300)` = wg(0,20) - wg(80,300))
+tibble(Grösse = names(AA),
+       `λ=0 (nur Daten)` = sapply(AA, \(a) fq(r0d,a)),
+       `λ=4 (mit Glättung)` = sapply(AA, \(a) fq(r4d,a))) |>
+  knitr::kable(caption = "Δ zur Hirsch-Kurve: was die Daten sagen und was der Prior hinzufügt.")
+```
+
+Ohne Glättungsprior ist kein einzelner Δ-Wert individuell signifikant. Der
+stärkste Befund ist der Kontrast jung-gegen-alt mit **+1.29 ± 0.83 K (1.6σ)**.
+Die λ=4-Fehlerbalken sind prior-konditioniert und für Signifikanzaussagen nicht
+geeignet.
+
+### 6.7 Test der 500-Jahre-Basis
+
+Die Hypothese, das 500-Jahre-Fenster sei zu kurz für ein länger zurückreichendes
+Kaltniveau, lässt sich prüfen, indem die hier verwendete Basis entsprechend
+gekürzt wird.
+
+```{r basis-truncation}
+tr <- function(nk) {
+  Gx <- GT[,1:nk,drop=FALSE]; ed <- EDG[1:(nk+1)]
+  r <- LG(cbind(1, shp[kT], Gx[kT,]), P$anom[kT], P$sigT[kT], mkP(2, c(1e4,0.05), 4, nk))
+  ii <- 3:(nk+2)
+  w1 <- { o <- pmax(0, pmin(ed[-1],20)  - pmax(ed[-length(ed)],0));  o/sum(o) }
+  w2 <- { o <- pmax(0, pmin(ed[-1],300) - pmax(ed[-length(ed)],80)); o/sum(o) }
+  c(`(0–20 a)` = sum(w1*r$mu[ii]), `(80–300 a)` = sum(w2*r$mu[ii]),
+    Kontrast = sum(w1*r$mu[ii]) - sum(w2*r$mu[ii]), `θ_pom` = -45.3 + r$mu[1]) }
+S4 <- t(sapply(c(10,9,8), tr)); rownames(S4) <- paste("Basis bis", c(1200,600,300), "a")
+  round(S4, 2) |> knitr::kable(caption = "Inversion mit gekürzter Zeitbasis.")
+```
+
+Die Kürzung auf 600 oder 300 Jahre verschiebt das Ergebnis nicht in Richtung
+Hirsch et al., sondern von ihm weg (Kontrast 1.78 → 2.05 K). Die Hypothese wird
+damit nicht gestützt.
+
+Mit einer 300-Jahre-Basis liegt das hier bestimmte $\theta_\text{pom}$ bei
+**−45.30 °C**, dem von Hirsch et al. angegebenen vorindustriellen Wert; die
+letzten 20 Jahre liegen +1.45 K darüber gegenüber ihren ~1.1 K. Auf der Grösse,
+die beide Verfahren bestimmen können, beträgt die Differenz damit 0.35 K statt
+1 K. Ein Vergleich der jüngsten Fenster mit dem *ältesten* Fenster ist dagegen
+nicht aussagekräftig, da letzteres nach Abschnitt 6.5 unbestimmt ist.
+
+### 6.7b Mögliche Ursachen auf Seiten der Kette
+
+Das hier abgeleitete Kaltniveau beruht auf einer Abweichung von 40–90 mK
+zwischen dem gemessenen Profil bei 111–201 m und dem modellierten Hintergrund.
+Das ist genau die Tiefe, in der ein Hintergrundfehler sichtbar würde.
+
+Getestet und ausgeschlossen: Akkumulation, Basistemperatur, Basisschmelze,
+Mächtigkeit (alle ≤0.1 K), uniforme Leitfähigkeitsskalierung (χ²/n bleibt
+152–174). Bleibt der **Lliboutry-Formparameter** $m$, der die Tiefenform der
+Vertikalgeschwindigkeit steuert:
+
+```{r mtest, cache=TRUE}
+mt <- function(mm) { bg <- bgmod(mm = mm)
+  an <- P$T - approx(bg$z, bg$T, P$depth)$y
+  c(`Gradient 158–201 m (K/km)` = (approx(bg$z,bg$T,201.24)$y - approx(bg$z,bg$T,157.66)$y)/43.58*1000,
+    `Anomalie 111 m (mK)` = an[16]*1000, `Anomalie 201 m (mK)` = an[20]*1000) }
+S3 <- as.data.frame(t(sapply(c(3,5,11,20,40), mt)))
+S3[[1]] <- round(S3[[1]], 2); S3[[2]] <- round(S3[[2]]); S3[[3]] <- round(S3[[3]])
+rownames(S3) <- paste("m =", c(3,5,11,20,40))
+knitr::kable(S3, caption = "Lliboutry-Formparameter (Hirsch: m = 11). Gemessener Gradient: 4.75 ± 0.09 K/km.")
+```
+
+Auch dieser Freiheitsgrad löst den Befund nicht auf: Ein grosses $m$ verkleinert
+das tiefe Kaltsignal ($m=40$: −25 statt −80 mK), vergrössert aber die Abweichung
+vom gemessenen Tiefengradienten (4.29 gegen 4.75 ± 0.09 K/km). $m=5$ trifft den
+Gradienten, verlangt dann jedoch ein stärkeres Kaltsignal (−151 mK). Varianten,
+die den gemessenen Gradienten reproduzieren, erfordern eine kältere Vergangenheit.
+
+Nicht ausgeschlossen bleibt ein Hintergrundfehler mit einer *anderen* Tiefenform
+als alle hier getesteten, oder ein tiefenabhängiger systematischer Messfehler der Kette
+selbst, den die NTC1/NTC2-Paare prinzipiell nicht sehen können.
+
+### 6.8 Stand der Diskrepanz
+
+**Übereinstimmung.** Auf der Grösse, die beide Verfahren bestimmen können — die
+letzten 20 Jahre gegenüber dem vorbeobachtungszeitlichen Mittel — liegen die
+Ergebnisse bei +1.15 bis +1.45 K gegen ~1.1 K in Hirsch et al. Die gemessenen
+Profile stimmen im Wertebereich (~40 mK) und in der Tiefe des Minimums (75 gegen
+~70 m) überein, die relative Messgenauigkeit auf unabhängigem Weg (2.8 gegen
+2.7 mK).
+
+**Offen.** Die Vorhersage ihrer Kurve reproduziert das hier gemessene Profil mit
+RMS 58 mK bei $\sigma$ = 2.8–7.8 mK und unterschätzt die gemessenen Raten unterhalb
+92 m um Faktor ~2. Beide Misfits sind robust gegen die Leitfähigkeit
+($\times$0.85–1.10) und gegen den Lliboutry-Parameter $m$. Die daraus folgende Korrektur
+beträgt +1.29 ± 0.83 K im Kontrast jung-gegen-alt und ist damit weder
+ausgeschlossen noch belegt. Jenseits 300 Jahren enthält das 201-m-Loch keine
+auflösbare Information (Abschnitt 6.5); Aussagen über den vorindustriellen
+Referenzwert hängen entsprechend von der Parametrisierung ab.
+
+Zur Unsicherheitsangabe: Hirsch et al. quantifizieren die Empfindlichkeit gegen
+die Parameter des Wärmetransportmodells in separaten Experimenten (Akkumulation
+22 mK, Basisschmelze ~25 mK, Basistemperatur 15 mK, Mächtigkeit 7 mK,
+$\alpha$ ~23 mK; quadratisch addiert ~44 mK), führen sie aber nicht in die
+angegebenen Posterior-σ ein. Für die jüngsten Jahrzehnte liegt die
+Posterior-σ bei 0.02 °C (2013) und 0.08 °C (1973); die eigenen
+Parameterempfindlichkeiten überschreiten den ersten Wert damit um Faktor ~2.
+Eine Zusammenführung beider Beiträge oder eine explizite Kennzeichnung der σ als
+auf das Vorwärtsmodell konditioniert würde diese Rückfrage vorwegnehmen.
+
+**Nächster Test:** die punktweise Differenz der beiden gemessenen Profile
+(Winde Januar 2024 gegen Kette 2026). Sie trennt einen systematischen Messfehler
+der Kette von
+einer Eigenschaft der Rekonstruktion und ist zugleich ein *repeat log* mit
+zweijähriger Basislinie: erwartete Differenz 8–19 mK bei 40–92 m gegenüber
+2.7 mK Instrument-zu-Instrument-Reproduzierbarkeit.
+
+Belastbare gemeinsame Aussage bis dahin: **die letzten 20 Jahre lagen 1.1–1.4 K
+über dem vorbeobachtungszeitlichen Niveau**, mit Beschleunigung nach ~2000 und
+einer kälteren Phase im 18./19. Jahrhundert.
+
+---
+
+## 7 Auflösung statt Nachglättung
+
+Die Kern-Parametrisierung erzeugt einen stark oszillierenden Posterior (Hirsch
+et al., Fig. 1.11), der nachträglich mit Gauss-Kernen der Breite $5\sqrt{t}$
+geglättet wird. Beides — die Oszillation und die Wahl der Kernbreite — lässt
+sich mit der **Auflösungsmatrix** $\mathbf R = \mathbf C\,\mathbf G^\top\Sigma^{-1}\mathbf G$
+quantifizieren, statt es festzulegen.
+
+Die Oszillation ist die Signatur des Nullraums: benachbarte Zeitfenster haben
+bei den gemessenen Tiefen fast identische Kerne, ihre Gewichte sind im Posterior
+stark antikorreliert. Ein Prior, der nur die Amplitude begrenzt (iid auf den
+Kerngewichten), unterdrückt diese Richtung nicht.
+
+```{r resolution-matrix, cache=TRUE}
+EF <- c(0, exp(seq(log(1.5), log(1200), length.out = 17))); nbf <- length(EF) - 1
+GF <- NULL
+for (k in seq_len(nbf)) {
+  t1 <- EF[k+1]; t2 <- EF[k]; Tp <- numeric(nz)
+  for (i in seq_len(ceiling(t1/dtm))) { age <- t1 - i*dtm
+    Tp <- stepT(Tp, if (age <= t1 && age > t2) 1 else 0) }
+  GF <- cbind(GF, Tp) }
+Gf  <- apply(GF, 2, \(g) approx(z, g, P$depth)$y)
+Xf  <- cbind(1, shp[kT], Gf[kT, ]); Sif <- diag(1/P$sigT[kT]^2)
+Pif <- matrix(0, 2+nbf, 2+nbf); diag(Pif)[1:2] <- 1/c(1e4, 0.05)^2
+diag(Pif)[3:(2+nbf)] <- 1/2^2
+Cf  <- solve(t(Xf) %*% Sif %*% Xf + Pif)
+Rf  <- (Cf %*% (t(Xf) %*% Sif %*% Xf))[3:(2+nbf), 3:(2+nbf)]
+tm  <- sqrt(EF[-1]*pmax(EF[-length(EF)], 0.5))
+wbr <- sapply(seq_len(nbf), function(i) {
+  w <- abs(Rf[i, ]); if (sum(w) <= 0) return(NA); w <- w/sum(w)
+  m <- sum(w*log(tm)); tm[i]*sqrt(sum(w*(log(tm)-m)^2)) })
+```
+
+```{r resolution-table}
+tibble(`Fenstermitte (a)` = round(tm, 1),
+       `R-Diagonale` = round(diag(Rf), 2),
+       `Auflösungsbreite (a)` = round(wbr),
+       `5√t (a)` = round(5*sqrt(tm)),
+       `Verhältnis` = round(wbr/(5*sqrt(tm)), 1)) |>
+  knitr::kable(caption = sprintf(
+    "Aus der Auflösungsmatrix abgeleitete Mittelungsbreite gegen die angesetzte Glättung. Spur(R) = %.1f von %d Parametern.",
+    sum(diag(Rf)), nbf))
+```
+
+Drei Befunde:
+
+- **Effektive Freiheitsgrade.** $\mathrm{Spur}(\mathbf R) = `r sprintf("%.1f", sum(diag(Rf)))`$
+  bei `r nbf` Parametern. Das ist die Zahl unabhängiger Grössen, die das Profil
+  über die Oberflächengeschichte festlegt, und sie beantwortet die Frage „wieviel
+  ist Prior" mit einer einzigen Zahl. Bei 40 Kernen entspräche das einem Anteil
+  von ~14 %.
+- **$5\sqrt{t}$ trifft die ersten Jahrzehnte.** Bis ~30 Jahre stimmen abgeleitete
+  und angesetzte Breite innerhalb ~20 %.
+- **Weiter zurück ist die Glättung zu schwach.** Bei 120 a ist die abgeleitete
+  Breite ~2.3×, bei 280 a ~4.6× grösser als $5\sqrt{t}$. Der ältere Teil der
+  nachgeglätteten Kurve enthält damit mehr Struktur, als die Daten stützen —
+  und in diesem Bereich liegt die vorindustrielle Referenz.
+
+Drei Alternativen, geordnet nach methodischem Aufwand:
+
+1. **Glättungsbreite aus $\mathbf R$ ableiten** statt sie anzusetzen. Minimale
+   Änderung am bestehenden Ablauf.
+2. **Glattheit in den Prior** statt in die Nachbearbeitung: ein
+   Gauss-Prozess-Prior auf $\theta(t)$ (Matérn, AR(1) oder ein Potenzgesetz mit
+   der beobachteten Skalierung antarktischer Temperaturvariabilität) anstelle
+   von iid-Gewichten. Der Posterior wird dann von selbst so glatt, wie die Daten
+   es stützen, und die Posterior-Kovarianz ist konstruktionsgemäss korrekt. Das
+   entspricht dem in Hirsch et al. 1.4.2 bereits vorgeschlagenen Weg
+   („basis kernels whose width increases with time"), nur im Prior statt in der
+   Basis.
+3. **Auflösungsbegrenzte Funktionale berichten** statt einer Kurve: Posterior für
+   Mittel über wenige gut konditionierte Fenster, mit exakten Unsicherheiten
+   (Backus–Gilbert-Logik: Schätzwert, Auflösungsbreite, Unsicherheit als Tripel).
+   Vermeidet die Frage nach der Kernbreite vollständig, liefert aber keine
+   stetige Kurve.
+
+### 7.1 Was die MCMC-Maschinerie in der jetzigen Konfiguration leistet
+
+Die angeführte Begründung für den Sampler ist die Nichtlinearität des
+Wärmetransports. Diese ist bei der hier relevanten Signalamplitude klein:
+nach Abschnitt 2.3 weicht die volle nichtlineare Rechnung von der Linearisierung
+um 1.1 mK ab (Signal 1.2 K), und der Superpositionstest ergibt 0.3 %. Beides
+liegt unter der Messgenauigkeit von 2.7–5 mK. Prior und Likelihood sind
+gausssch, Kernzahl und Kernbreite sind fest. Der Posterior ist damit in der
+jetzigen Konfiguration nahezu gausssch, und eine geschlossene Lösung liefert
+dasselbe Ergebnis.
+
+Der Sampler wird dagegen benötigt, sobald man ihm etwas gibt, das nicht gausssch
+ist. Zwei Möglichkeiten, die zugleich offene Punkte des Papers schliessen würden:
+
+- **Marginalisierung der Vorwärtsmodell-Parameter** ($\alpha$, Akkumulation,
+  Basisschmelze, $\theta_b$, $H$) mit ihren Prior-Bereichen, statt separater
+  Sensitivitätsexperimente. Das Vorwärtsmodell muss dafür pro Sample neu laufen —
+  genau die Rechenlast, die einen Cluster rechtfertigt — und die angegebenen σ
+  enthielten dann den Modellfehler.
+- **Marginalisierung eines Glattheits-Hyperparameters** (Korrelationslänge des
+  Prior). Damit entfällt sowohl die feste Kernbreite von 20 a als auch die
+  Nachglättung; die Zeitskalenstruktur wird von den Daten bestimmt statt gesetzt.
+
+### 7.2 Zur Zirkularität einer R-basierten Glättung
+
+$\mathbf R = \mathbf C\,\mathbf G^\top\Sigma^{-1}\mathbf G$ mit
+$\mathbf C = (\mathbf G^\top\Sigma^{-1}\mathbf G + \mathbf P^{-1})^{-1}$ hängt vom
+Prior ab: ein schwächerer Prior erhöht $\mathrm{Spur}(\mathbf R)$. Eine
+Glättungsbreite aus einem $\mathbf R$ abzuleiten, das mit iid-Prior gerechnet
+wurde, ist deshalb nicht selbstkonsistent. Sauber wären ein Fixpunkt (die
+Prior-Korrelationslänge $\ell(t)$ so wählen, dass die resultierende
+Auflösungsbreite gleich $\ell(t)$ ist) oder die Marginalisierung des
+Hyperparameters. Als reine **Diagnostik** — Spur und Kernbreiten berichten — ist
+$\mathbf R$ dagegen unproblematisch und unabhängig von dieser Frage nützlich.
+
+Einschränkung: $\mathbf R$ hängt von Basis, Fehlerbudget und Tiefenauswahl ab.
+Die hier verwendete Boxcar-Basis und $\sigma$-Belegung ist nicht die von Hirsch
+et al.; die Zahlen sind als Grössenordnung zu lesen, die qualitative Aussage
+(passend bis ~30 a, zu schmal darüber) sollte übertragbar sein.
+
+---
+
+## 8 Was die Kette zusätzlich kann
+
+- **Das Ratenprofil ist strukturell frei vom geothermischen Wärmestrom** — der
+  stationäre Hintergrund erfüllt $\partial_t T_\text{bg} = 0$ identisch. Genau
+  die Grösse, an der die Profilinversion ohne Hirschs Basisrandbedingung
+  ohne Hirschs Basisrandbedingung nicht bestimmbar war.
+- **Es wird schnell besser:** $\sigma_{\dot T} \propto T^{-3/2}$. Nach 3 Jahren
+  schlägt der Ratenkanal das Profil im Bereich 10–150 Jahre, weil das Profil an
+  seinen `r sprintf("%.1f", sig_cal*1000)` mK Kalibration hängen bleibt. Jenseits
+  ~300 Jahren bleibt er dagegen blind — die Empfindlichkeit fällt dort auf ein
+  Promille der des Profils.
+- **Grenze:** über mehrere Jahre wird die gemeinsame Sensordrift zur führenden
+  Systematik. Der tiefenunabhängige Anteil wird als Nuisance absorbiert, ein
+  tiefenabhängiger nicht — und die NTC1/NTC2-Paare wären dagegen blind. Ein
+  wiederholtes Winch-Profil bleibt die einzige unabhängige Kontrolle.
+
+---
+
+## Offene Punkte
+
+- **Nur 185 Tage.** Der Jahresgang ist daraus nicht sauber bestimmbar; ein voller
+  Zyklus würde ihn absichern und $\kappa(z)$ *in situ* liefern — die derzeit
+  dominierende Modellunsicherheit.
+- **Die Dekorrelationszeit τ der Bohrlochvariabilität** ist angenommen (30 d),
+  nicht gemessen. Sie skaliert die gesamte Ratenunsicherheit: τ = 10 d → 4σ,
+  τ = 90 d → 1.4σ für die 92-m-Rate.
+- **Einbautiefen** sind Nominalwerte; ein systematischer Tiefenfehler von 1 m
+  wirkt bei 26 m mit ~20 mK — und ein mit der Tiefe *variierender* Fehler wäre
+  ein tiefenabhängiger systematischer Messfehler im Sinne von Abschnitt 6.7b.
+- **Der Vergleich mit Hirsch et al. beruht auf einer aus dem Text
+  digitalisierten Kurve**, nicht auf ihrem Posterior. Mit den Originaldaten wäre
+  er belastbarer.
+
+*Anmerkung zum Manuskript:* S. 10 nennt als Maximum 2023 −44.13 °C und +0.4 °C
+bis 1973, S. 12 nennt −44.5 °C und +0.6 °C bis 1970; Fig. 1.3 stützt S. 10.
