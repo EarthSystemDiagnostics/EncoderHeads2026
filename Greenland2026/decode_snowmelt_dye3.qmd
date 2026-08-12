@@ -20,6 +20,9 @@ execute:
 Der **zweite SnowMelt-Kopf** (IMEI **301434062008160**) an **Dye3**: 24 Knoten mit je
 NTC1 / NTC2 / NTC3 (TestSB), Abstand 4 cm — baugleich zum NEWGRIP-Kopf. Dieses
 Dokument decodiert die `.bin`-Nachrichten und zeichnet das Schmelz-/Temperaturprofil.
+**Montage:** das untere Kettenende hängt seit der Installation **~40 cm über der
+Schneeoberfläche** — Sensoren schneien erst ein, wenn ~40 cm Netto-Akkumulation
+aufgelaufen sind (siehe „Einschneidiagnostik").
 
 Die beiden Schwesterdokumente: **`decode_snowmelt_newgrip.qmd`** für den Kopf am
 GRIP-Standort (IMEI 300434065508020) und **`decode_chain.qmd`** für die Kette
@@ -439,6 +442,125 @@ p_line <- ggplot(ts, aes(x = time, y = temp_C,
 (p_sensor + p_var + p_mean_lab + p_mean_beta + p_heat +
    plot_layout(widths = c(0.5, 1.3, 1.3, 1.3, 5))) / p_line +
   plot_layout(heights = c(3, 2))
+```
+
+---
+
+## Einschneidiagnostik
+
+Wird das untere Ende der Kette vom Schnee eingegraben? Kriterium ist die
+**Dämpfung des Tagesgangs**: die Dämpfungstiefe der Tageswelle in trockenem
+Schnee beträgt ~8–10 cm, ein Sensor unter ≥5 cm Schnee verliert also sichtbar
+Tagesamplitude, unter ~20 cm bleiben <10 % — dazu käme eine Phasenverzögerung
+und ein vertikaler Gradient zur Grenzfläche. Der Abschnitt rechnet bei jedem
+Render neu: (a) Hovmöller der Tagesamplitude je Sensorhöhe, (b) das
+Amplitudenprofil der letzten 7 Tage, (c) ein automatisches Urteil (gedämpft =
+Amplitude < 35 % des Medians der obersten Sensoren).
+
+**Erwartung an diesem Kopf:** das untere Kettenende hängt seit der Installation
+**~40 cm über der Schneeoberfläche**. Bevor der unterste Sensor einschneit,
+müssen also erst ~40 cm Netto-Akkumulation auflaufen — dass hier über Wochen
+nichts passiert, ist erwartungsgemäß.
+
+```{r einschnei-amp, eval=multi, fig.height=6.5, fig.width=12}
+s        <- cfg$spacing_cm
+rank_map <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
+
+amp_d <- series_long |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s,
+         day      = as.Date(time)) |>
+  group_by(hoehe_cm, day) |>
+  summarise(amp = diff(range(temp_C)), n_meas = n(), .groups = "drop") |>
+  filter(n_meas >= 4L, day > min(day), day < max(day))   # nur volle Tage
+
+last7 <- amp_d |> filter(day > max(day) - 7L) |>
+  group_by(hoehe_cm) |> summarise(amp = median(amp), .groups = "drop")
+ref_top <- median(last7$amp[last7$hoehe_cm >= quantile(last7$hoehe_cm, 0.75)])
+last7   <- last7 |> mutate(ratio = amp / ref_top, gedaempft = ratio < 0.35)
+
+max_h <- n_nodes * 3L * s
+p_hov <- ggplot(amp_d, aes(day, hoehe_cm, fill = amp)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "Tagesamplitude (K)", limits = c(0, NA)) +
+  scale_y_continuous("Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, 24), expand = c(0, 0)) +
+  scale_x_date(NULL, expand = c(0, 0)) +
+  labs(title    = sprintf("Tagesamplitude je Sensorhöhe — %s", cfg$label),
+       subtitle = "eingeschneite Sensoren müssten unten ein gedämpftes (dunkles) Band bilden") +
+  theme_bw(base_size = 12) + theme(panel.grid = element_blank())
+
+p_prof <- ggplot(last7, aes(amp, hoehe_cm)) +
+  geom_vline(xintercept = 0.35 * ref_top, linetype = "dashed", colour = "firebrick") +
+  geom_path(colour = "grey70", linewidth = 0.4) +
+  geom_point(aes(colour = gedaempft), size = 1.8, show.legend = FALSE) +
+  scale_colour_manual(values = c(`FALSE` = "#2980b9", `TRUE` = "firebrick")) +
+  scale_y_continuous(NULL, limits = c(0, max_h), breaks = seq(0, max_h, 24),
+                     expand = c(0, 0)) +
+  scale_x_continuous("Median-Amplitude (K)", limits = c(0, NA)) +
+  labs(title = "letzte 7 Tage", subtitle = "gestrichelt: Dämpfungsschwelle") +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+p_hov + p_prof + plot_layout(widths = c(3.2, 1))
+```
+
+```{r einschnei-verdict, eval=multi, results='asis'}
+bot <- last7 |> slice_min(hoehe_cm, n = 1)
+stand <- format(max(amp_d$day), "%d.%m.%Y")
+if (!any(last7$gedaempft)) {
+  cat(sprintf(
+    "**Kein Sensor eingeschneit** (Stand %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) hat in den letzten 7 Tagen eine Median-Tagesamplitude von **%.1f K** = **%.0f %%** der obersten Sensoren (%.1f K) — keine Dämpfung, kein vertikaler Gradient. Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
+    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, bot$amp, 100 * bot$ratio, ref_top))
+} else {
+  h_snow <- max(last7$hoehe_cm[last7$gedaempft])
+  cat(sprintf(
+    "**Eingeschneit bis ca. %d cm** (Stand %s): %d von %d Sensorhöhen sind gedämpft (< 35 %% der obersten Sensoren). Unterster Sensor: %.1f K = %.0f %% der Referenz (%.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse — d. h. seit Installation sind ≳ %d cm Netto-Akkumulation aufgelaufen (40 cm Freihang + Überdeckung).\n",
+    h_snow, stand, sum(last7$gedaempft), nrow(last7), bot$amp, 100 * bot$ratio,
+    ref_top, h_snow, min(last7$hoehe_cm[!last7$gedaempft]), 40L + h_snow))
+}
+```
+
+### Abgleich mit der nächsten AWS — NASA-SE (NSE)
+
+Die nächste GC-Net/PROMICE-Station zu Dye-3 ist **NASA-SE** (~157 km
+nordöstlich, 2386 m — ähnliche Höhenlage wie Dye-3 mit ~2480 m; DY2 und
+South Dome liegen weiter weg). Sie misst die Schneehöhe direkt (SR50) und ist
+near-real-time frei verfügbar (GEUS-THREDDS, stündlich aktualisiert). Wegen
+der Entfernung ist das nur ein grober Anhalt für einzelne Schneefall-Events,
+aber ein guter Anhalt für die Größenordnung der Netto-Akkumulation. Der Block
+lädt bei jedem Render die Tageswerte neu; ohne Internetverbindung wird der
+Vergleich übersprungen.
+
+```{r einschnei-aws, eval=multi, fig.height=4.2, fig.width=10}
+AWS_ID  <- "NSE"
+AWS_LBL <- "NASA-SE AWS (GC-Net/PROMICE, ~157 km nordöstlich von Dye-3)"
+aws_url <- sprintf("https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/day/%s_day.csv", AWS_ID)
+aws <- tryCatch({ options(timeout = 60)
+  suppressWarnings(readr::read_csv(aws_url, show_col_types = FALSE)) },
+  error = function(e) NULL)
+
+if (is.null(aws) || !"z_surf_combined" %in% names(aws)) {
+  cat(sprintf("AWS %s nicht erreichbar (%s) — Vergleich übersprungen.\n", AWS_ID, aws_url))
+} else {
+  t0 <- as.Date(min(series_long$time))
+  aw <- aws |> mutate(day = as.Date(time)) |>
+    filter(day >= t0 - 14L, is.finite(z_surf_combined)) |>
+    group_by(day) |> summarise(z = 100 * mean(z_surf_combined), .groups = "drop")
+  z0 <- aw$z[which.min(abs(as.numeric(aw$day - t0)))]
+  dz <- tail(aw$z, 1) - z0
+  print(
+    ggplot(aw, aes(day, z - z0)) +
+      geom_vline(xintercept = t0, linetype = "dashed", colour = "grey50") +
+      annotate("text", x = t0, y = max(aw$z - z0), label = " Installation",
+               hjust = 0, vjust = 1, size = 3.2, colour = "grey40") +
+      geom_line(colour = "#2166ac", linewidth = 0.7) +
+      geom_point(colour = "#2166ac", size = 1.1) +
+      scale_y_continuous("Oberflächenhöhe (cm, rel. zur Installation)") +
+      scale_x_date(NULL) +
+      labs(title = AWS_LBL,
+           subtitle = sprintf("z_surf_combined (Tagesmittel), Stand %s — Netto seit Installation: %+.0f cm (Referenz für die 40 cm Freihang)",
+                              format(max(aw$day), "%d.%m.%Y"), dz)) +
+      theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank()))
+}
 ```
 
 ---

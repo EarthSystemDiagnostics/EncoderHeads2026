@@ -430,71 +430,119 @@ p_line <- ggplot(ts, aes(x = time, y = temp_C,
 
 ---
 
-## Zoom — die 5 untersten Sensoren
+## Einschneidiagnostik
 
-Frage: **werden die untersten Stäbe allmählich vom Schnee eingegraben?** Schnee
-dämpft den Tagesgang, ein zugeschneiter Sensor müsste seine Tagesamplitude also
-verlieren und sich vom Rest der Säule **flach abkoppeln**. Der Zoom nimmt die
-fünf tiefsten Sensoren (4 / 8 / 12 / 16 / 20 cm; Höhe steigt → Farbe dunkler)
-und stellt zwei Panels übereinander: oben die absolute Temperatur, unten die
-Abweichung vom Median der ganzen Säule (= „Umgebung").
+Wird das untere Ende der Kette vom Schnee eingegraben? Kriterium ist die
+**Dämpfung des Tagesgangs**: die Dämpfungstiefe der Tageswelle in trockenem
+Schnee beträgt ~8–10 cm, ein Sensor unter ≥5 cm Schnee verliert also sichtbar
+Tagesamplitude, unter ~20 cm bleiben <10 % — dazu käme eine Phasenverzögerung
+und ein vertikaler Gradient zur Grenzfläche. Der Abschnitt rechnet bei jedem
+Render neu: (a) Hovmöller der Tagesamplitude je Sensorhöhe, (b) das
+Amplitudenprofil der letzten 7 Tage, (c) ein automatisches Urteil (gedämpft =
+Amplitude < 35 % des Medians der obersten Sensoren).
 
-```{r zoom-bottom, eval=multi, fig.height=8, fig.width=11}
+Die Montagehöhe des untersten Sensors über der Schneeoberfläche ist für diesen
+Kopf nicht dokumentiert; die bisherigen Daten zeigen ihn oberflächennah, aber
+in Luft. (Der helle Fleck bei ~64–92 cm Anfang Juli ist das
+Tape-/Folien-Experiment, kein Schnee-Signal.)
+
+```{r einschnei-amp, eval=multi, fig.height=6.5, fig.width=12}
 s        <- cfg$spacing_cm
-ntc_rank <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
+rank_map <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
 
-# Referenz = Median der ganzen Säule je Zeitpunkt (die "Umgebung").
-ref_med <- series_long |> group_by(time) |>
-  summarise(refT = median(temp_C, na.rm = TRUE), .groups = "drop")
+amp_d <- series_long |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s,
+         day      = as.Date(time)) |>
+  group_by(hoehe_cm, day) |>
+  summarise(amp = diff(range(temp_C)), n_meas = n(), .groups = "drop") |>
+  filter(n_meas >= 4L, day > min(day), day < max(day))   # nur volle Tage
 
-zb <- series_long |>
-  mutate(rank = ntc_rank[sensor], hoehe_cm = (node - 1L) * 3L * s + rank * s) |>
-  filter(hoehe_cm <= 5L * s) |>                       # die 5 untersten Sensoren
-  left_join(ref_med, by = "time") |>
-  mutate(anom = temp_C - refT,
-         lab  = factor(sprintf("%2d cm — K%d %s", hoehe_cm, node,
-                               c("NTC1", "NTC2", "NTC3")[rank])))
-zb$lab <- factor(zb$lab, levels = unique(zb$lab[order(zb$hoehe_cm)]))
+last7 <- amp_d |> filter(day > max(day) - 7L) |>
+  group_by(hoehe_cm) |> summarise(amp = median(amp), .groups = "drop")
+ref_top <- median(last7$amp[last7$hoehe_cm >= quantile(last7$hoehe_cm, 0.75)])
+last7   <- last7 |> mutate(ratio = amp / ref_top, gedaempft = ratio < 0.35)
 
-# Höhe ist GEORDNET → sequenzielle Ein-Ton-Rampe (dunkler = höher), keine 5
-# beliebigen Kategoriefarben.
-zcols <- setNames(colorRampPalette(c("#9ecae1", "#08306b"))(nlevels(zb$lab)),
-                  levels(zb$lab))
+max_h <- n_nodes * 3L * s
+p_hov <- ggplot(amp_d, aes(day, hoehe_cm, fill = amp)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "Tagesamplitude (K)", limits = c(0, NA)) +
+  scale_y_continuous("Höhe (cm)", limits = c(0, max_h),
+                     breaks = seq(0, max_h, 24), expand = c(0, 0)) +
+  scale_x_date(NULL, expand = c(0, 0)) +
+  labs(title    = sprintf("Tagesamplitude je Sensorhöhe — %s", cfg$label),
+       subtitle = "eingeschneite Sensoren müssten unten ein gedämpftes (dunkles) Band bilden") +
+  theme_bw(base_size = 12) + theme(panel.grid = element_blank())
 
-p_abs <- ggplot(zb, aes(time, temp_C, colour = lab)) +
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = zcols, name = NULL) +
-  labs(title    = sprintf("Die 5 untersten Sensoren — %s", cfg$label),
-       subtitle = "Absolute Temperatur; alle fünf folgen weiter dem vollen Tagesgang",
-       x = NULL, y = "Temperatur (°C)") +
-  theme_bw(base_size = 12) +
-  theme(legend.position = "bottom", panel.grid.minor = element_blank())
-
-p_anom <- ggplot(zb, aes(time, anom, colour = lab)) +
-  geom_hline(yintercept = 0, colour = "grey60") +
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = zcols, guide = "none") +
-  labs(subtitle = "Abweichung vom Median der ganzen Säule — ein eingegrabener Sensor müsste sich hier flach abkoppeln",
-       x = "Zeit (UTC)", y = "Sensor − Säulen-Median (°C)") +
+p_prof <- ggplot(last7, aes(amp, hoehe_cm)) +
+  geom_vline(xintercept = 0.35 * ref_top, linetype = "dashed", colour = "firebrick") +
+  geom_path(colour = "grey70", linewidth = 0.4) +
+  geom_point(aes(colour = gedaempft), size = 1.8, show.legend = FALSE) +
+  scale_colour_manual(values = c(`FALSE` = "#2980b9", `TRUE` = "firebrick")) +
+  scale_y_continuous(NULL, limits = c(0, max_h), breaks = seq(0, max_h, 24),
+                     expand = c(0, 0)) +
+  scale_x_continuous("Median-Amplitude (K)", limits = c(0, NA)) +
+  labs(title = "letzte 7 Tage", subtitle = "gestrichelt: Dämpfungsschwelle") +
   theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 
-p_abs / p_anom + plot_layout(heights = c(1, 0.85))
+p_hov + p_prof + plot_layout(widths = c(3.2, 1))
 ```
 
-```{r zoom-bottom-verdict, eval=multi, results='asis'}
-# Wächst die Höhen-Spreizung der Anomalie über die Zeit? Tagesspitze (max) der
-# Anomalie je Tag für den untersten (4 cm) und den fünften Sensor (20 cm).
-zday <- zb |> mutate(day = as.Date(time)) |>
-  group_by(day) |> filter(n_distinct(time) >= 5L) |> ungroup()
-sp <- zday |> filter(hoehe_cm %in% c(s, 5L * s)) |>
-  group_by(day, hoehe_cm) |> summarise(amax = max(anom, na.rm = TRUE), .groups = "drop") |>
-  pivot_wider(names_from = hoehe_cm, values_from = amax, names_prefix = "h") |>
-  mutate(spread = .data[[paste0("h", s)]] - .data[[paste0("h", 5L * s)]])
-first_sp <- head(sp, 1); last_sp <- tail(sp, 1)
-cat(sprintf(
-  "**Kein Eingraben — im Gegenteil.** Die Amplitude bleibt am **untersten** Sensor am größten und nimmt nach oben glatt ab; kein Sensor glättet sich. In der Anomalie koppelt sich der unterste Sensor über die Zeit **nach oben** ab (nicht flach): die Spitzen-Spreizung 4 cm gegenüber 20 cm wächst von **%+.2f °C** (%s) auf **%+.2f °C** (%s). Das ist die Signatur zunehmender Strahlungsaufheizung am untersten, oberflächennahen Ende — die Schneeoberfläche unter dem Kopf schmilzt eher ab, als dass sie die Stäbe zudeckt.\n",
-  first_sp$spread, format(first_sp$day, "%d.%m."),
-  last_sp$spread,  format(last_sp$day,  "%d.%m.")))
+```{r einschnei-verdict, eval=multi, results='asis'}
+bot <- last7 |> slice_min(hoehe_cm, n = 1)
+stand <- format(max(amp_d$day), "%d.%m.%Y")
+if (!any(last7$gedaempft)) {
+  cat(sprintf(
+    "**Kein Sensor eingeschneit** (Stand %s). Der unterste Sensor (%d cm) hat in den letzten 7 Tagen eine Median-Tagesamplitude von **%.1f K** = **%.0f %%** der obersten Sensoren (%.1f K) — keine Dämpfung, kein vertikaler Gradient. Die gesamte Kette hängt in Luft; eine Überdeckung von wenigen cm (≲ 5 cm) wäre mit dieser Methode allerdings nicht sicher erkennbar.\n",
+    stand, bot$hoehe_cm, bot$amp, 100 * bot$ratio, ref_top))
+} else {
+  h_snow <- max(last7$hoehe_cm[last7$gedaempft])
+  cat(sprintf(
+    "**Eingeschneit bis ca. %d cm** (Stand %s): %d von %d Sensorhöhen sind gedämpft (< 35 %% der obersten Sensoren). Unterster Sensor: %.1f K = %.0f %% der Referenz (%.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse.\n",
+    h_snow, stand, sum(last7$gedaempft), nrow(last7), bot$amp, 100 * bot$ratio,
+    ref_top, h_snow, min(last7$hoehe_cm[!last7$gedaempft])))
+}
+```
+
+### Abgleich mit der nächsten AWS — Summit (SUM)
+
+Die GC-Net/PROMICE-Station **Summit** (~30 km von GRIP) misst die Schneehöhe
+direkt (SR50) und ist near-real-time frei verfügbar (GEUS-THREDDS, stündlich
+aktualisiert). Der Block lädt bei jedem Render die Tageswerte neu und zeigt
+den Oberflächenverlauf seit Installation des Kopfes — die unabhängige
+Referenz, wie viel Akkumulation überhaupt aufgelaufen ist. Ohne
+Internetverbindung wird der Vergleich übersprungen.
+
+```{r einschnei-aws, eval=multi, fig.height=4.2, fig.width=10}
+AWS_ID  <- "SUM"
+AWS_LBL <- "Summit AWS (GC-Net/PROMICE, ~30 km von GRIP)"
+aws_url <- sprintf("https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/day/%s_day.csv", AWS_ID)
+aws <- tryCatch({ options(timeout = 60)
+  suppressWarnings(readr::read_csv(aws_url, show_col_types = FALSE)) },
+  error = function(e) NULL)
+
+if (is.null(aws) || !"z_surf_combined" %in% names(aws)) {
+  cat(sprintf("AWS %s nicht erreichbar (%s) — Vergleich übersprungen.\n", AWS_ID, aws_url))
+} else {
+  t0 <- as.Date(min(series_long$time))
+  aw <- aws |> mutate(day = as.Date(time)) |>
+    filter(day >= t0 - 14L, is.finite(z_surf_combined)) |>
+    group_by(day) |> summarise(z = 100 * mean(z_surf_combined), .groups = "drop")
+  z0 <- aw$z[which.min(abs(as.numeric(aw$day - t0)))]
+  dz <- tail(aw$z, 1) - z0
+  print(
+    ggplot(aw, aes(day, z - z0)) +
+      geom_vline(xintercept = t0, linetype = "dashed", colour = "grey50") +
+      annotate("text", x = t0, y = max(aw$z - z0), label = " Installation",
+               hjust = 0, vjust = 1, size = 3.2, colour = "grey40") +
+      geom_line(colour = "#2166ac", linewidth = 0.7) +
+      geom_point(colour = "#2166ac", size = 1.1) +
+      scale_y_continuous("Oberflächenhöhe (cm, rel. zur Installation)") +
+      scale_x_date(NULL) +
+      labs(title = AWS_LBL,
+           subtitle = sprintf("z_surf_combined (Tagesmittel), Stand %s — Netto seit Installation: %+.0f cm",
+                              format(max(aw$day), "%d.%m.%Y"), dz)) +
+      theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank()))
+}
 ```
 
 ---
@@ -595,10 +643,10 @@ als Solar-Anomalie (NTC1 − Median aller Knoten) der betroffenen Knoten — mit
 | **Schwarztape** | 6, 7, 8 | Do 2026-07-02 22:00 | Mo 2026-07-06 00:00 | **+3 … +16 °C** (heizt) |
 | **Alufolie** | 6, 7 | Do 2026-07-09 ~20:00 | So 2026-07-12 Nacht¹ | **−1 … −1.5 °C** (kühlt) |
 
-¹ Zum Zeitpunkt der neuesten Nachricht (07-12 06:15) ist die Folie noch angebracht;
-die Entfernung Sonntag Nacht liegt nach dem letzten Datensatz. **Knoten 8** war nur
-getapt (keine Folie): im Folien-Fenster ist seine Anomalie ~0/erratisch (separates
-Kontakt-/Sitz-Problem) — foliert sind **Knoten 6 und 7**.
+¹ Die Folie wurde in der Nacht So 2026-07-12 entfernt; seither laufen die Knoten
+wieder unbehandelt. **Knoten 8** war nur getapt (keine Folie): im Folien-Fenster
+ist seine Anomalie ~0/erratisch (separates Kontakt-/Sitz-Problem) — foliert waren
+**Knoten 6 und 7**.
 
 ```{r tape-alu-setup, eval=multi}
 BLACK_NODES <- c(6L, 7L, 8L)
