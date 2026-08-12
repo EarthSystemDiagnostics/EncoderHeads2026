@@ -287,6 +287,10 @@ ggplot(long, aes(x = temp_C, y = hoehe_cm)) +
 Only shown when more than one `.bin` file is loaded (a time series). Every message
 contributes; the single-message sections above show the newest one.
 
+Die Heatmap und der Linienplot zeigen **alle** Daten (das Tape-/Folien-Experiment
+an Knoten 6–8, 02.–12.07., ist dort sichtbar); die **Varianz-** und
+**Mittel−Trend-Kurven** rechnen ohne dieses Fenster, sonst wären sie verfälscht.
+
 ```{r ts-flag}
 multi <- use_bin && exists("all_bin") && n_msg > 1L
 ```
@@ -305,6 +309,15 @@ cnt_l  <- series_wide |> select(node, time, ends_with("_counts")) |>
 
 series_long <- left_join(temp_l, cnt_l, by = c("node", "time", "sensor")) |>
   filter(!is.na(temp_C))
+
+# Tape-/Alufolie-Experiment (Knoten 6–8, 02.07. 22:00 – 12.07. 22:00 UTC): die
+# manipulierten (Knoten, Zeit)-Paare verfälschen jede Statistik. ALLE Diagnostiken
+# rechnen deshalb auf `series_diag` (Experimentfenster ausgeschnitten); die volle
+# Reihe `series_long` bleibt für die Plots und den Experiment-Abschnitt unten.
+EXP_NODES <- c(6L, 7L, 8L)
+EXP_WIN   <- as.POSIXct(c("2026-07-02 22:00", "2026-07-12 22:00"), tz = "UTC")
+series_diag <- series_long |>
+  filter(!(node %in% EXP_NODES & time >= EXP_WIN[1] & time <= EXP_WIN[2]))
 ```
 
 ```{r ts-snowmelt, eval=multi, fig.height=11, fig.width=15}
@@ -344,17 +357,20 @@ p_sensor <- ggplot(strip_df, aes(x = 1, y = hoehe_cm, fill = sensor)) +
         legend.key.size = unit(0.8, "lines"))
 
 # Two companion curves on the same height axis (variance & mean−trend residual).
+# Beide rechnen OHNE das Tape-/Folien-Fenster (ts_diag), die Plots zeigen alles.
 sensor_by_h <- strip_df |> select(hoehe_cm, sensor)
 
-var_df <- ts |> group_by(hoehe_cm) |>
+ts <- ts |> mutate(temp_beta = NTC_beta(counts))
+ts_diag <- ts |> filter(!(node %in% EXP_NODES & time >= EXP_WIN[1] & time <= EXP_WIN[2]))
+
+var_df <- ts_diag |> group_by(hoehe_cm) |>
   summarise(sd_t = 1.4826 * mad(temp_C, na.rm = TRUE), .groups = "drop") |>
   left_join(sensor_by_h, by = "hoehe_cm") |> arrange(hoehe_cm)
 
 # Mittel−Trend = per-height time-median minus a single LINEAR height trend, once
 # with the lab calibration and once with the fixed Beta curve (from counts).
-ts <- ts |> mutate(temp_beta = NTC_beta(counts))
 lin_offset <- function(col) {
-  d <- ts |> select(time, hoehe_cm, y = all_of(col)) |> filter(is.finite(y)) |>
+  d <- ts_diag |> select(time, hoehe_cm, y = all_of(col)) |> filter(is.finite(y)) |>
     group_by(time) |> mutate(r = 1000 * (y - fitted(lm(y ~ hoehe_cm)))) |> ungroup()
   d |> group_by(hoehe_cm) |>
     summarise(off_mK = mean(r), se_mK = sd(r) / sqrt(n()), .groups = "drop") |>
@@ -443,14 +459,15 @@ Amplitude < 35 % des Medians der obersten Sensoren).
 
 Die Montagehöhe des untersten Sensors über der Schneeoberfläche ist für diesen
 Kopf nicht dokumentiert; die bisherigen Daten zeigen ihn oberflächennah, aber
-in Luft. (Der helle Fleck bei ~64–92 cm Anfang Juli ist das
-Tape-/Folien-Experiment, kein Schnee-Signal.)
+in Luft. Das Tape-/Folien-Fenster (Knoten 6–8, 02.–12.07.) ist hier — wie in
+allen Diagnostiken — ausgeschnitten; das Experiment hat seinen eigenen
+Abschnitt unten.
 
 ```{r einschnei-amp, eval=multi, fig.height=6.5, fig.width=12}
 s        <- cfg$spacing_cm
 rank_map <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
 
-amp_d <- series_long |>
+amp_d <- series_diag |>
   mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s,
          day      = as.Date(time)) |>
   group_by(hoehe_cm, day) |>
@@ -552,11 +569,12 @@ if (is.null(aws) || !"z_surf_combined" %in% names(aws)) {
 NTC1 / NTC2 / NTC3 sind je Node quasi am selben Ort, sollten also denselben
 Tagesgang sehen. Hier wird geprüft, ob **NTC2 systematisch einen stärkeren
 Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten).
+Das Tape-/Folien-Fenster (Knoten 6–8, 02.–12.07.) ist ausgeschnitten.
 
 ```{r ntc2-diag, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
 safe_amp <- function(x) { x <- x[is.finite(x)]; if (length(x) < 2L) NA_real_ else diff(range(x)) }
 
-diag_long <- series_long |>
+diag_long <- series_diag |>
   mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3"))
 
 common_df <- diag_long |> group_by(time) |>

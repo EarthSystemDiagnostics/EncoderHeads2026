@@ -34,6 +34,14 @@ GRIP-Standort (IMEI 300434065508020) und **`decode_chain.qmd`** für die Kette
 225 B misst; der Decoder gibt ihn von selbst als `NA` zurück. Keine
 Ausschlussliste nötig.
 
+**Bauform der untersten zwei Knoten (Positionen 1–2):** dort steht die Platine
+mit den NTCs etwas **aus dem Rohr heraus**, abgedichtet mit weißem Silikon —
+also 6 NTC-Positionen (davon `N28_NTC2` defekt, d. h. 5 funktionierende), die
+thermisch schwächer ans Rohr gekoppelt sind und mehr Luft- statt
+Rohrtemperatur sehen. Erwartung: der an den Standardknoten beobachtete
+NTC2-Mehr-Tagesgang (Rohr-/Kanal-Effekt) sollte hier fehlen oder deutlich
+kleiner sein — geprüft im Bauform-Check der NTC2-Diagnose.
+
 ```{r core}
 source("decode_core.R")
 ```
@@ -633,6 +641,10 @@ cat(sprintf("\n%s\n",
 
 ```{r ntc2-plot, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.5, fig.width=9}
 ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
+  annotate("rect", xmin = 0.5, xmax = 2.5, ymin = -Inf, ymax = Inf,
+           fill = "grey40", alpha = 0.12) +
+  annotate("text", x = 1.5, y = Inf, label = "exponierte\nPlatine", vjust = 1.2,
+           size = 2.9, colour = "grey30", lineheight = 0.9) +
   geom_line(alpha = 0.6, linewidth = 0.5) +
   geom_point(size = 1.8) +
   geom_hline(data = summary_tab,
@@ -640,10 +652,62 @@ ggplot(per_node, aes(x = node, y = amp, colour = sensor)) +
              linetype = "dashed", linewidth = 0.4, show.legend = FALSE) +
   scale_colour_manual(values = c(NTC1 = "#2980b9", NTC2 = "#e74c3c", NTC3 = "#27ae60")) +
   labs(title = "Tagesgang-Amplitude je Node und Sensor",
-       subtitle = "gestrichelt: Sensor-Mittel — NTC2 (rot) liegt systematisch leicht höher",
+       subtitle = "gestrichelt: Sensor-Mittel; grau schattiert: Knoten 1–2 (Platine steht aus dem Rohr)",
        x = "Node", y = "Amplitude max−min (°C)", colour = NULL) +
   theme_bw(base_size = 13) +
   theme(legend.position = "bottom")
+```
+
+### Bauform-Check: exponierte Knoten 1–2
+
+An den Knoten 1–2 steht die NTC-Platine aus dem Rohr heraus (weißes Silikon);
+wenn der NTC2-Mehr-Tagesgang ein **Rohr-/Kanal-Effekt** ist, sollte er dort
+fehlen. Der Vergleich rechnet auf **Median-Tagesamplituden** je Sensor (nicht
+auf dem synoptisch dominierten Gesamt-Range): NTC2-Exzess = Tagesamplitude
+NTC2 − Mittel(NTC1, NTC3), exponierte Knoten gegen die Standardknoten 3–24.
+Knoten 1 hat kein funktionierendes NTC2 (`N28_NTC2` defekt), dort trägt nur
+die Gesamtamplituden-Betrachtung bei.
+
+```{r ntc2-bauform, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), results='asis'}
+EXPOSED_NODES <- c(1L, 2L)
+
+# Median-Tagesamplitude je (Node, Sensor) — misst den Tagesgang direkt.
+day_amp <- series_long |>
+  mutate(sensor = recode(sensor, ntc1_C = "NTC1", ntc2_C = "NTC2", testSB_C = "NTC3"),
+         day = as.Date(time)) |>
+  group_by(node, sensor, day) |>
+  summarise(amp = diff(range(temp_C)), n = n(), .groups = "drop") |>
+  filter(n >= 4L) |>
+  group_by(node, sensor) |>
+  summarise(amp = median(amp), .groups = "drop")
+
+aw_day <- day_amp |> pivot_wider(names_from = sensor, values_from = amp) |>
+  mutate(d = NTC2 - (NTC1 + NTC3) / 2)
+d_exp <- aw_day |> filter(node %in% EXPOSED_NODES, !is.na(d))
+d_std <- aw_day |> filter(!node %in% EXPOSED_NODES, !is.na(d))
+
+amp_grp <- day_amp |>
+  mutate(grp = ifelse(node %in% EXPOSED_NODES, "exponiert (1–2)", "Standard (3–24)")) |>
+  group_by(grp) |> summarise(amp = mean(amp, na.rm = TRUE), .groups = "drop")
+
+cat(sprintf(
+  "- NTC2-Exzess an den **exponierten Knoten**: %s (n = %d verwertbar, Knoten %s).\n",
+  if (nrow(d_exp)) sprintf("**%+.2f °C**", mean(d_exp$d)) else "—",
+  nrow(d_exp), paste(d_exp$node, collapse = ", ")))
+cat(sprintf("- NTC2-Exzess an den **Standardknoten 3–24**: **%+.2f °C** (n = %d).\n",
+            mean(d_std$d), nrow(d_std)))
+cat(sprintf("- Median-Tagesamplitude (alle NTC): exponiert **%.1f °C** vs. Standard **%.1f °C**.\n",
+            amp_grp$amp[amp_grp$grp == "exponiert (1–2)"],
+            amp_grp$amp[amp_grp$grp == "Standard (3–24)"]))
+if (nrow(d_exp)) {
+  verdict <- if (abs(mean(d_std$d)) < 0.1)
+    "→ An den Standardknoten dieses Kopfes gibt es **keinen NTC2-Mehr-Tagesgang** (Exzess ≈ 0) — die Frage, ob die Bauform den Rohr-Effekt beseitigt, stellt sich hier nicht. Auffällig ist stattdessen der **positive Exzess am exponierten Knoten 2** selbst."
+  else if (mean(d_exp$d) < 0.5 * mean(d_std$d))
+    "→ Der NTC2-Exzess ist an den exponierten Knoten **deutlich kleiner** — konsistent mit einem Rohr-/Kanal-Effekt, den die herausstehende Platine nicht mehr sieht."
+  else
+    "→ Der NTC2-Exzess ist an den exponierten Knoten **nicht kleiner** — die Bauform allein erklärt den Effekt damit nicht."
+  cat("\n", verdict, " (Basis: nur Knoten 2 — schwache Statistik, mit mehr Tageszyklen neu bewerten.)\n", sep = "")
+}
 ```
 
 ---
