@@ -8,11 +8,13 @@ R tooling for the thermometry encoder heads deployed at Kohnen Station (Antarcti
 EncoderHeads2026/
 ├── EncodingHeads.qmd          # Encoding documentation: binary → hex → physical units
 ├── rechner.qmd                # Message size / transmission budget calculator
+├── update_all.sh              # One-shot: fetch all Cloudloop data + re-render all reports
+├── fetch_cloudloop_greenland.R  # Greenland fetch: Cloudloop API → testdata/*.bin
 ├── meta/
 │   └── HeadsUndKetten.xlsx    # Head and chain inventory
 │
 ├── KohnenRecords_Analyse/     # Kohnen Station (Antarctica) — heads 03 & 04
-│   ├── fetch_cloudloop.R      # Fetch MO messages from Cloudloop API
+│   ├── fetch_antarctic_cloudloop.R  # Kohnen fetch: Cloudloop API → data/results-api-full.csv
 │   ├── decode_results3.R      # Decode from Cloudloop CSV export
 │   ├── decode_combined.R      # Merge old + new CSV exports and decode
 │   ├── head03_profile.qmd     # Analysis profile — head03 (35 nodes, modem 231709)
@@ -45,6 +47,33 @@ EncoderHeads2026/
 
 Heads 26-02 and 26-03 are SnowMelt sensors with nodes at 4 cm vertical spacing (node 1 = deepest).
 
+## Updating data & plots (Cloudloop)
+
+All live heads report through the Cloudloop API (the web CSV export truncates payloads at
+128 B and must not be used). One command fetches everything and re-renders every report:
+
+```bash
+./update_all.sh
+```
+
+Auth: the API token is read from `$CLOUDLOOP_TOKEN` or `cloudloop/.token` (git-ignored —
+never commit it). Everything is idempotent: both fetchers dedup against data already on
+disk (Greenland by the embedded message timestamp, Kohnen by rewriting the full CSV), so
+re-running at any time is safe.
+
+The script runs these four steps, which can also be run individually:
+
+| Step | Command (from repo root) | Output |
+|---|---|---|
+| 1. Greenland fetch | `Rscript fetch_cloudloop_greenland.R` | new `testdata/<IMEI>-rb*.bin` |
+| 2. Kohnen fetch + decode | `cd KohnenRecords_Analyse && Rscript fetch_antarctic_cloudloop.R && Rscript decode_combined.R` | `data/results-api-full.csv`, `data/decoded_head0{3,4}_*_combined.csv` |
+| 3. Greenland reports | `cd Greenland2026 && quarto render <doc>.qmd` for `decode_snowmelt_newgrip`, `decode_snowmelt_dye3`, `decode_chain`, `system_state` | HTML reports + CSVs in `Greenland2026/data/` |
+| 4. Kohnen reports | `cd KohnenRecords_Analyse && quarto render head03_profile.qmd head04_profile.qmd` | `head03_profile.html`, `head04_profile.html` |
+
+The Greenland heads are identified by message size (225 = GRIP, 226 = Dye3,
+231 = Doppelkette), the two Kohnen Things by latitude ≈ −75 and size
+(340 B + 54 B pair = head03, 284 B = head04) — Cloudloop Thing IDs are opaque.
+
 ## Greenland field use
 
 The decoder is **field-driven and keyed solely by IMEI** (the `.bin` filename prefix, e.g.
@@ -59,9 +88,10 @@ document sharing `decode_core.R`. IMEI ↔ Rockblock modem serial (payload-verif
 
 Workflow:
 
-1. Add `.bin` messages to `testdata/` — either the Cloudloop e-mail attachment, or from a
-   Rockblock CSV export in `download/` (extract per IMEI; the CSV names devices by modem
-   serial, see the table above).
+1. Add `.bin` messages to `testdata/` — normally via `Rscript fetch_cloudloop_greenland.R`
+   (see above); alternatively from the Cloudloop e-mail attachment or a Rockblock CSV
+   export in `download/` (extract per IMEI; the CSV names devices by modem serial, see
+   the table above).
 2. Open the matching document in RStudio. `BIN_FILE` already globs all `.bin` for that IMEI;
    a vector of files renders a time series. (A hex payload can still be pasted into `MSG1` /
    `MSG2` in the SnowMelt docs instead.)
