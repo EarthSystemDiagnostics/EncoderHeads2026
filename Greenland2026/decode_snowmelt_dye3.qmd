@@ -459,11 +459,14 @@ p_line <- ggplot(ts, aes(x = time, y = temp_C,
 Wird das untere Ende der Kette vom Schnee eingegraben? Kriterium ist die
 **Dämpfung des Tagesgangs**: die Dämpfungstiefe der Tageswelle in trockenem
 Schnee beträgt ~8–10 cm, ein Sensor unter ≥5 cm Schnee verliert also sichtbar
-Tagesamplitude, unter ~20 cm bleiben <10 % — dazu käme eine Phasenverzögerung
-und ein vertikaler Gradient zur Grenzfläche. Der Abschnitt rechnet bei jedem
-Render neu: (a) Hovmöller der Tagesamplitude je Sensorhöhe, (b) das
-Amplitudenprofil der letzten 7 Tage, (c) ein automatisches Urteil (gedämpft =
-Amplitude < 35 % des Medians der obersten Sensoren).
+Tagesamplitude, unter ~20 cm bleiben <10 %. Die **Referenz ist die Atmosphäre
+selbst**: die obersten 25 % der Sensorhöhen messen den ungedämpften Tagesgang
+am selben Tag mit, im Verhältnis Amplitude/Referenz kürzt sich die Wetterlage
+heraus. Deshalb genügt **ein einziger voller Messtag** (≥ 4 Messungen über den
+Tag; Tage mit Referenzamplitude < 2 K — ruhig/bedeckt — werden übersprungen).
+Der Abschnitt rechnet bei jedem Render neu: (a) Hovmöller des
+Dämpfungsverhältnisses, (b) das Verhältnisprofil des jüngsten verwertbaren
+Tages, (c) ein automatisches Urteil (gedämpft = Verhältnis < 0.35).
 
 **Erwartung an diesem Kopf:** das untere Kettenende hängt seit der Installation
 **~40 cm über der Schneeoberfläche**. Bevor der unterste Sensor einschneit,
@@ -481,49 +484,68 @@ amp_d <- series_long |>
   summarise(amp = diff(range(temp_C)), n_meas = n(), .groups = "drop") |>
   filter(n_meas >= 4L, day > min(day), day < max(day))   # nur volle Tage
 
-last7 <- amp_d |> filter(day > max(day) - 7L) |>
-  group_by(hoehe_cm) |> summarise(amp = median(amp), .groups = "drop")
-ref_top <- median(last7$amp[last7$hoehe_cm >= quantile(last7$hoehe_cm, 0.75)])
-last7   <- last7 |> mutate(ratio = amp / ref_top, gedaempft = ratio < 0.35)
+# Referenz "Atmosphäre" = Median-Amplitude der obersten 25 % der Höhen AM SELBEN
+# Tag; im Verhältnis kürzt sich die Wetterlage heraus → 1 voller Tag genügt.
+h_ref <- quantile(unique(amp_d$hoehe_cm), 0.75)
+ref_d <- amp_d |> group_by(day) |>
+  summarise(ref = median(amp[hoehe_cm >= h_ref]), .groups = "drop")
+ratio_d <- amp_d |> left_join(ref_d, by = "day") |>
+  filter(ref >= 2) |>            # ruhige/bedeckte Tage (< 2 K oben): kein Urteil möglich
+  mutate(ratio = amp / ref)
+
+day_v  <- max(ratio_d$day)       # jüngster verwertbarer Tag
+prof_v <- ratio_d |> filter(day == day_v) |> mutate(gedaempft = ratio < 0.35)
 
 max_h <- n_nodes * 3L * s
-p_hov <- ggplot(amp_d, aes(day, hoehe_cm, fill = amp)) +
+p_hov <- ggplot(ratio_d, aes(day, hoehe_cm, fill = pmin(ratio, 1.5))) +
   geom_tile() +
-  scale_fill_viridis_c(name = "Tagesamplitude (K)", limits = c(0, NA)) +
+  scale_fill_viridis_c(name = "Amplitude /\nAtmosphäre", limits = c(0, 1.5)) +
   scale_y_continuous("Höhe (cm)", limits = c(0, max_h),
                      breaks = seq(0, max_h, 24), expand = c(0, 0)) +
   scale_x_date(NULL, expand = c(0, 0)) +
-  labs(title    = sprintf("Tagesamplitude je Sensorhöhe — %s", cfg$label),
-       subtitle = "eingeschneite Sensoren müssten unten ein gedämpftes (dunkles) Band bilden") +
+  labs(title    = sprintf("Tagesgang-Dämpfung relativ zur Atmosphäre — %s", cfg$label),
+       subtitle = "Verhältnis zur Referenz (oberste 25 % der Höhen, selber Tag); eingeschneit ⇒ Band < 0.35") +
   theme_bw(base_size = 12) + theme(panel.grid = element_blank())
 
-p_prof <- ggplot(last7, aes(amp, hoehe_cm)) +
-  geom_vline(xintercept = 0.35 * ref_top, linetype = "dashed", colour = "firebrick") +
+p_prof <- ggplot(prof_v, aes(ratio, hoehe_cm)) +
+  geom_vline(xintercept = 1, colour = "grey70") +
+  geom_vline(xintercept = 0.35, linetype = "dashed", colour = "firebrick") +
   geom_path(colour = "grey70", linewidth = 0.4) +
   geom_point(aes(colour = gedaempft), size = 1.8, show.legend = FALSE) +
   scale_colour_manual(values = c(`FALSE` = "#2980b9", `TRUE` = "firebrick")) +
   scale_y_continuous(NULL, limits = c(0, max_h), breaks = seq(0, max_h, 24),
                      expand = c(0, 0)) +
-  scale_x_continuous("Median-Amplitude (K)", limits = c(0, NA)) +
-  labs(title = "letzte 7 Tage", subtitle = "gestrichelt: Dämpfungsschwelle") +
+  scale_x_continuous("Amplitude / Atmosphäre", limits = c(0, NA)) +
+  labs(title = format(day_v, "%d.%m.%Y"), subtitle = "gestrichelt: Dämpfungsschwelle 0.35") +
   theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 
 p_hov + p_prof + plot_layout(widths = c(3.2, 1))
 ```
 
 ```{r einschnei-verdict, eval=multi, results='asis'}
-bot <- last7 |> slice_min(hoehe_cm, n = 1)
-stand <- format(max(amp_d$day), "%d.%m.%Y")
-if (!any(last7$gedaempft)) {
+bot <- prof_v |> slice_min(hoehe_cm, n = 1)
+stand <- format(day_v, "%d.%m.%Y")
+if (!any(prof_v$gedaempft)) {
   cat(sprintf(
-    "**Kein Sensor eingeschneit** (Stand %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) hat in den letzten 7 Tagen eine Median-Tagesamplitude von **%.1f K** = **%.0f %%** der obersten Sensoren (%.1f K) — keine Dämpfung, kein vertikaler Gradient. Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
-    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, bot$amp, 100 * bot$ratio, ref_top))
+    "**Kein Sensor eingeschneit** (Tages-Check %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude) — keine Dämpfung. Das Urteil braucht nur diesen einen vollen Messtag, weil sich die Wetterlage im Verhältnis herauskürzt. Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
+    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100 * bot$ratio, bot$amp, bot$ref))
 } else {
-  h_snow <- max(last7$hoehe_cm[last7$gedaempft])
+  h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(
-    "**Eingeschneit bis ca. %d cm** (Stand %s): %d von %d Sensorhöhen sind gedämpft (< 35 %% der obersten Sensoren). Unterster Sensor: %.1f K = %.0f %% der Referenz (%.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse — d. h. seit Installation sind ≳ %d cm Netto-Akkumulation aufgelaufen (40 cm Freihang + Überdeckung).\n",
-    h_snow, stand, sum(last7$gedaempft), nrow(last7), bot$amp, 100 * bot$ratio,
-    ref_top, h_snow, min(last7$hoehe_cm[!last7$gedaempft]), 40L + h_snow))
+    "**Eingeschneit bis ca. %d cm** (Tages-Check %s): %d von %d Sensorhöhen liegen unter 35 %% der Atmosphären-Referenz. Unterster Sensor: **%.0f %%** (%.1f von %.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse — d. h. seit Installation sind ≳ %d cm Netto-Akkumulation aufgelaufen (40 cm Freihang + Überdeckung).\n",
+    h_snow, stand, sum(prof_v$gedaempft), nrow(prof_v), 100 * bot$ratio, bot$amp,
+    bot$ref, h_snow, min(prof_v$hoehe_cm[!prof_v$gedaempft]), 40L + h_snow))
+}
+
+# Frühwarnung: fallendes Verhältnis am untersten Sensor über die letzten
+# verwertbaren Tage = einsetzendes Einschneien, bevor die 35 %-Schwelle fällt.
+r_bot <- ratio_d |> filter(hoehe_cm == min(hoehe_cm)) |> arrange(day) |> tail(5)
+if (!any(prof_v$gedaempft) && nrow(r_bot) >= 3 &&
+    tail(r_bot$ratio, 1) < 0.7 && tail(r_bot$ratio, 1) < head(r_bot$ratio, 1)) {
+  cat(sprintf(
+    "\n**Hinweis — beginnende Dämpfung:** das Verhältnis des untersten Sensors fällt über die letzten %d verwertbaren Tage (%s): %s. Das ist das erwartete Muster bei einsetzendem Einschneien; die 35 %%-Schwelle ist noch nicht unterschritten.\n",
+    nrow(r_bot), paste(format(range(r_bot$day), "%d.%m."), collapse = " – "),
+    paste(sprintf("%.2f", r_bot$ratio), collapse = " → ")))
 }
 ```
 
