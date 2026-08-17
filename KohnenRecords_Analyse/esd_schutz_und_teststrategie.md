@@ -58,6 +58,37 @@ innerhalb des Systems** — nur die zerstören Elektronik.
    Ladungsabbau an die Luft, bevor Überschlagspotenziale erreicht werden
    (Luftfahrt-Standardlösung).
 
+## Architektur-Entscheidung: Box bleibt vergraben
+
+Die klassischen Plateau-AWS (AMRC/Wisconsin, IMAU, AAD) sind implizit
+ESD-robust, weil Elektronikbox und Antenne am selben Metallmast sitzen
+(Koax < 1 m, alles ein Potenzial). Diese Architektur ist für uns **nicht**
+übernehmbar:
+
+- Die mK-Thermometrie braucht eine thermisch stabile Messelektronik — die
+  vergrabene Box (~8–10 m, Jahresgang ~1.2 K) ist Voraussetzung der
+  Messqualität, nicht Bequemlichkeit.
+- Batteriekapazität bei −37 °C statt −60 °C Winterluft.
+- Variante „nur Modem an den Mast" (serielle Leitung statt RF-Koax hoch —
+  digitale Leitungen wären trivial schützbar) scheitert an der
+  Modem-Spezifikation (−40 °C) gegenüber −60 °C Mastluft; ein Heizer ist
+  im Batterie-Budget nicht darstellbar.
+- Einordnung: Es gibt für SBD nur die 9602/9603-Familie — die anderen
+  Netze betreiben dieselben Modems am Mast **außerhalb der Spezifikation**
+  (isolierte Box, Eigenerwärmung; −40 °C ist Garantiegrenze, kein hartes
+  Funktionsende, kritisch sind Kaltstarts) und bezahlen mit den bekannten
+  Winterlücken der Plateau-AWS-Records. Das vergrabene Design ist die
+  einzige Architektur, die das Modem ganzjährig **innerhalb** der Spez
+  hält — der einzige Konstruktionsfehler war der ungeschützte RF-Pfad.
+
+**Folgerung:** vergrabene Architektur behalten, die Mast↔Box-Entkopplung
+explizit reparieren: (1) Bonding-Leiter (Cu-Band) parallel zum Koax von
+Antennensockel/Mast bis zur Box, beidseitig angeschlossen — Mast, Schirm
+und Box auf einem Potenzial, die Aufladung entsteht gar nicht erst;
+(2) GDT am Boxeintritt für den differentiellen Rest auf dem Innenleiter;
+(3) Bleed/DC-Kurzschluss antennenseitig. Rein passiv, kein Strombedarf,
+Thermik unverändert.
+
 ## Teststrategie
 
 Zwei Testziele trennen:
@@ -94,8 +125,78 @@ Katabatische Stürme mit trockenem Drift, ganzjährig Personal, AWI-Logistik.
 Redesignten Mast mit Feldmühle einen Winter durchlaufen lassen, bevor etwas
 wieder nach Kohnen geht.
 
-**Pragmatische Reihenfolge:** ESD-Bench → SLF-Windkanal (1–2 Wochen
-Kampagne) → Winter auf Neumayer → Kohnen.
+**Minimalprogramm (Zeit-/Testkapazität knapp, Iridium gesetzt):** Zwei
+Tests genügen als Gate, beide in Tagen machbar: (1) Iridium-Session durch
+den GDT (Einfügedämpfung verifizieren — halber Tag am Dach/Feld);
+(2) Puls-Test auf die geschützte Leitung (ESD-Generator/HV über MΩ),
+danach Session-Test. SLF-Windkanal und Neumayer-Winter sind damit
+Optionen, keine Gates — ihr Restrisiko (Ladungsabfluss im realen Drift)
+ist durch Bleed + Bonding konstruktiv adressiert.
+
+**Nachrüstsatz Sommerbesuch:** 2× Inline-GDT (TNC, + Ersatzkapseln),
+Cu-Bondingband + Schellen (mit Dehnungsreserve), MΩ-Bleed-Widerstände,
+Ersatz-Antenne, Ersatz-Modem, SD-Lesegerät.
+
+## Erfahrungswert SWARM: winterfest — und warum
+
+Mit SWARM-Telemetrie (VHF 137–150 MHz, inzwischen von SpaceX eingestellt)
+gab es in der Antarktis **keine Winterausfälle**. Das stützt die
+ESD-Diagnose: VHF-Whips/Helices sind typischerweise **inhärent DC-geerdet**
+(Shunt-Induktivität im Matching, geerdeter Strahlerfuß) — Statik fließt
+kontinuierlich ab; zudem sind VHF-Frontends ESD-toleranter als
+1,6-GHz-LNAs. Der Wechsel zu Iridium führte die Verwundbarkeit ein
+(kapazitiver L-Band-Patch ohne DC-Pfad + langes Koax + ungeschützter
+Frontend); der Bleed/DC-Kurzschluss im Schutzkonzept stellt genau die
+SWARM-Eigenschaft wieder her.
+
+**Echtzeit ist nicht gefordert** — damit sind die polartauglichen
+Store-and-forward-Nachfolger vollwertige Kandidaten für die nächste
+Gerätegeneration, denn sie lösen das Statikproblem an der Wurzel
+(UHF/VHF-Klasse mit inhärent DC-geerdeten Antennen) statt es zu flicken:
+
+- **Kinéis** (Argos-Nachfolge, 25 Nanosats, 401 MHz UHF): robusteste
+  Frequenzklasse, gute Polabdeckung (Argos-Erbe); kleine Payloads —
+  340 B müssten gestückelt werden.
+- **Astrocast** (L-Band, polar, ~160 B/Message): größere Payloads, aber
+  wieder L-Band-Patch → gleicher Schutzbedarf wie Iridium.
+- **Myriota** (UHF, polar): sehr kleine Payloads.
+
+**Entscheidung: Iridium bleibt.** Die gesamte Kette (Firmware, Encoder,
+Cloudloop-Pipeline, Decoder) ist mit Iridium integriert und getestet;
+Zeit und Testkapazität für eine Netz-Migration (neues Modem, neue
+Firmware, neues Bodensegment, neue Tests) sind nicht vorhanden.
+UHF/Kinéis bleibt als Langfrist-Option für eine spätere Generation
+notiert (statik-sicherste Frequenzklasse; Prüfpunkte: Payload-Stückelung
+340 B, Modem-Kältespez, Service-Langlebigkeit — SWARM-Lektion).
+
+Der passive Schutz kostet **null Integrationsaufwand**: GDT =
+Zwischenstecker, Bonding = Kupferband, Bleed = Widerstand — keine
+Firmware-, Decoder- oder Vertragsänderung.
+
+## Ist das sicher lösbar? — Einschätzung und Restrisiko
+
+Der Schutz selbst ist erprobte Standardtechnik mit großen Reserven: die
+~mJ-Energien (1 nF Koax auf einige kV) liegen Größenordnungen unter der
+Auslegung üblicher Koax-Ableiter (Blitzschutz, kA); die langsame
+Driftschnee-Aufladung ist der Idealfall für GDTs (µs-Zünddelay
+irrelevant, keine Blitze auf dem Plateau); die drei Maßnahmen (Bleed,
+Bonding, GDT) greifen redundant an verschiedenen Stellen; die Luftfahrt
+löst dasselbe Problem routinemäßig an empfindlicherer Avionik.
+
+Restrisiken:
+
+1. **Die Ursache ist noch Hypothese** — gegen mechanischen Sturmschaden
+   (Mast/Kabel) hilft ESD-Schutz nicht. Klärung: Sommerinspektion +
+   SD-Auslese. Der Schutz ist unabhängig davon einzubauen (passiv, billig).
+2. **Ausführungsqualität:** Bonding-Band braucht Dehnungsreserve für die
+   Relativbewegung Mast↔Firn (Setzung/Akkumulation); Steckverbinder
+   gasdicht bei −60 °C; GDT-Kapsel für Kälte spezifiziert (üblich −55 °C —
+   prüfen).
+
+Absicherung über die Teststaffel: ESD-Bench („Frontend überlebt") →
+SLF-Windkanal mit Feldmühle („Aufladung wird abgeführt") →
+Neumayer-Winter („übersteht reale Driftstürme"). Optionale Redundanz:
+zweiter, geschalteter Antennenpfad (Diversity) gegen Einzelpfad-Schäden.
 
 ## Literatur (Driftschnee-Elektrifizierung)
 
