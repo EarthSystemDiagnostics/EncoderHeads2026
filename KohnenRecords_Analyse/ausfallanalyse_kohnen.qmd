@@ -1,0 +1,291 @@
+---
+title: "Ausfallanalyse — Kohnen head03 & head04 (Winter 2026)"
+subtitle: "Warum beide Iridium-Heads verstummt sind: Telemetrie, Netzstatus, Wetter"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 10
+    fig-height: 5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Beide Kohnen-Heads sind im antarktischen Winter 2026 verstummt — **head03
+(231709) am 22.07., head04 (231710) am 13.08.** Dieses Dokument sammelt die
+Diagnostik und rechnet bei jedem Render neu: Telemetrie bis zur letzten
+Message, Netz-/Vertragsstatus (Cloudloop-API), Wetter am Standort (ERA5T).
+
+**Befund vorab:** Alle bordseitigen Indikatoren (Takt, Batterie,
+Boxtemperatur, Latenz-Jitter) sind bis zur jeweils letzten Message makellos —
+zwei An/Aus-Ausfälle ohne Vorboten. Beide fallen exakt auf die zwei stärksten
+Sturmereignisse des **gesamten Jahres 2026** (ERA5T-Böen: 22.07. Rang 2 mit
+23 m/s, 14.08. Rang 1 mit 26 m/s).
+Plausibelste Ursache: **Sturm-/Driftschaden am Oberflächenteil**
+(Antenne, Mast, Kabel); die Elektronik liegt ~8–10 m tief und war thermisch
+stabil.
+
+```{r setup}
+library(readr); library(dplyr); library(tidyr); library(ggplot2)
+library(lubridate); library(patchwork)
+
+HEADS <- tibble(
+  head  = c("head03 (231709)", "head04 (231710)"),
+  file  = c("./data/decoded_head03_231709_combined.csv",
+            "./data/decoded_head04_231710_combined.csv"),
+  col   = c("#2166ac", "#b2182b"),
+  nominal_h = c(12, 24))
+
+dat <- lapply(seq_len(nrow(HEADS)), function(i)
+  read_csv(HEADS$file[i], show_col_types = FALSE) |>
+    mutate(time_utc = as_datetime(time_utc), head = HEADS$head[i]) |>
+    arrange(time_utc))
+names(dat) <- HEADS$head
+cols <- setNames(HEADS$col, HEADS$head)
+ends <- tibble(head = HEADS$head,
+               last = as_datetime(sapply(dat, function(d) max(d$time_utc))))
+```
+
+## Status
+
+```{r status-tab}
+now_utc <- with_tz(Sys.time(), "UTC")
+knitr::kable(
+  ends |> mutate(
+    `letzte Message (UTC)` = format(last, "%Y-%m-%d %H:%M"),
+    `still seit (Tage)` = sprintf("%.1f", as.numeric(difftime(now_utc, last, units = "days"))),
+    last = NULL),
+  caption = sprintf("Render-Stand %s UTC.", format(now_utc, "%d.%m.%Y %H:%M")))
+```
+
+## Telemetrie bis zur letzten Message
+
+### Elektronik-Temperatur (Box, ~8–10 m tief)
+
+Jahresgang auf ~1.2 K gedämpft und phaseninvertiert (Minimum Januar/Februar) —
+die Boxen sitzen tief im Firn. Beide liefen im Januar bei **kälteren**
+Boxtemperaturen als am Sendeende: Kälte an Modem/Batterie scheidet als Ursache
+aus.
+
+```{r adc, fig.height=4.5}
+adc <- bind_rows(lapply(dat, function(d) select(d, time_utc, head, val = adc_temp_C)))
+ggplot(adc, aes(time_utc, val, colour = head)) +
+  geom_line(linewidth = 0.6) +
+  geom_point(data = adc |> group_by(head) |> slice_max(time_utc, n = 1),
+             size = 3, shape = 4, stroke = 1.2, show.legend = FALSE) +
+  scale_colour_manual(NULL, values = cols) +
+  scale_x_datetime(NULL, date_breaks = "1 month", date_labels = "%b") +
+  labs(y = "ADC-Temperatur (°C)",
+       subtitle = "× = letzte Message; kein Sprung, keine Anomalie am Ende") +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+### Batteriespannung
+
+```{r battery, fig.height=4}
+bat <- bind_rows(lapply(dat, function(d) select(d, time_utc, head, val = battery_mv)))
+ggplot(bat, aes(time_utc, val, colour = head)) +
+  geom_line(linewidth = 0.4, alpha = 0.7) + geom_point(size = 0.5) +
+  scale_colour_manual(NULL, values = cols) +
+  scale_x_datetime(NULL, date_breaks = "1 month", date_labels = "%b") +
+  labs(y = "Batterie (mV)",
+       subtitle = "stabil bis zur letzten Message — kein Einbruch, kein Trend zum Ende") +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+### Übertragungslatenz und Jitter
+
+Latenz = Empfangszeit − interner Messzeitpunkt (ab 07.03., Cloudloop-API; die
+Empfangsstempel des alten Exports davor sind tagesgebatcht). Der lineare
+Abfall ist die vorlaufende Geräteuhr (~1.2–1.5 s/Tag); das Residuum ist der
+eigentliche Jitter. Ein degradierender Antennen-Link würde sich hier als
+wachsende Retry-Latenzen und verpasste Slots zeigen — **nichts davon ist zu
+sehen**.
+
+```{r latenz, fig.height=6.5}
+lat <- bind_rows(lapply(dat, function(d)
+  transmute(d, time_utc, head,
+            lat = as.numeric(difftime(recv_time_utc, time_utc, units = "mins"))))) |>
+  filter(time_utc >= as_datetime("2026-03-07"), !is.na(lat)) |>
+  group_by(head) |> mutate(res_s = 60 * resid(lm(lat ~ as.numeric(time_utc)))) |> ungroup()
+
+p1 <- ggplot(lat, aes(time_utc, lat, colour = head)) +
+  geom_line(linewidth = 0.5) + geom_point(size = 0.6) +
+  scale_colour_manual(NULL, values = cols) +
+  labs(x = NULL, y = "Latenz (min)",
+       subtitle = "linearer Abfall = Uhr-Drift; Spitzen = einzelne Sende-Retries (werden zum Ende hin seltener)") +
+  theme_bw(11) + theme(legend.position = "none", panel.grid.minor = element_blank())
+p2 <- ggplot(lat, aes(time_utc, res_s, colour = head)) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_point(size = 0.7, alpha = 0.7) +
+  scale_colour_manual(NULL, values = cols) +
+  labs(x = NULL, y = "Jitter (s)",
+       subtitle = "Residuum nach Abzug der Uhr-Drift: flaches ±20-s-Band bis zur letzten Message") +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+p1 / p2
+```
+
+### Lufttemperatur am Standort (head03 n1)
+
+head03 trägt mit n1 einen Atmosphären-Sensor. Der Head hat die Rekordkälte
+des Winters (−59 °C, 13.06.) und den Kälteeinbruch Mitte Juli (−54 °C)
+problemlos überstanden — und fiel dann **in einer Warmphase** aus.
+Warmphasen im Kohnen-Winter sind Warmluftadvektion mit Sturm.
+
+```{r n1, fig.height=4}
+n1 <- dat[[1]] |> select(time_utc, val = n1.ntc1_temp_C) |> filter(!is.na(val))
+ggplot(n1, aes(time_utc, val)) +
+  geom_line(colour = "#2166ac", linewidth = 0.5) +
+  geom_point(data = slice_max(n1, time_utc, n = 1), colour = "#b2182b",
+             size = 3, shape = 4, stroke = 1.2) +
+  scale_x_datetime(NULL, date_breaks = "1 month", date_labels = "%b") +
+  labs(y = "n1 Lufttemperatur (°C)",
+       subtitle = "× = letzte Message (22.07., −35 °C) — deutlich milder als das überstandene Winterminimum") +
+  theme_bw(11) + theme(panel.grid.minor = element_blank())
+```
+
+## Netz- und Vertragsstatus (Cloudloop-API)
+
+Beide Subscriptions sind aktiv (Vertrag bis 06.03.2027); `lastSeen` deckt
+sich mit der letzten Message — das Netz sieht die Geräte seither gar nicht
+mehr (keine abgewiesenen Sessions). Der Block fragt den Status bei jedem
+Render live ab; ohne Token/Internet wird er übersprungen. Ob die Modems noch
+*erfolglose* Sessionversuche machen, sieht nur der Ground-Control-Support
+(Anfrage gestellt).
+
+```{r subscription, results='asis'}
+SUBS <- c("head03 (231709)" = "olNGxekOvAKmanjJDQDnRdpyLgXjMbVP",
+          "head04 (231710)" = "JaKzYmyeDdjGPWarNJdELrlVqgZxNXAp")
+tokf <- "../cloudloop/.token"
+res <- tryCatch({
+  tok <- Sys.getenv("CLOUDLOOP_TOKEN", unset = NA)
+  if (is.na(tok) || !nzchar(tok)) tok <- trimws(readLines(tokf, warn = FALSE)[1])
+  rows <- lapply(names(SUBS), function(nm) {
+    r <- httr2::request("https://api.cloudloop.com/Sbd/GetSubscriber") |>
+      httr2::req_url_query(token = tok, subscriber = SUBS[[nm]]) |>
+      httr2::req_method("POST") |> httr2::req_retry(max_tries = 3) |>
+      httr2::req_perform(verbosity = 0) |> httr2::resp_body_json()
+    s <- r$subscriber
+    data.frame(Head = nm, IMEI = s$hardware$imei,
+               Status = s$contract$networkStatus,
+               `Vertrag bis` = substr(s$contract$committedTo, 1, 10),
+               lastSeen = sub("T", " ", substr(s$lastSeen, 1, 16)),
+               check.names = FALSE)
+  })
+  do.call(rbind, rows)
+}, error = function(e) NULL)
+if (is.null(res)) {
+  cat("*Cloudloop-API nicht erreichbar (Token/Internet) — Status-Abfrage übersprungen.*\n")
+} else {
+  print(knitr::kable(res))
+}
+```
+
+## Wetter am Standort (ERA5T)
+
+Tagesmaxima von 10-m-Wind, Böen und 2-m-Temperatur am Kohnen-Gitterpunkt
+(75.0° S, 0.07° O), bei jedem Render frisch von der Open-Meteo-Archiv-API
+(ERA5/ERA5T, ~5 Tage hinter Echtzeit). Gestrichelt: die letzten Messages der
+beiden Heads.
+
+```{r wind, fig.height=6.5}
+wind <- tryCatch({
+  u <- paste0("https://archive-api.open-meteo.com/v1/archive",
+              "?latitude=-75.0&longitude=0.07",
+              "&start_date=2026-01-01&end_date=", format(Sys.Date() - 2, "%Y-%m-%d"),
+              "&daily=wind_speed_10m_max,wind_gusts_10m_max,temperature_2m_max",
+              "&timezone=UTC&wind_speed_unit=ms")
+  j <- jsonlite::fromJSON(u)$daily
+  tibble(day = as.Date(j$time), wind = j$wind_speed_10m_max,
+         gust = j$wind_gusts_10m_max, t2m = j$temperature_2m_max) |>
+    filter(!is.na(wind))
+}, error = function(e) NULL)
+
+if (is.null(wind)) {
+  cat("ERA5T/Open-Meteo nicht erreichbar — Wetterabschnitt übersprungen.\n")
+} else {
+  vl <- as.Date(ends$last)
+  pw <- ggplot(wind, aes(day)) +
+    geom_vline(xintercept = vl, linetype = "dashed", colour = unname(cols)) +
+    geom_line(aes(y = gust), colour = "grey60", linewidth = 0.5) +
+    geom_line(aes(y = wind), colour = "black", linewidth = 0.7) +
+    annotate("text", x = vl, y = max(wind$gust, na.rm = TRUE),
+             label = format(ends$last, " %d.%m."), hjust = 0, vjust = 1,
+             size = 3, colour = unname(cols)) +
+    scale_x_date(NULL, expand = c(0.01, 0)) +
+    labs(y = "Wind (m/s)",
+         title = "ERA5T am Kohnen-Gitterpunkt",
+         subtitle = "schwarz = 10-m-Wind Tagesmax, grau = Böen; gestrichelt = letzte Messages") +
+    theme_bw(11) + theme(panel.grid.minor = element_blank())
+  pt <- ggplot(wind, aes(day, t2m)) +
+    geom_vline(xintercept = vl, linetype = "dashed", colour = unname(cols)) +
+    geom_line(colour = "#e67e22", linewidth = 0.6) +
+    scale_x_date(NULL, expand = c(0.01, 0)) +
+    labs(y = "T2m Tagesmax (°C)",
+         subtitle = "beide Ausfälle in Warmluftphasen (Sturmtiefs)") +
+    theme_bw(11) + theme(panel.grid.minor = element_blank())
+  pw / pt + plot_layout(heights = c(1.3, 1))
+}
+```
+
+```{r wind-verdict, results='asis'}
+if (!is.null(wind)) {
+  for (i in seq_len(nrow(ends))) {
+    d0 <- as.Date(ends$last[i])
+    w <- wind |> filter(day >= d0 - 1, day <= d0 + 1)
+    if (nrow(w)) cat(sprintf(
+      "- **%s** (letzte Message %s): Wind-Tagesmax um den Ausfall **%.1f m/s**, Böen **%.1f m/s**, T2m-max **%.1f °C**.\n",
+      ends$head[i], format(ends$last[i], "%d.%m. %H:%M"),
+      max(w$wind), max(w$gust), max(w$t2m)))
+  }
+  rk <- wind |> mutate(r = rank(-gust)) |> filter(day %in% as.Date(ends$last) |
+         day %in% (as.Date(ends$last) + 1))
+  cat(sprintf("\nDie Ausfalltage (±1 Tag) belegen die Böen-Ränge **%s** von %d Tagen seit dem 01.01.2026.\n",
+              paste(sort(round(rk$r)), collapse = ", "), nrow(wind)))
+}
+```
+
+## Fazit
+
+1. **Bordtelemetrie unauffällig bis zur letzten Message** — Takt, Batterie,
+   Boxtemperatur, Latenz: keine Vorboten. Zwei binäre An/Aus-Ausfälle.
+2. **Kälte an der Elektronik ausgeschlossen** — Boxen in ~8–10 m Tiefe,
+   thermisch stabil, liefen im Januar bei kälteren Temperaturen. head03
+   überstand −59 °C Lufttemperatur; der Ausfall kam bei −35 °C.
+3. **Netzseite ausgeschlossen, soweit prüfbar** — Subscriptions aktiv bis
+   03/2027; frühere Netzstörungen (Anfang März) zeigten sich als *gemeinsame*
+   Lücken beider Heads, die Ausfälle sind aber einzeln.
+4. **Beide Ausfälle koinzidieren mit den zwei stärksten
+   Sturmereignissen des gesamten Jahres 2026** (ERA5T-Böen: 22.07. Rang 2,
+   14.08. Rang 1 von 227 Tagen). Plausibelste Ursache:
+   Sturm-/Driftschaden am Oberflächenteil — Antenne eingeweht oder Mast/
+   Kabel/Stecker mechanisch beschädigt. Ein binäres Verstummen trotz
+   gradueller Ursache passt zum SBD-Kanal (sendet perfekt, solange die
+   Linkmarge reicht).
+5. **Konkreter Schadensmechanismus — Hypothese elektrostatische Entladung
+   (ESD) durch Driftschnee:** Triboelektrische Aufladung von Driftschnee ist
+   in der Antarktis gut dokumentiert (E-Felder > 10³ V/m in Blizzards,
+   „precipitation static"; Herman 1965 Byrd Station; Gordon & Taylor). Die
+   Antenne oben am Mast sammelt Ladung, das lange Koaxkabel zur vergrabenen
+   Box wirkt als Kondensator, die Entladung geht durch den RF-Eingang des
+   Modems. Das erklärt alle drei Kernbefunde: Ausfall exakt an den
+   Maximal-Drift-Tagen, instantaner An/Aus-Übergang, keine Erholung nach
+   Abwehen der Drift (head03 > 4 Wochen still). Gegenmaßnahmen fürs
+   Redesign — auf Firn gibt es keine Erde, es gilt das Flugzeug-Prinzip
+   (P-Static): alle Metallteile auf ein gemeinsames Potenzial bonden;
+   Antennenbauform mit DC-Kurzschluss Strahler↔Schirm (Loop/kurzgeschlossener
+   Stub) oder Bleed-Widerstand (MΩ) über den Feed; Gasableiter differentiell
+   am Modem-Eingang; Korona-Spitzen (Static Wicks) an der Mastspitze zum
+   kontrollierten Ladungsabbau an die Luft.
+6. **Offen:** ob die Modems noch erfolglose Sessionversuche machen — das
+   sieht nur der Ground-Control-Support (Anfrage läuft); bei zerstörtem
+   RF-Pfad wäre allerdings auch netzseitig nichts zu sehen. Entscheidend:
+   (a) Kommen die Heads nach der Drift-Saison von selbst zurück (→ reine
+   Verwehung) oder nicht (→ ESD/mechanischer Schaden)? (b) Inspektion in der
+   Sommersaison: Überschlagspuren, RF-Frontend, Antenne/Kabel.

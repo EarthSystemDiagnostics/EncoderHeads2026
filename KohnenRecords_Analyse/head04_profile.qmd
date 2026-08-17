@@ -50,6 +50,77 @@ per-sensor table and keeps the Beta curve.)
 **Data range:** `r format(min(d$time_utc), "%d %b %Y")` – `r format(max(d$time_utc), "%d %b %Y")`
 (`r nrow(d)` daily observations)
 
+## Sende-Status
+
+Rechnet bei jedem Render neu: Alter der letzten Message gegen den Nominaltakt,
+Aussetzer im Gesamtrecord, Batterie- und Elektroniktemperatur-Zustand.
+
+```{r sende-status, results='asis'}
+NOMINAL_H <- 24   # eine Message pro Tag (~17:38 UTC)
+now_utc <- with_tz(Sys.time(), "UTC")
+last_t  <- max(d$time_utc)
+age_h   <- as.numeric(difftime(now_utc, last_t, units = "hours"))
+stat <- if (age_h < 2 * NOMINAL_H) c("#2ecc71", "SENDET") else
+        if (age_h < 4 * NOMINAL_H) c("#e67e22", "VERZÖGERT") else c("#e74c3c", "AUSFALL")
+gaps <- d |> arrange(time_utc) |>
+  mutate(g = as.numeric(difftime(time_utc, lag(time_utc), units = "hours"))) |>
+  filter(g > 1.5 * NOMINAL_H)
+b_last <- tail(d$battery_mv, 1)
+b30    <- d |> filter(time_utc > last_t - days(30)) |> pull(battery_mv)
+
+cat(sprintf('<span style="color:%s">**%s**</span> — letzte Message **%s UTC** (vor %.1f Tagen; Render-Stand %s UTC).\n\n',
+            stat[1], stat[2], format(last_t, "%Y-%m-%d %H:%M"), age_h / 24,
+            format(now_utc, "%d.%m.%Y %H:%M")))
+cat(sprintf("- Nominaltakt alle %d h; Aussetzer (> %.0f h) im Gesamtrecord: %d%s.\n",
+            NOMINAL_H, 1.5 * NOMINAL_H, nrow(gaps),
+            if (nrow(gaps)) paste0(" (", paste(format(gaps$time_utc, "%d.%m."), collapse = ", "), ")") else ""))
+cat(sprintf("- Batterie zuletzt **%d mV**, Mittel der letzten 30 Tage %.0f mV (Gesamtbereich %d–%d mV) — %s.\n",
+            b_last, mean(b30, na.rm = TRUE), min(d$battery_mv, na.rm = TRUE),
+            max(d$battery_mv, na.rm = TRUE), if (b_last > 6400) "unauffällig" else "**niedrig**"))
+if ("adc_temp_C" %in% names(d)) {
+  a_last <- tail(d$adc_temp_C, 1)
+  cat(sprintf("- Elektronik-Temperatur zuletzt **%.1f °C** (Jahresbereich %.1f bis %.1f °C). Die Box liegt ~8–10 m tief: Jahresgang auf ~%.1f K gedämpft und phasenverschoben — thermisch stabil, Kälte an Modem/Batterie ist als Ausfallursache unplausibel.\n",
+              a_last, min(d$adc_temp_C, na.rm = TRUE), max(d$adc_temp_C, na.rm = TRUE),
+              diff(range(d$adc_temp_C, na.rm = TRUE))))
+}
+if (stat[2] == "AUSFALL")
+  cat("\nBis zur letzten Message regulärer Takt, stabile Batterie, keine Vorboten in Latenz oder Spannung — **abrupter Ausfall**.\n")
+```
+
+### Elektronik-Temperatur (ADC) beider Heads
+
+Beide Boxen liegen ~8–10 m tief: der Jahresgang ist auf ~1.2 K gedämpft und
+phaseninvertiert (Minimum Januar/Februar, Maximum Mai/Juni). Beide Heads liefen
+im Januar bei kälteren Boxtemperaturen als zum jeweiligen Sendeende — Kälte an
+Modem/Batterie ist als Ausfallursache unplausibel; kältexponiert ist nur der
+Oberflächenteil (Antenne/Kabel).
+
+```{r adc-vergleich, fig.height=4.5, fig.width=10}
+adc_files <- c("head03 (231709)" = "./data/decoded_head03_231709_combined.csv",
+               "head04 (231710)" = "./data/decoded_head04_231710_combined.csv")
+adc <- bind_rows(lapply(names(adc_files), function(nm) {
+  f <- adc_files[[nm]]
+  if (!file.exists(f)) return(NULL)
+  read_csv(f, show_col_types = FALSE) |>
+    transmute(time_utc = as_datetime(time_utc), adc = adc_temp_C, head = nm)
+})) |> filter(!is.na(adc)) |> arrange(time_utc)
+ends <- adc |> group_by(head) |> slice_max(time_utc, n = 1)
+
+ggplot(adc, aes(time_utc, adc, colour = head)) +
+  geom_line(linewidth = 0.6) +
+  geom_point(data = ends, size = 3, shape = 4, stroke = 1.2, show.legend = FALSE) +
+  geom_text(data = ends, aes(label = format(time_utc, " letzte Msg %d.%m.")),
+            hjust = 0, vjust = -0.6, size = 3.2, show.legend = FALSE) +
+  scale_colour_manual(NULL, values = c("head03 (231709)" = "#2166ac",
+                                       "head04 (231710)" = "#b2182b")) +
+  scale_x_datetime(NULL, date_breaks = "1 month", date_labels = "%b",
+                   expand = expansion(mult = c(0.02, 0.14))) +
+  scale_y_continuous("ADC-Temperatur (°C)") +
+  labs(title = "Elektronik-Temperatur (ADC) beider Kohnen-Heads",
+       subtitle = "Boxen ~8–10 m tief: Jahresgang gedämpft und phaseninvertiert; × = letzte empfangene Message") +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
 ```{r node-metadata}
 # Real installation depths + node order from the 2023 lab calibration
 # (data/head04_calibration.csv, built by build_head04_calibration.R).
