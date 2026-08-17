@@ -8,6 +8,27 @@ Ladung, das lange Koaxkabel zur vergrabenen Box wirkt als Kondensator, die
 Entladung geht durch den RF-Eingang des Modems. Dieses Dokument beschreibt
 das Schutzkonzept für ein Redesign und wo man es testen kann.
 
+## Verbaute Hardware: Calian/Tallysman TW3600 — kein ESD-Schutz
+
+Die verbaute Antenne (TW3600, passive Dual-Feed-RHCP-Keramik-Patch,
+1616–1626,5 MHz, TNC) hat **keinen ESD-Schutz**: Die Spezifikationstabelle
+des Datenblatts (Rev. 202407, S. 2) führt „ESD Circuit Protection: —";
+der Feature-Bullet „15 kV ESD circuit protection" auf S. 1 ist Boilerplate
+der aktiven Calian-Antennen und trifft auf die passive TW3600 nicht zu.
+Konsequenzen:
+
+- Das LEXAN-Radom ist ein Isolator und lädt sich im Driftschnee auf; der
+  Patch koppelt direkt auf die Feeds — ohne dokumentierten DC-Pfad zur
+  Masse geht jede Entladung über den Innenleiter zum Modem.
+- Der Zamak-Metallsockel (Through-hole, 100-mm-Groundplane) ist bondbar —
+  Sockel und Groundplane gehören aufs gemeinsame Potenzial.
+- Der **externe Inline-GDT am Boxeintritt ist damit zwingend**, nicht
+  optional.
+- Operating Range der Antenne: −40 °C — die Kohnen-Winterluft
+  unterschreitet auch diese Spezifikation.
+
+Datenblatt: https://sites.calian.com/app/uploads/sites/8/2024/06/Calian%C2%AE-TW3600-Datasheet.pdf
+
 ## Schutzkonzept (kein Erdungs-, sondern ein Bonding-Problem)
 
 Auf Firn gibt es keine Erde (trockener Schnee/Firn ist praktisch ein

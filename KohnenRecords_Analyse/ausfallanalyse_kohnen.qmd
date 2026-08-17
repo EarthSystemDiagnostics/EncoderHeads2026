@@ -251,6 +251,53 @@ if (!is.null(wind)) {
 }
 ```
 
+## Schadensbild am Modem (ESD-Hypothese im Detail)
+
+**Der Puls:** Antenne + Koaxkabel (~100 pF/m, bei ~10 m ≈ 1 nF) laden sich
+im Driftschnee auf einige kV auf. Beim Überschlag entlädt sich das in
+Nanosekunden über den Innenleiter — Spitzenströme im 10-A-Bereich, Energie
+im mJ-Bereich. DC-Blockkondensatoren im Signalpfad sind für ns-Transienten
+durchlässig.
+
+**Was stirbt:** Hinter dem Antennenpin des 9602/9603 sitzen T/R-Schalter,
+Filter und LNA-Eingang. Deren Transistorstrukturen brechen bei wenigen Volt
+durch; RF-Pins tragen bewusst nur minimale ESD-Strukturen (einige 100 V),
+weil Schutzdioden Kapazität kosten und die Rauschzahl verschlechtern. Ein
+kV-Puls liegt zwei bis drei Größenordnungen darüber: Gateoxid-Durchbruch,
+durchlegierte Übergänge. Äußerlich unsichtbar — der Schaden ist
+nanometerskalig.
+
+**Mögliche Endzustände** (von außen identisch = Funkstille):
+
+1. Hard kill — LNA/Schalter zerstört: Empfänger taub, keine Netzakquisition.
+2. Degradation — Rauschzahl um 10–20 dB verschlechtert: Linkmarge weg,
+   jede Session scheitert.
+3. Antennenseite — Anpassnetzwerk des Patches zerstört: Antenne total
+   reflektiv, Modem intakt, kein Link.
+
+**Der Digitalteil lebt vermutlich weiter:** ESD über den RF-Port tötet das
+Frontend, nicht den Prozessor. Logger und Messkette laufen sehr
+wahrscheinlich normal weiter — messen, senden erfolglos. Wir sehen davon
+nichts, weil die gesamte Telemetrie durch den zerstörten Kanal müsste.
+
+## Konsequenz: Daten liegen auf SD — Winterrecord rettbar
+
+**Beide Heads loggen lokal auf SD-Karte.** Wenn die ESD-Hypothese stimmt
+(Logger lebt, nur der Iridium-Pfad ist tot), messen beide Ketten seit dem
+22.07. bzw. 13.08. normal weiter und der komplette Winterrecord liegt vor
+Ort — nichts ist verloren, nur die Live-Übertragung fehlt.
+
+**Checkliste Sommerbesuch:**
+
+- [ ] SD-Karten beider Heads auslesen (kompletter Winterrecord).
+- [ ] Ersatz-**Antenne** und Ersatz-**Modem** mitnehmen und einzeln
+      durchtauschen — nur so lässt sich Frontend-Schaden (Fall 1/2) von
+      Antennenschaden (Fall 3) trennen.
+- [ ] Antenne/Radom, Koax und Stecker auf Überschlagspuren inspizieren.
+- [ ] Beim Wiederaufbau: Bonding aller Metallteile, Inline-GDT am
+      Boxeintritt, ggf. DC-kurzgeschlossene Antennenbauform / Static Wicks
+      (siehe `esd_schutz_und_teststrategie.md`).
+
 ## Fazit
 
 1. **Bordtelemetrie unauffällig bis zur letzten Message** — Takt, Batterie,
@@ -274,7 +321,11 @@ if (!is.null(wind)) {
    „precipitation static"; Herman 1965 Byrd Station; Gordon & Taylor). Die
    Antenne oben am Mast sammelt Ladung, das lange Koaxkabel zur vergrabenen
    Box wirkt als Kondensator, die Entladung geht durch den RF-Eingang des
-   Modems. Das erklärt alle drei Kernbefunde: Ausfall exakt an den
+   Modems. Die verbaute Antenne (Calian/Tallysman TW3600, passiv) hat laut
+   Datenblatt-Spezifikation **keinen ESD-Schutz** („ESD Circuit
+   Protection: —"; der 15-kV-Feature-Bullet ist Boilerplate der aktiven
+   Modelle) — der Entladungspfad zum Modem ist also ungeschützt.
+   Das erklärt alle drei Kernbefunde: Ausfall exakt an den
    Maximal-Drift-Tagen, instantaner An/Aus-Übergang, keine Erholung nach
    Abwehen der Drift (head03 > 4 Wochen still). Gegenmaßnahmen fürs
    Redesign — auf Firn gibt es keine Erde, es gilt das Flugzeug-Prinzip
@@ -289,3 +340,6 @@ if (!is.null(wind)) {
    (a) Kommen die Heads nach der Drift-Saison von selbst zurück (→ reine
    Verwehung) oder nicht (→ ESD/mechanischer Schaden)? (b) Inspektion in der
    Sommersaison: Überschlagspuren, RF-Frontend, Antenne/Kabel.
+7. **Daten nicht verloren:** beide Heads loggen lokal auf SD. Bei
+   ESD-Schaden am Iridium-Pfad läuft die Messung weiter — der Winterrecord
+   ist beim Sommerbesuch auslesbar (Checkliste oben).
