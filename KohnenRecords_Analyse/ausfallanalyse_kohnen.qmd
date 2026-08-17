@@ -318,10 +318,14 @@ Ort — nichts ist verloren, nur die Live-Übertragung fehlt.
 5. **Konkreter Schadensmechanismus — Hypothese elektrostatische Entladung
    (ESD) durch Driftschnee:** Triboelektrische Aufladung von Driftschnee ist
    in der Antarktis gut dokumentiert (E-Felder > 10³ V/m in Blizzards,
-   „precipitation static"; Herman 1965 Byrd Station; Gordon & Taylor). Die
-   Antenne oben am Mast sammelt Ladung, das lange Koaxkabel zur vergrabenen
-   Box wirkt als Kondensator, die Entladung geht durch den RF-Eingang des
-   Modems. Die verbaute Antenne (Calian/Tallysman TW3600, passiv) hat laut
+   „precipitation static"; Herman 1965 Byrd Station; Gordon & Taylor).
+   Entscheidend ist die Aufbau-Geometrie: Antenne und Mast stehen im
+   Oberflächenschnee, **entkoppelt** von der ~8 m tief vergrabenen Box mit
+   Elektronik und Modem — zwei Potenzialinseln, deren einzige leitende
+   Verbindung der Koax-Schirm ist. Mast/Antenne laden sich im Drift gegen
+   die tiefe Box auf, das lange Koaxkabel (~1 nF) wirkt als Kondensator,
+   und jeder Ausgleich läuft zwangsläufig über Schirm und Innenleiter
+   direkt am RF-Eingang des Modems vorbei. Die verbaute Antenne (Calian/Tallysman TW3600, passiv) hat laut
    Datenblatt-Spezifikation **keinen ESD-Schutz** („ESD Circuit
    Protection: —"; der 15-kV-Feature-Bullet ist Boilerplate der aktiven
    Modelle) — der Entladungspfad zum Modem ist also ungeschützt.

@@ -81,13 +81,77 @@ ESD-robust, weil Elektronikbox und Antenne am selben Metallmast sitzen
   einzige Architektur, die das Modem ganzjährig **innerhalb** der Spez
   hält — der einzige Konstruktionsfehler war der ungeschützte RF-Pfad.
 
+**Einordnung Grönland-Systeme (GRIP, Dye-3):** Koax nur ~50 cm, Box am
+selben Mast — alles ein gebondetes Gestell, das Kohnen-Energiereservoir
+(Insel-Ausgleich Mast↔tiefe Box über ~1 nF) existiert nicht. Restrisiko
+ist allein die **Patch-Insel**: Aufladung des Strahlers hinter dem Radom,
+Entladung nur über den Feed-Pin — Quellkapazität wenige pF, also µJ
+statt mJ. Aber: RF-Frontends sind extrem ESD-empfindlich (RF-Pins oft
+nur wenige 100 V HBM), ein ungünstiger kV-Puls kann auch hier töten.
+Netto: deutlich unwahrscheinlicher als Kohnen, im Winterfenster
+(Okt.–Apr., trockener Drift) aber nicht null. Bei Standortbesuch:
+Bleed/GDT als Fünf-Minuten-Versicherung; bis dahin fängt SD-Logging den
+Worst Case ab, Status-Diagnostik zeigt einen Ausfall sofort.
+
 **Folgerung:** vergrabene Architektur behalten, die Mast↔Box-Entkopplung
 explizit reparieren: (1) Bonding-Leiter (Cu-Band) parallel zum Koax von
 Antennensockel/Mast bis zur Box, beidseitig angeschlossen — Mast, Schirm
 und Box auf einem Potenzial, die Aufladung entsteht gar nicht erst;
-(2) GDT am Boxeintritt für den differentiellen Rest auf dem Innenleiter;
-(3) Bleed/DC-Kurzschluss antennenseitig. Rein passiv, kein Strombedarf,
-Thermik unverändert.
+(2)+(3) **ein Bauteil statt zwei:** ein Koax-Ableiter in
+**DC-grounded-Bauform** (λ/4-Stub bzw. Induktivität; als
+GPS-/L-Band-Typ 1,5–1,7 GHz Standardware) als Zwischenstecker **am
+Modemanschluss in der Box** — Innenleiter galvanisch auf Gehäuse (DC =
+Bleed für Kabel und ggf. Patch, 1,6 GHz = unsichtbar) plus
+Surge-Ableitung, Gehäusefahne auf Boxbolzen = Bonding miterledigt.
+Kabel, KEL-Verschraubung und der TNC oben im Mast bleiben unberührt
+(dort ist ohnehin kein Zugang). Rein passiv, kein Strombedarf, Thermik
+unverändert.
+
+Vorab-Prüfpunkt (Ohmmeter): TW3600 zwischen TNC-Innenleiter und
+-Gehäuse messen. DC-durchgängig → Stub entlädt auch den Patch
+(Ideallösung); DC-offen (kapazitive Feeds) → Patch bleibt kleine
+Restinsel, Ableiter schützt Kabelnetz und Modem — das eigentliche
+Schutzziel. (Ein nackter MΩ-Widerstand quer zur Leitung ist keine
+Alternative: ~0,3 pF Parasitärkapazität ≈ −j330 Ω bei 1,6 GHz
+verstimmt die Anpassung.)
+
+**Antennen-Alternative für die nächste Generation — Marine-Rohrantennen
+(Quadrifilar-Helix):** z. B. Beam RST710/RST210, 2J-QFH; passiv, TNC,
+−40…+85 °C. Viele Helix-Bauformen sind konstruktiv **DC-geerdet**
+(kurzgeschlossene Arme/induktive Speisung) → Patch-Insel entfällt,
+Statik fließt permanent ab; zudem weniger horizontale
+Ablagerungsfläche als der Pilz-Radom und tolerant gegen
+Mast-Schiefstand. Bauartabhängig, in Datenblättern nicht spezifiziert —
+**per Ohmmeter verifizieren** (TNC-Pin↔Gehäuse, DC-Kurzschluss =
+inhärent statik-sicher). Jetzt nicht tauschen (Mechanik + Tests);
+Kandidat fürs Redesign.
+
+**Gehäuse-Bonding — die zwei Konfigurationen unterscheiden sich:**
+
+*Grönland (GRIP, Dye-3):* mechanisch durchgebondet — Antennensockel
+(Gewindestutzen, Zamak) → gefrästes Alu-Teil → Alu-Mast →
+Schlauchschellen → Alu-Box, Koax nur ~50 cm. Implizit die
+AWS-Architektur „alles ein Metallgestell": Groundplane, Mast und Box auf
+einem Potenzial, der Mast **ist** der Bonding-Leiter; Elektronik-GND
+hängt über den Koax-Schirm am selben Netz. Prüfpunkte sind nur die
+Kontaktstellen (Durchgangsmessung: Gewinde Sockel↔Frästeil,
+Frästeil↔Mast, Schellen↔Box — **eloxiertes/lackiertes Alu isoliert**).
+
+*Antarktis (Kohnen):* Antenne über TNC-Gehäuse/Frästeil mit dem Mast
+verbunden, aber **der Mast steht im Schnee, entkoppelt von der ~8 m
+tiefen Box** mit Elektronik und Modem. Zwei Potenzialinseln, einzige
+leitende Verbindung ist der Koax-Schirm — jeder Ladungsausgleich und
+jede Entladung zwischen Mast/Antenne und Box läuft zwangsläufig über
+den Schirm **direkt am Modemstecker vorbei**. Deshalb ist hier das
+Cu-Bonding-Band Mast↔Box parallel zum Koax zwingend (Punkt 1 der
+Folgerung), dazu GDT als Schott-Durchführung am Boxeintritt.
+
+**In beiden Konfigurationen bleibt der Patch die letzte ESD-Insel:**
+isoliert hinter dem LEXAN-Radom, kapazitiv gekoppelt, kein DC-Pfad —
+das Radom lädt sich im Drift auf, einziger Entladeweg ist der Feed-Pin
+in den Innenleiter (klassischer Flugzeug-Radom-P-Static-Fall). Dagegen
+hilft kein Struktur-Bonding, nur **antennenseitiger Bleed/DC-Kurzschluss
++ GDT als Fänger**.
 
 ## Teststrategie
 

@@ -2293,7 +2293,7 @@ vertical-align: -.125em;
 </details>
 <div class="cell-output-display">
 <table class="caption-top table table-sm table-striped small">
-<caption>Render-Stand 17.08.2026 12:21 UTC.</caption>
+<caption>Render-Stand 17.08.2026 14:41 UTC.</caption>
 <thead>
 <tr class="header">
 <th style="text-align: left;">head</th>
@@ -2305,12 +2305,12 @@ vertical-align: -.125em;
 <tr class="odd">
 <td style="text-align: left;">head03 (231709)</td>
 <td style="text-align: left;">2026-07-22 09:03</td>
-<td style="text-align: left;">26.1</td>
+<td style="text-align: left;">26.2</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">head04 (231710)</td>
 <td style="text-align: left;">2026-08-13 17:38</td>
-<td style="text-align: left;">3.8</td>
+<td style="text-align: left;">3.9</td>
 </tr>
 </tbody>
 </table>
@@ -2601,7 +2601,7 @@ vertical-align: -.125em;
 <li><strong>Kälte an der Elektronik ausgeschlossen</strong> — Boxen in ~8–10 m Tiefe, thermisch stabil, liefen im Januar bei kälteren Temperaturen. head03 überstand −59 °C Lufttemperatur; der Ausfall kam bei −35 °C.</li>
 <li><strong>Netzseite ausgeschlossen, soweit prüfbar</strong> — Subscriptions aktiv bis 03/2027; frühere Netzstörungen (Anfang März) zeigten sich als <em>gemeinsame</em> Lücken beider Heads, die Ausfälle sind aber einzeln.</li>
 <li><strong>Beide Ausfälle koinzidieren mit den zwei stärksten Sturmereignissen des gesamten Jahres 2026</strong> (ERA5T-Böen: 22.07. Rang 2, 14.08. Rang 1 von 227 Tagen). Plausibelste Ursache: Sturm-/Driftschaden am Oberflächenteil — Antenne eingeweht oder Mast/ Kabel/Stecker mechanisch beschädigt. Ein binäres Verstummen trotz gradueller Ursache passt zum SBD-Kanal (sendet perfekt, solange die Linkmarge reicht).</li>
-<li><strong>Konkreter Schadensmechanismus — Hypothese elektrostatische Entladung (ESD) durch Driftschnee:</strong> Triboelektrische Aufladung von Driftschnee ist in der Antarktis gut dokumentiert (E-Felder &gt; 10³ V/m in Blizzards, „precipitation static”; Herman 1965 Byrd Station; Gordon &amp; Taylor). Die Antenne oben am Mast sammelt Ladung, das lange Koaxkabel zur vergrabenen Box wirkt als Kondensator, die Entladung geht durch den RF-Eingang des Modems. Die verbaute Antenne (Calian/Tallysman TW3600, passiv) hat laut Datenblatt-Spezifikation <strong>keinen ESD-Schutz</strong> („ESD Circuit Protection: —“; der 15-kV-Feature-Bullet ist Boilerplate der aktiven Modelle) — der Entladungspfad zum Modem ist also ungeschützt. Das erklärt alle drei Kernbefunde: Ausfall exakt an den Maximal-Drift-Tagen, instantaner An/Aus-Übergang, keine Erholung nach Abwehen der Drift (head03 &gt; 4 Wochen still). Gegenmaßnahmen fürs Redesign — auf Firn gibt es keine Erde, es gilt das Flugzeug-Prinzip (P-Static): alle Metallteile auf ein gemeinsames Potenzial bonden; Antennenbauform mit DC-Kurzschluss Strahler↔︎Schirm (Loop/kurzgeschlossener Stub) oder Bleed-Widerstand (MΩ) über den Feed; Gasableiter differentiell am Modem-Eingang; Korona-Spitzen (Static Wicks) an der Mastspitze zum kontrollierten Ladungsabbau an die Luft.</li>
+<li><strong>Konkreter Schadensmechanismus — Hypothese elektrostatische Entladung (ESD) durch Driftschnee:</strong> Triboelektrische Aufladung von Driftschnee ist in der Antarktis gut dokumentiert (E-Felder &gt; 10³ V/m in Blizzards, „precipitation static”; Herman 1965 Byrd Station; Gordon &amp; Taylor). Entscheidend ist die Aufbau-Geometrie: Antenne und Mast stehen im Oberflächenschnee, <strong>entkoppelt</strong> von der ~8 m tief vergrabenen Box mit Elektronik und Modem — zwei Potenzialinseln, deren einzige leitende Verbindung der Koax-Schirm ist. Mast/Antenne laden sich im Drift gegen die tiefe Box auf, das lange Koaxkabel (~1 nF) wirkt als Kondensator, und jeder Ausgleich läuft zwangsläufig über Schirm und Innenleiter direkt am RF-Eingang des Modems vorbei. Die verbaute Antenne (Calian/Tallysman TW3600, passiv) hat laut Datenblatt-Spezifikation <strong>keinen ESD-Schutz</strong> („ESD Circuit Protection: —“; der 15-kV-Feature-Bullet ist Boilerplate der aktiven Modelle) — der Entladungspfad zum Modem ist also ungeschützt. Das erklärt alle drei Kernbefunde: Ausfall exakt an den Maximal-Drift-Tagen, instantaner An/Aus-Übergang, keine Erholung nach Abwehen der Drift (head03 &gt; 4 Wochen still). Gegenmaßnahmen fürs Redesign — auf Firn gibt es keine Erde, es gilt das Flugzeug-Prinzip (P-Static): alle Metallteile auf ein gemeinsames Potenzial bonden; Antennenbauform mit DC-Kurzschluss Strahler↔︎Schirm (Loop/kurzgeschlossener Stub) oder Bleed-Widerstand (MΩ) über den Feed; Gasableiter differentiell am Modem-Eingang; Korona-Spitzen (Static Wicks) an der Mastspitze zum kontrollierten Ladungsabbau an die Luft.</li>
 <li><strong>Offen:</strong> ob die Modems noch erfolglose Sessionversuche machen — das sieht nur der Ground-Control-Support (Anfrage läuft); bei zerstörtem RF-Pfad wäre allerdings auch netzseitig nichts zu sehen. Entscheidend:
 <ol type="a">
 <li>Kommen die Heads nach der Drift-Saison von selbst zurück (→ reine Verwehung) oder nicht (→ ESD/mechanischer Schaden)? (b) Inspektion in der Sommersaison: Überschlagspuren, RF-Frontend, Antenne/Kabel.</li>
