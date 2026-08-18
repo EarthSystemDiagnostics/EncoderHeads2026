@@ -8,24 +8,35 @@ Ladung, das lange Koaxkabel zur vergrabenen Box wirkt als Kondensator, die
 Entladung geht durch den RF-Eingang des Modems. Dieses Dokument beschreibt
 das Schutzkonzept für ein Redesign und wo man es testen kann.
 
-## Verbaute Hardware: Calian/Tallysman TW3600 — kein ESD-Schutz
+## Verbaute Hardware: Calian/Tallysman TW3600 — ESD-Schutz mehrdeutig dokumentiert
 
-Die verbaute Antenne (TW3600, passive Dual-Feed-RHCP-Keramik-Patch,
-1616–1626,5 MHz, TNC) hat **keinen ESD-Schutz**: Die Spezifikationstabelle
-des Datenblatts (Rev. 202407, S. 2) führt „ESD Circuit Protection: —";
-der Feature-Bullet „15 kV ESD circuit protection" auf S. 1 ist Boilerplate
-der aktiven Calian-Antennen und trifft auf die passive TW3600 nicht zu.
-Konsequenzen:
+Die Antenne (TW3600, passive Dual-Feed-RHCP-Keramik-Patch,
+1616–1626,5 MHz, TNC) wurde **wegen des ESD-Schutzes gewählt** — die
+Feature-Liste des Datenblatts (Rev. 202407, S. 1) nennt explizit
+„15 kV ESD circuit protection". Die Spezifikationstabelle (S. 2) führt
+„ESD Circuit Protection: —", **aber** diese Zeile steht in der
+LNA-Sektion, in der bei der passiven Antenne jede Zeile gestrichen ist
+(kein LNA) — der Strich widerlegt das Feature nicht. Beides ist möglich:
+(a) ESD-Shunt am Feed real (bei passiven Antennen typisch als
+Induktivität → DC-Kurzschluss Pin↔Masse; 15 kV ≙ IEC-61000-4-2-
+Luftentladung) oder (b) Template-Bullet der aktiven Modelle.
 
-- Das LEXAN-Radom ist ein Isolator und lädt sich im Driftschnee auf; der
-  Patch koppelt direkt auf die Feeds — ohne dokumentierten DC-Pfad zur
-  Masse geht jede Entladung über den Innenleiter zum Modem.
-- Der Zamak-Metallsockel (Through-hole, 100-mm-Groundplane) ist bondbar —
-  Sockel und Groundplane gehören aufs gemeinsame Potenzial.
-- Der **externe Inline-GDT am Boxeintritt ist damit zwingend**, nicht
-  optional.
-- Operating Range der Antenne: −40 °C — die Kohnen-Winterluft
-  unterschreitet auch diese Spezifikation.
+**Klärung (offen):**
+
+- [ ] Ohmmeter an Ersatz-TW3600: TNC-Pin ↔ Gehäuse. DC-Kurzschluss →
+      Shunt real, Patch-Insel existiert nicht; offen → vermutlich kein
+      Schutz.
+- [ ] Anfrage an Calian (info@tallysman.com): ESD-Schutz am Feed der
+      passiven TW3600? Strahler DC-geerdet?
+
+**Wichtig:** Selbst wenn der antennenseitige Schutz real ist, ändert das
+die Gegenmaßnahmen nicht. Der Shunt sitzt am Antennenende — gegen
+schnelle Insel-Ausgleichstransienten (Kohnen-Geometrie: Pulse kürzer als
+die ~50 ns Kabellaufzeit) schützt ein Fern-Ende-Kurzschluss das
+Modemende nicht. Der DC-grounded-Ableiter am Modemende + Bonding bleibt
+die Maßnahme; er wirkt unabhängig davon, welcher Teilpfad der tödliche
+war. Weitere Randnotiz: Operating Range der Antenne −40 °C — die
+Kohnen-Winterluft unterschreitet auch diese Spezifikation.
 
 Datenblatt: https://sites.calian.com/app/uploads/sites/8/2024/06/Calian%C2%AE-TW3600-Datasheet.pdf
 
