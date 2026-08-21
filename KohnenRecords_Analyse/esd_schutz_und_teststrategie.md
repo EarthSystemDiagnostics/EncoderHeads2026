@@ -144,9 +144,11 @@ SD-Logging den Worst Case ab, Status-Diagnostik zeigt einen Ausfall
 sofort.
 
 **Folgerung:** vergrabene Architektur behalten, die Mast↔Box-Entkopplung
-explizit reparieren: (1) Bonding-Leiter (Cu-Band) parallel zum Koax von
-Antennensockel/Mast bis zur Box, beidseitig angeschlossen — Mast, Schirm
-und Box auf einem Potenzial, die Aufladung entsteht gar nicht erst;
+explizit reparieren: (1) Bonding-Leiter (Cu-Band, ersatzweise das
+vorhandene Stahl-Trageseil) **eng parallel zum Koax** von
+Antennensockel/Mast bis zur Box, beidseitig angeschlossen — er übernimmt
+den Ausgleichsstrom, der sonst allein über den Koax-Schirm läuft
+(Dimensionierung und Schleifenfrage: eigener Abschnitt unten);
 (2)+(3) **ein Bauteil:** der **Calian TW170 (32-0170-01, 2× TNC)** als
 Inline-Element **am Modemanschluss in der Box** — Hybrid TVS + GDT
 (Turn-on 14 V in ns, Durchlass ≤175 µJ), Pin↔Gehäuse 0,2 Ω (am
@@ -221,6 +223,55 @@ Shunt-Induktivitäten DC-geerdet (s. o.) — langsame Radom-/Patch-Aufladung
 fließt ab. Was kein antennenseitiger Shunt abdeckt, sind **schnelle
 Transienten am Modemende** (Kohnen-Inselgeometrie); dafür der GDT in
 der Box.
+
+## Bonding-Leiter: Dimensionierung und Schleifenfrage
+
+Ausgangslage Kohnen: Zwischen den beiden Potenzialinseln (Mast/Antenne oben,
+Box unten) ist der **Koax-Schirm die einzige Verbindung**. Das ist der
+eigentliche Konstruktionsfehler — nicht wegen der Strombelastbarkeit,
+sondern wegen der **Transferimpedanz**.
+
+**Strombelastbarkeit ist unkritisch.** Energie ≈ 4,5 mJ (1 nF auf 3 kV),
+Puls ≈ 60 A für ~100 ns → I²t ≈ 4·10⁻⁴ A²s. Das steckt jedes Geflecht und
+jeder Draht weg. (Anders nur bei echtem Blitz — kA über zehner µs; auf dem
+Plateau praktisch ausgeschlossen.)
+
+**Kritisch ist die Kopplung nach innen.** Außen auf dem Schirm fließender
+Strom koppelt über die Geflechtporosität eine Spannung auf den Innenleiter
+(Transferimpedanz einfacher Geflechte ~10–50 mΩ/m, oberhalb ~1 MHz stark
+steigend). Ist der Schirm der einzige Rückweg, muss der **gesamte**
+Ausgleichsstrom durch genau dieses Kopplungselement — direkt in den
+Modemeingang.
+
+**Parallelleiter (parallel earth conductor, PEC).** Ein zweiter Leiter
+Mast↔Box übernimmt den Löwenanteil des Ausgleichsstroms; entsprechend
+weniger fließt über den Schirm, entsprechend weniger koppelt nach innen
+(typisch eine Größenordnung). Auslegungsregeln:
+
+- **Die Aufteilung ist induktiv, nicht ohmsch** (Anstiegszeiten im ns- bis
+  µs-Bereich) → DC-Widerstand und Querschnitt sind fast egal,
+  **Geometrie entscheidet**.
+- **Eng parallel zum Koax führen** (idealerweise im selben Rohr): kleine
+  Schleifenfläche, hohe Gegeninduktivität → gute Stromübernahme.
+- **Flaches Kupferband/Geflecht ist am besten** (~0,5–0,8 µH/m gegenüber
+  ~1–1,5 µH/m beim Runddraht). Ein vorhandenes **Stahl-Trageseil** ist
+  wegen µr und Skin-Effekt HF-mäßig schlechter, aber an beiden Enden
+  angeschlossen **deutlich besser als nichts** — und praktisch kostenlos,
+  da ohnehin vorhanden.
+- **Querschnitt nach Mechanik** wählen (6–16 mm² Band bzw. das Seil), nicht
+  nach Strom.
+
+**Ground Loop?** Ja, Schirm + Parallelleiter bilden eine Schleife — hier
+unproblematisch und in der EMV-Praxis genau deshalb empfohlen: Schädlich
+sind Schleifen bei Netzströmen/50-Hz-Brummen (hier batteriebetrieben, kein
+Netz) oder bei großer Schleifenfläche mit magnetischem Transienten
+(Blitz — hier nicht existent). Eng parallel geführt ist die Fläche
+minimal; der Gewinn (weniger Schirmstrom) überwiegt klar.
+
+**Wichtig:** Die Aufteilung ist nie 100:0 — ein Rest fließt weiter über den
+Schirm. Der Ableiter am Modemende bleibt die primäre Maßnahme, der
+Parallelleiter reduziert, was dort ankommt. Beides zusammen, nicht
+eines statt des anderen.
 
 ## Teststrategie
 
