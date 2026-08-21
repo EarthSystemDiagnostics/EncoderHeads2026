@@ -35,8 +35,16 @@ Luftentladung) oder (b) Template-Bullet der aktiven Modelle.
     (kein µs-Zünddelay wie bei reinem GDT), Durchlassenergie ≤175 µJ
     bei 3 kA (8/20 µs), Surge bis 20 kA; Kapsel nach Großereignis
     wechselbar.
-  - **0,2 Ω Pin↔Gehäuse gemessen** (Calian) = permanenter DC-Bleed der
-    Leitung — faktisch der gewünschte DC-grounded-Typ in einem Bauteil.
+  - **0,2 Ω Pin↔Gehäuse — gemessen am TW170** (Calian, DMM, „approximate"):
+    der Ableiter selbst ist DC-kurzgeschlossen → er bringt den
+    permanenten DC-Bleed der Leitung mit, faktisch der gewünschte
+    DC-grounded-Typ in einem Bauteil. **Achtung Zuordnung:** Diese
+    Messung betrifft den Ableiter, **nicht** die Antenne — der von uns
+    erfragte Referenzwert der TW3600 steht weiterhin aus.
+    (Nebenbefund: 0,2 Ω nach Masse widerspricht dem Datenblattsatz
+    „continuous DC power path … to feed outdoor electronic circuits" —
+    für uns irrelevant, da keine DC auf der Leitung; für aktive
+    GNSS-Antennen wäre das vorher zu klären.)
   - **1100–1700 MHz** → Iridium abgedeckt; Insertion Loss 0,3–0,5 dB.
   - **Floating-Betrieb von Calian abgesegnet** („preferable … rather
     than no protection at all") — Bonding an die Box genügt.
@@ -49,9 +57,14 @@ Luftentladung) oder (b) Template-Bullet der aktiven Modelle.
 - Calian bietet einen Engineering-Call an → **nach der Antennen-Bergung
   wahrnehmen** (dann mit Befund statt Hypothese).
 - [x] ~~Anfrage an Calian~~ (beantwortet, s. o.)
+- [ ] **Offen: Referenzwiderstand der TW3600.** Calian hat auf die
+      Frage hin den *TW170* gemessen (0,2 Ω), nicht die Antenne; für die
+      TW3600 gibt es weiterhin nur die qualitative Aussage
+      „DC-geerdet über Shunt-Induktivitäten + PCB-Schrauben". Angebot
+      einer Messung besteht → beim nächsten Kontakt erneut anfragen.
 - [ ] Ohmmeter-Verifikation an Ersatz-TW3600: Pin ↔ Gehäuse muss
-      **DC-durchgängig** sein (Erwartung laut Hersteller; Calian bietet
-      an, einen Referenzwert zu messen).
+      **DC-durchgängig** messen; eigener Messwert dient dann als
+      Referenz für die geborgenen Antennen.
 
 **Konsequenz für den Mechanismus:** Der *langsame* Aufladungspfad
 (Patch/Innenleiter gegen Schirm) wird antennenseitig abgeleitet. Übrig
@@ -136,9 +149,9 @@ Antennensockel/Mast bis zur Box, beidseitig angeschlossen — Mast, Schirm
 und Box auf einem Potenzial, die Aufladung entsteht gar nicht erst;
 (2)+(3) **ein Bauteil:** der **Calian TW170 (32-0170-01, 2× TNC)** als
 Inline-Element **am Modemanschluss in der Box** — Hybrid TVS + GDT
-(Turn-on 14 V in ns, Durchlass ≤175 µJ), Pin↔Gehäuse 0,2 Ω = eigener
-permanenter DC-Bleed der Leitung (zusätzlich zu den
-Shunt-Induktivitäten in der TW3600). Beiliegende Erdungsschelle auf
+(Turn-on 14 V in ns, Durchlass ≤175 µJ), Pin↔Gehäuse 0,2 Ω (am
+Ableiter gemessen) = eigener permanenter DC-Bleed der Leitung
+(zusätzlich zu den Shunt-Induktivitäten in der TW3600). Beiliegende Erdungsschelle auf
 Boxbolzen/-wand = Bonding miterledigt. Kabel, KEL-Verschraubung und der
 TNC oben im Mast bleiben unberührt (dort ist ohnehin kein Zugang). Rein
 passiv, kein Strombedarf, Thermik unverändert. (Platz prüfen: 113 mm ×
@@ -146,7 +159,8 @@ passiv, kein Strombedarf, Thermik unverändert. (Platz prüfen: 113 mm ×
 
 Vorab-Prüfpunkt (Ohmmeter, Verifikation): TW3600 zwischen
 TNC-Innenleiter und -Gehäuse muss **DC-durchgängig** messen
-(Herstellerangabe: Shunt-Induktivitäten + PCB-Schrauben). Falls eine
+(Herstellerangabe qualitativ: Shunt-Induktivitäten + PCB-Schrauben;
+ein Zahlen-Referenzwert für die Antenne liegt noch nicht vor). Falls eine
 Antenne offen misst → Exemplar defekt/abweichend, dann DC-grounded-
 Ableiter statt einfachem GDT verwenden.
 
