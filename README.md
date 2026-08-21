@@ -19,6 +19,8 @@ EncoderHeads2026/
 │   ├── decode_combined.R      # Merge old + new CSV exports and decode
 │   ├── head03_profile.qmd     # Analysis profile — head03 (35 nodes, modem 231709)
 │   ├── head04_profile.qmd     # Analysis profile — head04 (25 nodes, modem 231710)
+│   ├── ausfallanalyse_kohnen.qmd    # Why both heads went silent: telemetry, network, weather
+│   ├── esd_schutz_und_teststrategie.md  # ESD protection concept + field/test strategy
 │   ├── explore_head04.R
 │   ├── make_plots.R / plot_*.R
 │   └── data/                  # Raw CSV exports and decoded results
@@ -68,7 +70,7 @@ The script runs these four steps, which can also be run individually:
 | 1. Greenland fetch | `Rscript fetch_cloudloop_greenland.R` | new `testdata/<IMEI>-rb*.bin` |
 | 2. Kohnen fetch + decode | `cd KohnenRecords_Analyse && Rscript fetch_antarctic_cloudloop.R && Rscript decode_combined.R` | `data/results-api-full.csv`, `data/decoded_head0{3,4}_*_combined.csv` |
 | 3. Greenland reports | `cd Greenland2026 && quarto render <doc>.qmd` for `decode_snowmelt_newgrip`, `decode_snowmelt_dye3`, `decode_chain`, `system_state` | HTML reports + CSVs in `Greenland2026/data/` |
-| 4. Kohnen reports | `cd KohnenRecords_Analyse && quarto render head03_profile.qmd head04_profile.qmd` | `head03_profile.html`, `head04_profile.html` |
+| 4. Kohnen reports | `cd KohnenRecords_Analyse && quarto render <doc>.qmd` for `head03_profile`, `head04_profile`, `ausfallanalyse_kohnen` | `head03_profile.html`, `head04_profile.html`, `ausfallanalyse_kohnen.html` |
 
 The Greenland heads are identified by message size (225 = GRIP, 226 = Dye3,
 231 = Doppelkette), the two Kohnen Things by latitude ≈ −75 and size

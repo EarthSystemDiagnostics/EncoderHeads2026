@@ -21,22 +21,49 @@ LNA-Sektion, in der bei der passiven Antenne jede Zeile gestrichen ist
 Induktivität → DC-Kurzschluss Pin↔Masse; 15 kV ≙ IEC-61000-4-2-
 Luftentladung) oder (b) Template-Bullet der aktiven Modelle.
 
-**Klärung (offen):**
+**Geklärt — Antwort von Calian Engineering (08/2026):**
 
-- [ ] Ohmmeter an Ersatz-TW3600: TNC-Pin ↔ Gehäuse. DC-Kurzschluss →
-      Shunt real, Patch-Insel existiert nicht; offen → vermutlich kein
-      Schutz.
-- [ ] Anfrage an Calian (info@tallysman.com): ESD-Schutz am Feed der
-      passiven TW3600? Strahler DC-geerdet?
+- **Kein dedizierter ESD-/Surge-Schutz** in der passiven TW3600, aber
+  **Shunt-Induktivitäten an den Patch-Feed-Punkten**, die statische
+  Aufladung der Strahlerelemente ableiten.
+- **Der Strahler ist DC-geerdet** zum TNC-Gehäuse (Shunt-Induktivitäten
+  + PCB-Montageschrauben) → die „Patch-Insel" existiert nicht; die
+  Antennenwahl war auch in dieser Hinsicht richtig.
+- Calians eigene Empfehlung für unsere Umgebung: **Inline-Surge-Schutz
+  TW170**. Zweite Calian-Antwort (08/2026) + Datenblatt (Rev. 202408):
+  - **Hybrid TVS + GDT, Turn-on 14 V** — die TVS-Stufe klemmt in ns
+    (kein µs-Zünddelay wie bei reinem GDT), Durchlassenergie ≤175 µJ
+    bei 3 kA (8/20 µs), Surge bis 20 kA; Kapsel nach Großereignis
+    wechselbar.
+  - **0,2 Ω Pin↔Gehäuse gemessen** (Calian) = permanenter DC-Bleed der
+    Leitung — faktisch der gewünschte DC-grounded-Typ in einem Bauteil.
+  - **1100–1700 MHz** → Iridium abgedeckt; Insertion Loss 0,3–0,5 dB.
+  - **Floating-Betrieb von Calian abgesegnet** („preferable … rather
+    than no protection at all") — Bonding an die Box genügt.
+  - **TNC-Version: 32-0170-01** (2× TNC female), Montage-/Erdungsschellen
+    beiliegend; IP67, Edelstahl.
+  - Vorbehalte: Operating −40 °C (Kohnen-Box-Minimum −38,5 °C — knapp
+    innerhalb, ohne Marge); Baugröße 113 mm × Ø34 mm, 270 g —
+    Platz in der Box prüfen; **Inline-Bauform, kein Schott** → fürs
+    neue Design bleiben die Schott-Kandidaten unten maßgeblich.
+- Calian bietet einen Engineering-Call an → **nach der Antennen-Bergung
+  wahrnehmen** (dann mit Befund statt Hypothese).
+- [x] ~~Anfrage an Calian~~ (beantwortet, s. o.)
+- [ ] Ohmmeter-Verifikation an Ersatz-TW3600: Pin ↔ Gehäuse muss
+      **DC-durchgängig** sein (Erwartung laut Hersteller; Calian bietet
+      an, einen Referenzwert zu messen).
 
-**Wichtig:** Selbst wenn der antennenseitige Schutz real ist, ändert das
-die Gegenmaßnahmen nicht. Der Shunt sitzt am Antennenende — gegen
-schnelle Insel-Ausgleichstransienten (Kohnen-Geometrie: Pulse kürzer als
-die ~50 ns Kabellaufzeit) schützt ein Fern-Ende-Kurzschluss das
-Modemende nicht. Der DC-grounded-Ableiter am Modemende + Bonding bleibt
-die Maßnahme; er wirkt unabhängig davon, welcher Teilpfad der tödliche
-war. Weitere Randnotiz: Operating Range der Antenne −40 °C — die
-Kohnen-Winterluft unterschreitet auch diese Spezifikation.
+**Konsequenz für den Mechanismus:** Der *langsame* Aufladungspfad
+(Patch/Innenleiter gegen Schirm) wird antennenseitig abgeleitet. Übrig
+bleiben **schnelle Transienten** — Insel-Ausgleichsströme der
+Kohnen-Geometrie mit Pulsdauern unter der ~50 ns Kabellaufzeit, für die
+der Antennen-Shunt am falschen Ende sitzt — sowie mechanischer
+Sturmschaden. Der GDT am Modemende + Bonding bleibt die Maßnahme;
+da die Leitung über die Antennen-Induktivitäten bereits DC-entladen
+wird, genügt am Modemende ein **einfacher GDT-Zwischenstecker (z. B.
+Calian TW170)**; die DC-grounded-Stub-Bauform ist nicht mehr zwingend.
+Randnotiz: Operating Range der Antenne −40 °C — die Kohnen-Winterluft
+unterschreitet auch diese Spezifikation.
 
 Datenblatt: https://sites.calian.com/app/uploads/sites/8/2024/06/Calian%C2%AE-TW3600-Datasheet.pdf
 
@@ -94,37 +121,34 @@ ESD-robust, weil Elektronikbox und Antenne am selben Metallmast sitzen
 
 **Einordnung Grönland-Systeme (GRIP, Dye-3):** Koax nur ~50 cm, Box am
 selben Mast — alles ein gebondetes Gestell, das Kohnen-Energiereservoir
-(Insel-Ausgleich Mast↔tiefe Box über ~1 nF) existiert nicht. Restrisiko
-ist allein die **Patch-Insel**: Aufladung des Strahlers hinter dem Radom,
-Entladung nur über den Feed-Pin — Quellkapazität wenige pF, also µJ
-statt mJ. Aber: RF-Frontends sind extrem ESD-empfindlich (RF-Pins oft
-nur wenige 100 V HBM), ein ungünstiger kV-Puls kann auch hier töten.
-Netto: deutlich unwahrscheinlicher als Kohnen, im Winterfenster
-(Okt.–Apr., trockener Drift) aber nicht null. Bei Standortbesuch:
-Bleed/GDT als Fünf-Minuten-Versicherung; bis dahin fängt SD-Logging den
-Worst Case ab, Status-Diagnostik zeigt einen Ausfall sofort.
+(Insel-Ausgleich Mast↔tiefe Box über ~1 nF) existiert nicht. Und die
+frühere Restsorge „Patch-Insel" ist durch die Calian-Antwort entschärft:
+der Strahler ist über Shunt-Induktivitäten DC-geerdet, langsame
+Aufladung fließt ab. Verbleibendes Risiko damit gering (schnelle
+Nahfeld-Transienten bei extremem Drift, µJ-Klasse); bei Standortbesuch
+GDT-Zwischenstecker als Fünf-Minuten-Versicherung, bis dahin fängt
+SD-Logging den Worst Case ab, Status-Diagnostik zeigt einen Ausfall
+sofort.
 
 **Folgerung:** vergrabene Architektur behalten, die Mast↔Box-Entkopplung
 explizit reparieren: (1) Bonding-Leiter (Cu-Band) parallel zum Koax von
 Antennensockel/Mast bis zur Box, beidseitig angeschlossen — Mast, Schirm
 und Box auf einem Potenzial, die Aufladung entsteht gar nicht erst;
-(2)+(3) **ein Bauteil statt zwei:** ein Koax-Ableiter in
-**DC-grounded-Bauform** (λ/4-Stub bzw. Induktivität; als
-GPS-/L-Band-Typ 1,5–1,7 GHz Standardware) als Zwischenstecker **am
-Modemanschluss in der Box** — Innenleiter galvanisch auf Gehäuse (DC =
-Bleed für Kabel und ggf. Patch, 1,6 GHz = unsichtbar) plus
-Surge-Ableitung, Gehäusefahne auf Boxbolzen = Bonding miterledigt.
-Kabel, KEL-Verschraubung und der TNC oben im Mast bleiben unberührt
-(dort ist ohnehin kein Zugang). Rein passiv, kein Strombedarf, Thermik
-unverändert.
+(2)+(3) **ein Bauteil:** der **Calian TW170 (32-0170-01, 2× TNC)** als
+Inline-Element **am Modemanschluss in der Box** — Hybrid TVS + GDT
+(Turn-on 14 V in ns, Durchlass ≤175 µJ), Pin↔Gehäuse 0,2 Ω = eigener
+permanenter DC-Bleed der Leitung (zusätzlich zu den
+Shunt-Induktivitäten in der TW3600). Beiliegende Erdungsschelle auf
+Boxbolzen/-wand = Bonding miterledigt. Kabel, KEL-Verschraubung und der
+TNC oben im Mast bleiben unberührt (dort ist ohnehin kein Zugang). Rein
+passiv, kein Strombedarf, Thermik unverändert. (Platz prüfen: 113 mm ×
+Ø34 mm.)
 
-Vorab-Prüfpunkt (Ohmmeter): TW3600 zwischen TNC-Innenleiter und
--Gehäuse messen. DC-durchgängig → Stub entlädt auch den Patch
-(Ideallösung); DC-offen (kapazitive Feeds) → Patch bleibt kleine
-Restinsel, Ableiter schützt Kabelnetz und Modem — das eigentliche
-Schutzziel. (Ein nackter MΩ-Widerstand quer zur Leitung ist keine
-Alternative: ~0,3 pF Parasitärkapazität ≈ −j330 Ω bei 1,6 GHz
-verstimmt die Anpassung.)
+Vorab-Prüfpunkt (Ohmmeter, Verifikation): TW3600 zwischen
+TNC-Innenleiter und -Gehäuse muss **DC-durchgängig** messen
+(Herstellerangabe: Shunt-Induktivitäten + PCB-Schrauben). Falls eine
+Antenne offen misst → Exemplar defekt/abweichend, dann DC-grounded-
+Ableiter statt einfachem GDT verwenden.
 
 **Antennen-Alternative für die nächste Generation — Marine-Rohrantennen
 (Quadrifilar-Helix):** z. B. Beam RST710/RST210, 2J-QFH; passiv, TNC,
@@ -155,14 +179,34 @@ leitende Verbindung ist der Koax-Schirm — jeder Ladungsausgleich und
 jede Entladung zwischen Mast/Antenne und Box läuft zwangsläufig über
 den Schirm **direkt am Modemstecker vorbei**. Deshalb ist hier das
 Cu-Bonding-Band Mast↔Box parallel zum Koax zwingend (Punkt 1 der
-Folgerung), dazu GDT als Schott-Durchführung am Boxeintritt.
+Folgerung), dazu der GDT in der Box.
 
-**In beiden Konfigurationen bleibt der Patch die letzte ESD-Insel:**
-isoliert hinter dem LEXAN-Radom, kapazitiv gekoppelt, kein DC-Pfad —
-das Radom lädt sich im Drift auf, einziger Entladeweg ist der Feed-Pin
-in den Innenleiter (klassischer Flugzeug-Radom-P-Static-Fall). Dagegen
-hilft kein Struktur-Bonding, nur **antennenseitiger Bleed/DC-Kurzschluss
-+ GDT als Fänger**.
+**Einbauform des GDT — Retrofit vs. Neubau:** Für die **Nachrüstung im
+Feld** der Inline-Zwischenstecker direkt am Modemanschluss: alle
+Steckverbindungen bleiben in der dichten Box, KEL-Durchführung und
+Kabel unberührt, zwei Schraubvorgänge, Bonding-Fahne auf Gehäusebolzen.
+Der **Schott-Ableiter in der Boxwand** (Durchführungsgehäuse mit
+Montagegewinde, 360°-Chassisbond am Eintritt, Entladestrom bleibt auf
+der Außenhaut — EMV-ideal) ist die Lösung für die **nächste
+Box-Generation** ab Werkstatt: Im Feld erforderte er Adapterplatte an
+der KEL-Position, einen Innen-Jumper zum Modem und verlagerte die
+Kabel-Steckverbindung nach außen (Firn/Wetterseite) — eine neue
+Dichtungs-Schwachstelle, wo der Zwischenstecker alle Übergänge im
+Trockenen lässt.
+
+Schott-Kandidaten für den Neubau (GDT, wechselbare Kapsel, ≥1,63 GHz,
+−55 °C, DC-pass; N-Anschluss ist Klassenstandard → Durchführung in N
+planen, Innen-Jumper N→Modem): **Huber+Suhner 3402-Serie** (EMP
+Protector, Flansch/Schott), **PolyPhaser IS-B50-Serie** (z. B.
+IS-B50LN-C2), **Times Microwave LP-GTR**, **Citel P8AX**. Calian TW170:
+Datenblatt/Montagevarianten bei Calian angefragt (s. Antwortmail);
+Kapsel-Zündspannung ~90–230 V wählen.
+
+**Patch-Insel: durch Calian-Antwort entschärft.** Der Strahler ist über
+Shunt-Induktivitäten DC-geerdet (s. o.) — langsame Radom-/Patch-Aufladung
+fließt ab. Was kein antennenseitiger Shunt abdeckt, sind **schnelle
+Transienten am Modemende** (Kohnen-Inselgeometrie); dafür der GDT in
+der Box.
 
 ## Teststrategie
 
@@ -208,9 +252,46 @@ danach Session-Test. SLF-Windkanal und Neumayer-Winter sind damit
 Optionen, keine Gates — ihr Restrisiko (Ladungsabfluss im realen Drift)
 ist durch Bleed + Bonding konstruktiv adressiert.
 
-**Nachrüstsatz Sommerbesuch:** 2× Inline-GDT (TNC, + Ersatzkapseln),
-Cu-Bondingband + Schellen (mit Dehnungsreserve), MΩ-Bleed-Widerstände,
-Ersatz-Antenne, Ersatz-Modem, SD-Lesegerät.
+**Einsatzstrategie — Zwei-Phasen-Plan (Randbedingungen: wenige Stunden
+vor Ort, Person ohne Systemkenntnis; Modem verlötet, Ketten an
+PicoBlades in der Elektronik — Elektroniktausch im Feld zu riskant.
+Die Elektronik hängt an Rohr/Seil im luftgefüllten Bohrloch und ist
+einfach hochziehbar; Kabel im Rohr → keine Setzungslasten):**
+
+*Phase 1 — diese Saison, narrensicher (laminierte Schrittkarte):*
+
+1. Foto-Doku: Mast, Antenne, Abspannung, Überschlagspuren.
+2. **NanoVNA ans obere Kabelende** (Antenne ab, Analyzer an, Preset,
+   Bildschirmfoto): angepasstes S11 = Kabel + Modem-Frontend intakt;
+   Totalreflexion = Fehler unten. Klärt in 2 min Antenne vs. Pfad und
+   die Kabelfrage (Stecker-Lichtbogenschäden, Reif im oberen TNC).
+3. **Antenne tauschen** (Ohmmeter-verifizierte Ersatz-TW3600).
+4. Elektronik **hochziehen, SD kopieren/tauschen** — Kettenstecker
+   (PicoBlade) bleiben unberührt — wieder ablassen (Seillänge stellt
+   Position wieder her).
+5. **Besuch um einen Sendeslot planen** (head03 09:03/21:03 UTC,
+   head04 17:38 UTC): Erfolg nach Antennentausch live in Cloudloop.
+6. Alte Antenne mit nach Hause (Forensik).
+
+Fallnetz: Lebt die Elektronik (Telemetrie-Historie spricht dafür),
+**läuft die Messung auch ohne Telemetrie weiter** — Daten via jährliche
+SD-Bergung. War die Antenne der Fehler, sind die Systeme wieder live.
+
+Prüfpunkt vorab: Endet das Koax in der Box an einem **Steckverbinder**
+zum Modem (u.FL/SMA-Pigtail)? Dann GDT-Zwischenstecker schon in
+Phase 1; verlötet → GDT erst Phase 2.
+
+*Phase 2 — Saison mit Entwickler/Zeit:* Kompletttausch mit zuhause
+gebauten und getesteten Einheiten (Schott-GDT, Bonding ab Werk; Gates:
+Iridium-Session durch den Ableiter + Puls-Test), PicoBlade-Transfer im
+Windschutz; ausgefallene Elektronik zur Forensik (Frontend durchmessen,
+Überschlagspuren) — der definitive Hypothesentest. Vorbereitung: neue
+Modem-IMEIs bei Cloudloop aktivieren + Pipeline-Mapping anpassen.
+
+**Design-Lehren nächste Generation** (aus diesem Dilemma): steckbares
+Telemetrie-Modul (Modem feldtauschbar in Minuten), Schott-GDT ab Werk,
+feldfreundliche Kettensteckverbindung statt PicoBlade, Servicekonzept
+„hochziehen + Modul tauschen".
 
 ## Erfahrungswert SWARM: winterfest — und warum
 

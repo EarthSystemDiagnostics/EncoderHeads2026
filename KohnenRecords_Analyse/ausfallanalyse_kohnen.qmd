@@ -287,16 +287,23 @@ nichts, weil die gesamte Telemetrie durch den zerstörten Kanal müsste.
 22.07. bzw. 13.08. normal weiter und der komplette Winterrecord liegt vor
 Ort — nichts ist verloren, nur die Live-Übertragung fehlt.
 
-**Checkliste Sommerbesuch:**
+**Checkliste Sommerbesuch — Phase 1 (wenige Stunden, Person ohne
+Systemkenntnis; Modem verlötet, Ketten-PicoBlades bleiben unberührt —
+Details und Phase 2 in `esd_schutz_und_teststrategie.md`):**
 
-- [ ] SD-Karten beider Heads auslesen (kompletter Winterrecord).
-- [ ] Ersatz-**Antenne** und Ersatz-**Modem** mitnehmen und einzeln
-      durchtauschen — nur so lässt sich Frontend-Schaden (Fall 1/2) von
-      Antennenschaden (Fall 3) trennen.
-- [ ] Antenne/Radom, Koax und Stecker auf Überschlagspuren inspizieren.
-- [ ] Beim Wiederaufbau: Bonding aller Metallteile, Inline-GDT am
-      Boxeintritt, ggf. DC-kurzgeschlossene Antennenbauform / Static Wicks
-      (siehe `esd_schutz_und_teststrategie.md`).
+- [ ] Foto-Doku Mast/Antenne/Abspannung (Überschlagspuren).
+- [ ] **NanoVNA am oberen Kabelende** (Preset + Bildschirmfoto):
+      unterscheidet Antenne defekt / Pfad unten defekt und prüft das
+      Kabel gleich mit.
+- [ ] **Antenne tauschen** (Ohmmeter-verifizierte Ersatz-TW3600); alte
+      Antenne mit zur Forensik.
+- [ ] Elektronik **hochziehen, SD kopieren/tauschen**, wieder ablassen
+      — Kettenstecker nicht anfassen.
+- [ ] Besuch um einen **Sendeslot** planen (head03 09:03/21:03 UTC,
+      head04 17:38 UTC) und Erfolg live in Cloudloop prüfen.
+- [ ] Fallnetz: Lebt die Elektronik, läuft die Messung auch ohne
+      Telemetrie weiter (jährliche SD-Bergung); Kompletttausch mit
+      GDT-geschützten Werkstatt-Einheiten folgt in Phase 2.
 
 ## Fazit
 
@@ -325,16 +332,24 @@ Ort — nichts ist verloren, nur die Live-Übertragung fehlt.
    Verbindung der Koax-Schirm ist. Mast/Antenne laden sich im Drift gegen
    die tiefe Box auf, das lange Koaxkabel (~1 nF) wirkt als Kondensator,
    und jeder Ausgleich läuft zwangsläufig über Schirm und Innenleiter
-   direkt am RF-Eingang des Modems vorbei. Die verbaute Antenne
-   (Calian/Tallysman TW3600, passiv) wurde wegen des im Datenblatt
-   beworbenen ESD-Schutzes gewählt („15 kV ESD circuit protection");
-   ob der Schutz bei der passiven Bauform real ist, lässt das
-   Datenblatt offen — der Strich in der Spez-Tabelle steht in der
-   ohnehin leeren LNA-Sektion (Klärung per Ohmmeter und Calian-Anfrage,
-   siehe `esd_schutz_und_teststrategie.md`). Entscheidend: Ein
-   antennenseitiger Schutz säße am **falschen Ende** — gegen schnelle
-   Insel-Ausgleichstransienten (kürzer als die ~50 ns Kabellaufzeit)
-   schützt er das Modemende nicht.
+   direkt am RF-Eingang des Modems vorbei. Zur verbauten Antenne
+   (Calian/Tallysman TW3600, passiv) hat Calian Engineering auf Anfrage
+   (08/2026) geklärt: **kein dedizierter Surge-Schutz, aber der Strahler
+   ist über Shunt-Induktivitäten DC-geerdet** — langsame statische
+   Aufladung von Patch und Innenleiter fließt antennenseitig ab. Der
+   verbleibende ESD-Pfad sind damit **schnelle Transienten** (kürzer als
+   die ~50 ns Kabellaufzeit), für die der Antennen-Shunt am falschen
+   Ende sitzt; Calian empfiehlt für unsere Umgebung selbst einen
+   Inline-GDT (TW170) — deckungsgleich mit unserem Schutzkonzept
+   (`esd_schutz_und_teststrategie.md`).
+   **Mechanischer Sturmschaden ist demgegenüber unwahrscheinlich:** der
+   Aufbau ist gut abgespannt und dieselbe Mechanik hat an Kohnen bereits
+   zwei Jahre mehrfach ohne jeden Befund überlebt — geändert hat sich
+   gegenüber den überlebten Jahren die **Telemetrie** (vorher SWARM/VHF
+   mit inhärent DC-geerdeter Antenne, winterfest; jetzt Iridium mit
+   L-Band-Patch und langem Koax). Gleiche bewährte Mechanik + neuer
+   RF-Pfad + Ausfälle exakt in den Jahres-Maximalstürmen konzentriert
+   den Verdacht auf den RF-Pfad.
    Die ESD-Hypothese erklärt alle drei Kernbefunde: Ausfall exakt an den
    Maximal-Drift-Tagen, instantaner An/Aus-Übergang, keine Erholung nach
    Abwehen der Drift (head03 > 4 Wochen still). Gegenmaßnahmen fürs

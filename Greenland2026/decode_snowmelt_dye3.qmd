@@ -525,10 +525,18 @@ p_hov + p_prof + plot_layout(widths = c(3.2, 1))
 ```{r einschnei-verdict, eval=multi, results='asis'}
 bot <- prof_v |> slice_min(hoehe_cm, n = 1)
 stand <- format(day_v, "%d.%m.%Y")
-if (!any(prof_v$gedaempft)) {
+n_teil <- sum(prof_v$ratio < 0.7)          # teilgedämpft, aber über der Schwelle
+h_teil <- if (n_teil) max(prof_v$hoehe_cm[prof_v$ratio < 0.7]) else NA_integer_
+
+if (!any(prof_v$gedaempft) && bot$ratio >= 0.7) {
   cat(sprintf(
     "**Kein Sensor eingeschneit** (Tages-Check %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude) — keine Dämpfung. Das Urteil braucht nur diesen einen vollen Messtag, weil sich die Wetterlage im Verhältnis herauskürzt. Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
     stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100 * bot$ratio, bot$amp, bot$ref))
+} else if (!any(prof_v$gedaempft)) {
+  cat(sprintf(
+    "**Grenzfall — unterster Sensor deutlich gedämpft, Schwelle knapp nicht unterschritten** (Tages-Check %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K); Schwelle 35 %%. Teilgedämpft (< 70 %%) sind %d von %d Sensorhöhen. Bei ~40 cm Montagehöhe wäre eine Überdeckung überraschend — eher gedämpfte oberflächennahe Luft oder ein ruhiger Referenztag.\n",
+    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100 * bot$ratio, bot$amp, bot$ref,
+    n_teil, nrow(prof_v)))
 } else {
   h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(

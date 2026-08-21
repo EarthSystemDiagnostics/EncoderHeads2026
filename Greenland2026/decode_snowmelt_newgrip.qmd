@@ -518,10 +518,18 @@ p_hov + p_prof + plot_layout(widths = c(3.2, 1))
 ```{r einschnei-verdict, eval=multi, results='asis'}
 bot <- prof_v |> slice_min(hoehe_cm, n = 1)
 stand <- format(day_v, "%d.%m.%Y")
-if (!any(prof_v$gedaempft)) {
+n_teil <- sum(prof_v$ratio < 0.7)          # teilgedämpft, aber über der Schwelle
+h_teil <- if (n_teil) max(prof_v$hoehe_cm[prof_v$ratio < 0.7]) else NA_integer_
+
+if (!any(prof_v$gedaempft) && bot$ratio >= 0.7) {
   cat(sprintf(
     "**Kein Sensor eingeschneit** (Tages-Check %s). Der unterste Sensor (%d cm) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude) — keine Dämpfung, kein vertikaler Gradient. Das Urteil braucht nur diesen einen vollen Messtag, weil sich die Wetterlage im Verhältnis herauskürzt. Eine Überdeckung von wenigen cm (≲ 5 cm) wäre nicht sicher erkennbar.\n",
     stand, bot$hoehe_cm, 100 * bot$ratio, bot$amp, bot$ref))
+} else if (!any(prof_v$gedaempft)) {
+  cat(sprintf(
+    "**Grenzfall — unterster Sensor deutlich gedämpft, Schwelle knapp nicht unterschritten** (Tages-Check %s). Der unterste Sensor (%d cm) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude); die Dämpfungsschwelle liegt bei 35 %%. Teilgedämpft (< 70 %%) sind %d von %d Sensorhöhen, bis %s hinauf — die Schneeoberfläche steht damit unmittelbar am unteren Kettenende. Ob die untersten Sensoren bereits von wenigen cm Schnee überdeckt sind oder noch in oberflächennaher, gedämpfter Luft hängen, lässt sich mit dieser Methode nicht sicher trennen.\n",
+    stand, bot$hoehe_cm, 100 * bot$ratio, bot$amp, bot$ref, n_teil, nrow(prof_v),
+    if (is.na(h_teil)) "—" else sprintf("%d cm", h_teil)))
 } else {
   h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(
