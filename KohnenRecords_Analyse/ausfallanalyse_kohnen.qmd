@@ -254,7 +254,13 @@ if (!is.null(wind)) {
 ## Schadensbild am Modem (ESD-Hypothese im Detail)
 
 **Der Puls:** Antenne + Koaxkabel (~100 pF/m, bei ~10 m ≈ 1 nF) laden sich
-im Driftschnee auf einige kV auf. Beim Überschlag entlädt sich das in
+im Driftschnee auf einige kV auf. Die Aufladung ist dabei ein *Dauerprozess*
+über die Blizzard-Dauer (Ladungs-Masse-Verhältnisse der Partikel +72 bis
+−208 µC/kg, Felder bis 30 kV/m; Luftfahrt-Analogie: 100–760 µA Dauerladestrom).
+Für ein kleines, ortsfestes Objekt liegt der Auftreffstrom nach der Skalierung
+I = Q·C·V·A allerdings eher bei **nA–µA** — genug für kV an isolierten Teilen,
+zu wenig für Dauer-Watt; die Größenordnung ist offen und soll im
+Neumayer-Test gemessen werden (siehe `esd_schutz_und_teststrategie.md`). Beim Überschlag entlädt sich das in
 Nanosekunden über den Innenleiter — Spitzenströme im 10-A-Bereich, Energie
 im mJ-Bereich. DC-Blockkondensatoren im Signalpfad sind für ns-Transienten
 durchlässig.

@@ -2293,7 +2293,7 @@ vertical-align: -.125em;
 </details>
 <div class="cell-output-display">
 <table class="caption-top table table-sm table-striped small">
-<caption>Render-Stand 21.08.2026 12:26 UTC.</caption>
+<caption>Render-Stand 21.08.2026 18:08 UTC.</caption>
 <thead>
 <tr class="header">
 <th style="text-align: left;">head</th>
@@ -2305,12 +2305,12 @@ vertical-align: -.125em;
 <tr class="odd">
 <td style="text-align: left;">head03 (231709)</td>
 <td style="text-align: left;">2026-07-22 09:03</td>
-<td style="text-align: left;">30.1</td>
+<td style="text-align: left;">30.4</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">head04 (231710)</td>
 <td style="text-align: left;">2026-08-13 17:38</td>
-<td style="text-align: left;">7.8</td>
+<td style="text-align: left;">8.0</td>
 </tr>
 </tbody>
 </table>
@@ -2573,7 +2573,7 @@ vertical-align: -.125em;
 </section>
 <section id="schadensbild-am-modem-esd-hypothese-im-detail" class="level2">
 <h2 class="anchored" data-anchor-id="schadensbild-am-modem-esd-hypothese-im-detail">Schadensbild am Modem (ESD-Hypothese im Detail)</h2>
-<p><strong>Der Puls:</strong> Antenne + Koaxkabel (~100 pF/m, bei ~10 m ≈ 1 nF) laden sich im Driftschnee auf einige kV auf. Beim Überschlag entlädt sich das in Nanosekunden über den Innenleiter — Spitzenströme im 10-A-Bereich, Energie im mJ-Bereich. DC-Blockkondensatoren im Signalpfad sind für ns-Transienten durchlässig.</p>
+<p><strong>Der Puls:</strong> Antenne + Koaxkabel (~100 pF/m, bei ~10 m ≈ 1 nF) laden sich im Driftschnee auf einige kV auf. Die Aufladung ist dabei ein <em>Dauerprozess</em> über die Blizzard-Dauer (Ladungs-Masse-Verhältnisse der Partikel +72 bis −208 µC/kg, Felder bis 30 kV/m; Luftfahrt-Analogie: 100–760 µA Dauerladestrom). Für ein kleines, ortsfestes Objekt liegt der Auftreffstrom nach der Skalierung I = Q·C·V·A allerdings eher bei <strong>nA–µA</strong> — genug für kV an isolierten Teilen, zu wenig für Dauer-Watt; die Größenordnung ist offen und soll im Neumayer-Test gemessen werden (siehe <code>esd_schutz_und_teststrategie.md</code>). Beim Überschlag entlädt sich das in Nanosekunden über den Innenleiter — Spitzenströme im 10-A-Bereich, Energie im mJ-Bereich. DC-Blockkondensatoren im Signalpfad sind für ns-Transienten durchlässig.</p>
 <p><strong>Was stirbt:</strong> Hinter dem Antennenpin des 9602/9603 sitzen T/R-Schalter, Filter und LNA-Eingang. Deren Transistorstrukturen brechen bei wenigen Volt durch; RF-Pins tragen bewusst nur minimale ESD-Strukturen (einige 100 V), weil Schutzdioden Kapazität kosten und die Rauschzahl verschlechtern. Ein kV-Puls liegt zwei bis drei Größenordnungen darüber: Gateoxid-Durchbruch, durchlegierte Übergänge. Äußerlich unsichtbar — der Schaden ist nanometerskalig.</p>
 <p><strong>Mögliche Endzustände</strong> (von außen identisch = Funkstille):</p>
 <ol type="1">

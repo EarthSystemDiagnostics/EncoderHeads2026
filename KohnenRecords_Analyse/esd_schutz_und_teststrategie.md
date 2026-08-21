@@ -224,6 +224,51 @@ fließt ab. Was kein antennenseitiger Shunt abdeckt, sind **schnelle
 Transienten am Modemende** (Kohnen-Inselgeometrie); dafür der GDT in
 der Box.
 
+## Wie groß ist der Stressor wirklich? (Literaturstand, offene Größenordnung)
+
+Belegt ist der **Mechanismus**, nicht die Größenordnung für unseren Fall:
+
+- **Ladungstrennung:** Ladungs-Masse-Verhältnisse einzelner Saltationspartikel
+  **+72 bis −208 µC/kg** (Schmidt et al.); ältere Werte (~−10 µC/kg) gelten als
+  unterschätzt.
+- **Feldstärken:** bis **+30 kV/m** wenige cm über der Oberfläche im Blizzard;
+  die elektrostatische Kraft erreicht dort die Größenordnung der Schwerkraft
+  auf die Partikel.
+- **Wirkung auf Antennen:** dokumentiert seit Byrd Station 1965 (Herman) —
+  Rauschanhub ≥ 50 dB, 10–30 % Datenverlust in Winter/Frühjahr. Direkt
+  einschlägig: **Wishart & Radok (1967), „Electrostatic Charging of Aerial
+  Wires during Antarctic Blizzards"**, WMO Tech. Note 87 (WMO-No. 211.TP.111),
+  S. 492–529 — nicht frei online, über Bibliothek beschaffen.
+- **Kontinuierlich, nicht sporadisch:** In der Luftfahrt ist der Ladestrom ein
+  Dauerstrom, solange man in Schnee/Eiskristallen fliegt (B-17 bei 200 mph in
+  Schnee: 100–155 µA typisch, bis 760 µA in schwerem Schnee; extrem bis mA und
+  > 200 kV Rumpfpotenzial). Skalierung: **I = Q·C·V·A** (Ladung/Partikel ×
+  Partikeldichte × Geschwindigkeit × Frontfläche).
+
+**Übertragung auf unseren Fall — Vorsicht:** Ein Flugzeug bringt zehner m²
+Frontfläche bei ~90 m/s mit, die TW3600 rund 0,004 m² bei 20 m/s — zusammen
+etwa 4–5 Größenordnungen weniger. Grobe Abschätzung (Massenfluss in
+Sensorhöhe ~10⁻³ kg m⁻² s⁻¹, q/m ~100 µC/kg): **nA bis wenige µA**, nicht mA.
+Über Stunden ergibt das viel Ladung (µA × h = mC) und damit hohe Spannungen an
+isolierten Teilen, aber **keine 2 W Dauerleistung**.
+
+**Folge für die Interpretation der durchgeschmorten Leistungswiderstände**
+(Iridium-Antenne nahe Neumayer, Fotos via Arne): Der reine Auftreffstrom auf
+eine kleine Antenne erklärt sie nicht. Kandidaten: wiederholte Überschläge
+(punktuelle Energiedeposition), ein deutlich größerer Kollektor (Mast, langes
+Kabel, Drahtantenne — Wishart & Radok untersuchten genau *aerial wires*),
+Korona an Spitzen, oder eine andere Ursache (Sendeleistung bei Fehlanpassung,
+Feuchteeintritt). **Rückfrage an Arne: Widerstandswert und Bauform** — daraus
+lässt sich die deponierte Leistung rückrechnen.
+
+**Konsequenz:** Die Spanne nA…mA entscheidet, ob ein Bleed-Widerstand genügt
+oder verglüht — sie ist mit Literatur allein nicht zu schließen. Genau deshalb
+ist die Strommessung im Bonding-Leiter (Neumayer-Test) der wertvollste
+Einzelbaustein; erwarteter Bereich nA–µA mit Spitzen bestimmt die Auslegung des
+Messverstärkers. Unabhängig davon bleibt ein **induktiver** Ableitpfad
+(Drossel/λ-4-Stub, ~0 Ω bei DC) die robuste Wahl: Er ist gegenüber der
+Größenordnung des Stroms gleichgültig, ein Widerstand nicht.
+
 ## Bonding-Leiter: Dimensionierung und Schleifenfrage
 
 Ausgangslage Kohnen: Zwischen den beiden Potenzialinseln (Mast/Antenne oben,
