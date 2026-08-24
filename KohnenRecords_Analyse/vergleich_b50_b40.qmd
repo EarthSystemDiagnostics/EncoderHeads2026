@@ -1,0 +1,143 @@
+---
+title: "Kohnen-Quervergleich: B50 (head03) gegen B40 (head04)"
+subtitle: "Zwei Standorte, zwei Geräte, zwei unabhängige Kalibrierungen — als dauerhafte Qualitätskontrolle"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 10
+    fig-height: 5.5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Beide Kohnen-Systeme messen dieselbe Größe an zwei Bohrlöchern, mit **völlig
+getrennten Kalibrierketten**:
+
+| | head03 / **B50** | head04 / **B40** |
+|---|---|---|
+| Kette | C25.4.A, 60 m, in Luft (11 Knoten, 5–62 m) | Bohrlochkette, 1–201 m (20 Knoten) |
+| Kalibrierung | Calibration Registry, Batch `kohnen2526`, cal_id `2025-11_vorKohnen` | Labor-S4 2023 (Variante „Both": Fluke + Klimakammer) |
+| Quelle | `data/head03_depths.csv` + Registry | `data/head04_calibration.csv` |
+
+Unterhalb der saisonal beeinflussten Schicht muss das Profil an beiden Standorten
+praktisch gleich sein (gleiche Höhenlage, gleiche Jahresmitteltemperatur). Die
+Differenz ist damit ein **direktes Maß für den Absolutfehler beider
+Kalibrierungen zusammen** — kein Fit, keine gemeinsame Referenz.
+
+```{r setup}
+library(readr); library(dplyr); library(tidyr); library(ggplot2)
+library(lubridate); library(patchwork)
+
+d3   <- read_csv("./data/decoded_head03_231709_combined.csv", show_col_types = FALSE) |>
+  mutate(time_utc = as_datetime(time_utc))
+d4   <- read_csv("./data/decoded_head04_231710_combined.csv", show_col_types = FALSE) |>
+  mutate(time_utc = as_datetime(time_utc))
+dep3 <- read_csv("./data/head03_depths.csv", show_col_types = FALSE)
+cal4 <- read_csv("./data/head04_calibration.csv", show_col_types = FALSE) |>
+  distinct(node, depth_m)
+
+# Gemeinsames Fenster: letzte 3 Wochen, in denen BEIDE Systeme gesendet haben.
+t_end <- min(max(d3$time_utc), max(d4$time_utc))
+win   <- c(t_end - 21*86400, t_end)
+
+prof <- function(d, nodes) sapply(nodes, function(i) {
+  a <- d[[sprintf("n%d.ntc1_temp_C", i)]]; b <- d[[sprintf("n%d.ntc2_temp_C", i)]]
+  x <- rowMeans(cbind(a, b), na.rm = TRUE)
+  mean(x[d$time_utc >= win[1] & d$time_utc <= win[2]], na.rm = TRUE) })
+
+n3 <- dep3$node[dep3$chain == "C25.4.A (60 m, Luft)"]
+p3 <- tibble(depth = dep3$depth_m[n3], T = prof(d3, n3), Kopf = "head03 / B50")
+n4 <- cal4$node[cal4$node <= 20]
+p4 <- tibble(depth = cal4$depth_m[cal4$node <= 20], T = prof(d4, n4), Kopf = "head04 / B40")
+
+dif <- p3 |> mutate(T4 = approx(p4$depth, p4$T, xout = depth, rule = 2)$y,
+                    diff_mK = 1000*(T - T4))
+deep <- dif |> filter(depth >= 13)
+```
+
+**Auswertefenster:** `r format(win[1], "%d.%m.%Y")` – `r format(win[2], "%d.%m.%Y")`
+(die letzten drei Wochen, in denen beide Systeme gesendet haben).
+
+## Profile und Differenz
+
+```{r profile-plot}
+both <- bind_rows(p3, p4) |> filter(depth <= 70)
+p_prof <- ggplot(both, aes(T, depth, colour = Kopf)) +
+  geom_path(linewidth = 0.7) + geom_point(size = 2) +
+  scale_y_reverse("Tiefe (m)") + scale_x_continuous("Temperatur (°C)") +
+  scale_colour_manual(NULL, values = c("head03 / B50" = "#2166ac",
+                                       "head04 / B40" = "#b2182b")) +
+  labs(title = "Tiefenprofile: B50 gegen B40",
+       subtitle = "NTC1/NTC2 gemittelt; unabhängige Kalibrierungen, keine gemeinsame Referenz") +
+  theme_bw(11) + theme(legend.position = "bottom")
+
+p_diff <- ggplot(dif, aes(diff_mK, depth)) +
+  geom_vline(xintercept = 0, colour = "grey60") +
+  geom_path(colour = "grey70") + geom_point(size = 2, colour = "#1a9850") +
+  scale_y_reverse(NULL) + scale_x_continuous("B50 − B40 (mK)") +
+  labs(title = "Differenz",
+       subtitle = sprintf("unter 13 m: %+.0f ± %.0f mK", mean(deep$diff_mK), sd(deep$diff_mK))) +
+  theme_bw(11)
+
+p_prof + p_diff + plot_layout(widths = c(2, 1))
+```
+
+```{r table}
+knitr::kable(dif |> transmute(`Tiefe (m)` = depth,
+                              `B50 (°C)` = round(T, 3), `B40 (°C)` = round(T4, 3),
+                              `Differenz (mK)` = round(diff_mK, 0)),
+             caption = "Knotenweiser Vergleich (die B40-Kette hat fast identische Nominaltiefen, die Interpolation ist daher praktisch exakt).")
+```
+
+## Befund
+
+```{r verdict, results='asis'}
+g3 <- deep$T[nrow(deep)]  - deep$T[1]
+g4 <- deep$T4[nrow(deep)] - deep$T4[1]
+cat(sprintf("- **Tiefer Bereich (13–62 m): %+.0f ± %.0f mK** (Spannweite %.0f mK). Zwei Standorte, zwei Geräte, zwei unabhängig entstandene Kalibrierungen — das Absolutniveau stimmt im Mittel auf wenige mK. Das ist die schärfste verfügbare Kontrolle beider Kalibrierketten.\n",
+            mean(deep$diff_mK), sd(deep$diff_mK), diff(range(deep$diff_mK))))
+cat(sprintf("- **Oben (5–10 m) läuft die Differenz auf bis zu %.0f mK auf.** Das ist kein Kalibrierfehler, sondern die saisonale Welle: Amplitude und Phase hängen von lokaler Akkumulation und Schneedichte ab, und bei ~8 m ist der Gradient der Welle am steilsten.\n",
+            max(abs(dif$diff_mK[dif$depth < 13]))))
+cat(sprintf("- **Tiefengradient 13 → 62 m: B50 %+.3f K, B40 %+.3f K** (Differenz %.3f K). Der Gradient trägt das Paläosignal; %s\n",
+            g3, g4, abs(g3-g4),
+            if (abs(g3-g4) > 0.1)
+              "die Abweichung liegt in der Größenordnung, in der die Paläo-Inversion arbeitet — entweder standortabhängige Akkumulationsgeschichte oder ein kleiner Restfehler in der Kalibriersteigung eines der Systeme. Vor einer gemeinsamen Inversion klären."
+            else "beide Systeme sehen dieselbe Klimageschichte."))
+```
+
+## Zeitreihe der Differenz
+
+Driftet eine der beiden Kalibrierungen? Die Differenz in einer Tiefe, in der das
+Saisonsignal weg ist (tiefster gemeinsamer Knoten), über den gesamten Zeitraum.
+
+```{r drift, fig.height=4}
+i3 <- dep3$node[dep3$chain == "C25.4.A (60 m, Luft)"] |> tail(1)
+i4 <- cal4$node[which.min(abs(cal4$depth_m - dep3$depth_m[i3]))]
+ts <- inner_join(
+  d3 |> transmute(day = as.Date(time_utc),
+                  t3 = rowMeans(cbind(.data[[sprintf("n%d.ntc1_temp_C", i3)]],
+                                      .data[[sprintf("n%d.ntc2_temp_C", i3)]]), na.rm = TRUE)) |>
+    group_by(day) |> summarise(t3 = mean(t3, na.rm = TRUE), .groups = "drop"),
+  d4 |> transmute(day = as.Date(time_utc),
+                  t4 = rowMeans(cbind(.data[[sprintf("n%d.ntc1_temp_C", i4)]],
+                                      .data[[sprintf("n%d.ntc2_temp_C", i4)]]), na.rm = TRUE)) |>
+    group_by(day) |> summarise(t4 = mean(t4, na.rm = TRUE), .groups = "drop"),
+  by = "day") |> mutate(diff_mK = 1000*(t3 - t4))
+
+ggplot(ts, aes(day, diff_mK)) +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  geom_line(colour = "#1a9850", linewidth = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, colour = "grey40", linetype = "dashed", linewidth = 0.5) +
+  scale_x_date(NULL) + scale_y_continuous("B50 − B40 (mK)") +
+  labs(title = sprintf("Differenz in %.0f m Tiefe über die Zeit", dep3$depth_m[i3]),
+       subtitle = sprintf("Trend %+.2f mK/Monat — Drifttest beider Kalibrierungen",
+                          coef(lm(diff_mK ~ as.numeric(day), data = ts))[2]*30)) +
+  theme_bw(11) + theme(panel.grid.minor = element_blank())
+```

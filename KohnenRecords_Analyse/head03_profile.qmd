@@ -73,8 +73,13 @@ Fassungen dieses Dokuments hatten das umgekehrt.
 
 **Kalibrierung:** Per-Sensor-S4 aus der **Calibration Registry**
 (`/Users/tlaepple/sharedAI/CalibrationRegistry`), Batch **`kohnen2526`**,
-cal_id `2025-11_vorKohnen` — 68 von 70 NTC-Kanälen; nur der
-Wetterstationsknoten N20 hat keinen Eintrag und läuft auf der Beta-Kurve.
+cal_id `2025-11_vorKohnen` — 68 von 70 NTC-Kanälen. Der Wetterstationsknoten
+**N20 (n1)** hat in keinem Batch einen Eintrag und läuft auf der **universellen
+Mean-S4-Kurve** (`meta/mean_calibration_coefficients.csv`, Mittel aus 62 gesunden
+Sensoren) — nicht mehr auf der Beta-Nennkurve, die bei diesen Temperaturen
++1,3 K (−15 °C) bis +4,2 K (−50 °C) zu warm liest. Für n1 bleibt damit eine
+Per-Sensor-Unsicherheit von einigen zehntel Kelvin; der systematische Warm-Bias
+ist weg.
 **Batch-Wahl ist entscheidend:** Node-IDs sind nicht global eindeutig, dieselben
 IDs existieren im Batch `greenland26` (SM1/SM2 und die Rekalibrierung 07/2026
 der Encoder-Heads) mit anderen Koeffizienten — der gilt für die

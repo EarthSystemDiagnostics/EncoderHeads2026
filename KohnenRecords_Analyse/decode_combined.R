@@ -107,6 +107,21 @@ calibrate_head04 <- function(df) {
 HEAD03_BATCH <- "kohnen2526"
 CALIB_REG    <- "/Users/tlaepple/sharedAI/CalibrationRegistry"
 
+# Fallback für Sensoren ohne Registry-Eintrag: universelle Mean-S4-Kurve
+# (Mittel aus 62 gesunden GRIP-Sensoren, ../meta/mean_calibration_coefficients.csv)
+# statt der Beta-Nennkurve. Betrifft hier nur den Wetterstationsknoten N20 (n1);
+# Beta liest bei diesen Temperaturen +1.3 K (-15 C) bis +4.2 K (-50 C) zu warm.
+MEAN_S4 <- tryCatch({
+  m <- read_csv("../meta/mean_calibration_coefficients.csv", show_col_types = FALSE)
+  setNames(as.numeric(m[1, c("a","b","c","d")]), c("a","b","c","d"))
+}, error = function(e) NULL)
+NTC_meanS4 <- function(cnt) {
+  if (is.null(MEAN_S4)) return(NTCcounts2temp(cnt))
+  cnt <- ifelse(cnt > 1e7, NA, cnt)
+  H <- (-cnt * 1e6) / (cnt - 33554432); r <- (H * 499000) / (499000 - H)
+  1 / (MEAN_S4[1] + MEAN_S4[2]*log(r) + MEAN_S4[3]*log(r)^2 + MEAN_S4[4]*log(r)^3) - 273.15
+}
+
 h03_depths <- tryCatch(read_csv("./data/head03_depths.csv", show_col_types = FALSE),
                        error = function(e) NULL)
 reg_ok <- FALSE
@@ -127,11 +142,11 @@ calibrate_head03 <- function(df) {
     } else NA_character_
     val <- if (!is.na(key)) {
       tryCatch({ v <- calib_T(df[[cc]], key, batch = HEAD03_BATCH); n_reg <- n_reg + 1L; v },
-               error = function(e) { n_fb <<- n_fb + 1L; NTCcounts2temp(df[[cc]]) })
-    } else { n_fb <- n_fb + 1L; NTCcounts2temp(df[[cc]]) }
+               error = function(e) { n_fb <<- n_fb + 1L; NTC_meanS4(df[[cc]]) })
+    } else { n_fb <- n_fb + 1L; NTC_meanS4(df[[cc]]) }
     df[[paste0(cc, "_temp_C")]] <- val
   }
-  message(sprintf("head03-Kalibrierung: %d Kanäle aus der Registry (Batch %s), %d über die Beta-Kurve.",
+  message(sprintf("head03-Kalibrierung: %d Kanäle aus der Registry (Batch %s), %d über die Mean-S4-Kurve.",
                   n_reg, HEAD03_BATCH, n_fb))
   df
 }

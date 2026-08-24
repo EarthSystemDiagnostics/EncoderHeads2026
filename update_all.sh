@@ -24,7 +24,7 @@ echo "== 3/4  Render Greenland reports =="
 
 echo "== 4/4  Render Kohnen reports =="
 (cd KohnenRecords_Analyse &&
-   for d in head03_profile head04_profile ausfallanalyse_kohnen; do
+   for d in head03_profile head04_profile ausfallanalyse_kohnen vergleich_b50_b40; do
      quarto render "$d.qmd"
    done)
 
