@@ -96,6 +96,46 @@ calibrate_head04 <- function(df) {
   df
 }
 
+# ---- head03 per-sensor calibration via the Calibration Registry ---------------
+# Die B50-Ketten sind vor dem Kohnen-Einsatz kalibriert worden: Batch
+# "kohnen2526", cal_id "2025-11_vorKohnen" (34/35 Knoten, alle active; nur der
+# Wetterstationsknoten N20 fehlt). ACHTUNG Batch: Node-IDs sind NICHT global
+# eindeutig — dieselben IDs existieren im Batch "greenland26" (SM1/SM2 sowie die
+# Rekalibrierung 07/2026 der Encoder-Heads) mit anderen Koeffizienten. Für die
+# Grönland-SnowMelt-Köpfe ist "greenland26" richtig (dort gibt es auch TestSB),
+# für head03 an Kohnen "kohnen2526".
+HEAD03_BATCH <- "kohnen2526"
+CALIB_REG    <- "/Users/tlaepple/sharedAI/CalibrationRegistry"
+
+h03_depths <- tryCatch(read_csv("./data/head03_depths.csv", show_col_types = FALSE),
+                       error = function(e) NULL)
+reg_ok <- FALSE
+if (!is.null(h03_depths) && file.exists(file.path(CALIB_REG, "R/calib_registry.R"))) {
+  Sys.setenv(CALIB_REGISTRY = file.path(CALIB_REG, "calibrations.csv"))
+  source(file.path(CALIB_REG, "R/calib_registry.R"))
+  reg_ok <- TRUE
+}
+
+calibrate_head03 <- function(df) {
+  n_reg <- 0L; n_fb <- 0L
+  for (cc in grep("^n[0-9]+\\.ntc[12]$", names(df), value = TRUE)) {
+    pos <- as.integer(sub("^n([0-9]+)\\..*$", "\\1", cc))
+    ch  <- toupper(sub("^.*\\.", "", cc))                    # NTC1 / NTC2
+    key <- if (reg_ok) {
+      id <- h03_depths$node_id[h03_depths$node == pos]
+      if (length(id) == 1) sprintf("N%d_%s", id, ch) else NA_character_
+    } else NA_character_
+    val <- if (!is.na(key)) {
+      tryCatch({ v <- calib_T(df[[cc]], key, batch = HEAD03_BATCH); n_reg <- n_reg + 1L; v },
+               error = function(e) { n_fb <<- n_fb + 1L; NTCcounts2temp(df[[cc]]) })
+    } else { n_fb <- n_fb + 1L; NTCcounts2temp(df[[cc]]) }
+    df[[paste0(cc, "_temp_C")]] <- val
+  }
+  message(sprintf("head03-Kalibrierung: %d Kanäle aus der Registry (Batch %s), %d über die Beta-Kurve.",
+                  n_reg, HEAD03_BATCH, n_fb))
+  df
+}
+
 # ---- Read old CSV (pre-Cloudloop) ----
 
 old_raw <- read_csv(
@@ -173,9 +213,9 @@ decoded_09 <- df_09 |>
   mutate(
     time_utc   = unix2utc(time_unix),
     adc_temp_C = adc2temp(adc_temp),
-    across(matches("\\.ntc[12]$"),  ~ NTCcounts2temp(.x), .names = "{.col}_temp_C"),
     across(matches("\\.pressure$"), ~ pressure2hPa(.x),   .names = "{.col}_hPa")
   ) |>
+  calibrate_head03() |>          # Registry-S4 pro Sensor (Fallback: Beta-Kurve)
   select(modem, recv_time_utc, start_time_utc, time_utc,
          battery_mv, adc_temp_C,
          matches("\\.ntc[12]_temp_C$"),

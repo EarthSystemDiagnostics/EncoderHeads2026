@@ -71,6 +71,17 @@ beiden 0,2-m-Sensoren der B- und C-Kette stimmen auf 0,02 K überein.
 **Achtung:** n2–n12 ist die *tiefe* Kette, nicht die oberflächennahe — frühere
 Fassungen dieses Dokuments hatten das umgekehrt.
 
+**Kalibrierung:** Per-Sensor-S4 aus der **Calibration Registry**
+(`/Users/tlaepple/sharedAI/CalibrationRegistry`), Batch **`kohnen2526`**,
+cal_id `2025-11_vorKohnen` — 68 von 70 NTC-Kanälen; nur der
+Wetterstationsknoten N20 hat keinen Eintrag und läuft auf der Beta-Kurve.
+**Batch-Wahl ist entscheidend:** Node-IDs sind nicht global eindeutig, dieselben
+IDs existieren im Batch `greenland26` (SM1/SM2 und die Rekalibrierung 07/2026
+der Encoder-Heads) mit anderen Koeffizienten — der gilt für die
+Grönland-SnowMelt-Köpfe (dort auch mit TestSB), nicht für B50. Die zuvor
+verwendete Beta-Kurve las bei diesen Temperaturen **+3,6 K zu warm**
+(−44,5 °C → −40,9 °C) und mit Sensor-zu-Sensor-Streuung von mehreren Kelvin.
+
 **Data coverage:** full payload (all **n1–n35** + battery) across the whole record.
 Earlier the Rockblock/Cloudloop **web CSV** export truncated payloads at 128 B, so
 only n1–n11 survived after 6 Mar; the data now come from the **Cloudloop API**
