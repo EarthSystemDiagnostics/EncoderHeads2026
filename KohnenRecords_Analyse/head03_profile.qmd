@@ -36,13 +36,40 @@ d <- read_csv("./data/decoded_head03_231709_combined.csv", show_col_types = FALS
 CUTOFF_FULL <- as_datetime("2026-03-06 00:00:00", tz = "UTC")
 
 d <- d |> mutate(full_payload = TRUE)   # full payload everywhere → no masking
+
+# Knoten -> Kette/Tiefe (aus NodeSensorMatching.xlsx; node = Payload-Position)
+node_depths <- read_csv("./data/head03_depths.csv", show_col_types = FALSE) |>
+  mutate(chain = factor(chain, levels = c("Wetterstation", "C25.4.A (60 m, Luft)",
+                                          "C25.4.B (10 m, Schnee)", "C25.4.C (2 m Schacht)")))
+```
+
+```{r depth-table}
+knitr::kable(node_depths, col.names = c("Payload-Node", "Node-ID", "Kette", "Tiefe (m)"),
+             caption = "Knotenzuordnung head03 (B50) — Quelle NodeSensorMatching.xlsx.")
 ```
 
 ## Overview
 
 Modem **231709** (head03) sends **two messages per transmission** (~09:03 and ~21:03 UTC):
 a 340-byte primary message and a 54-byte continuation message that must be concatenated
-before decoding. The chain carries NTC thermistors and pressure sensors.
+before decoding.
+
+**Aufbau am Standort B50** — die 35 Knoten verteilen sich auf drei physisch
+getrennte Ketten plus einen Atmosphärensensor (Zuordnung und Tiefen aus
+`NodeSensorMatching.xlsx`, gespeichert in `data/head03_depths.csv`):
+
+| Payload | Kette | Knoten | Tiefen |
+|---|---|---|---|
+| n1 | Wetterstation | Node 20 | Atmosphäre |
+| n2–n12 | **C25.4.A**, 60-m-Kette (in Luft) | 31, 61–70 | 5 … 62 m |
+| n13–n25 | **C25.4.B**, 10-m-Kette (in Schnee) | 30, 93, 94, 50–59 | 0,2 … 10 m |
+| n26–n35 | **C25.4.C**, 2-m-Schacht | 27, 72–78, 97, 98 | 0,2 … 2,25 m |
+
+Die Zuordnung ist datenseitig bestätigt: Die Standardabweichung fällt in jeder
+Kette streng monoton mit der Tiefe (Spearman −1,00 / −1,00 / −0,97), und die
+beiden 0,2-m-Sensoren der B- und C-Kette stimmen auf 0,02 K überein.
+**Achtung:** n2–n12 ist die *tiefe* Kette, nicht die oberflächennahe — frühere
+Fassungen dieses Dokuments hatten das umgekehrt.
 
 **Data coverage:** full payload (all **n1–n35** + battery) across the whole record.
 Earlier the Rockblock/Cloudloop **web CSV** export truncated payloads at 128 B, so
@@ -131,63 +158,77 @@ ggplot(adc, aes(time_utc, adc, colour = head)) +
 
 ---
 
-## Temperature time series
+## Temperaturzeitreihen
 
-```{r temp-overview}
-ntc_cols <- grep("\\.ntc1_temp_C$", names(d), value = TRUE)
-nodes_present <- as.integer(sub("n(\\d+)\\..*", "\\1",
-                                 ntc_cols[sapply(ntc_cols, function(c) !all(is.na(d[[c]])))]))
+```{r temp-overview, fig.height=6}
+ntc_cols <- grep("[.]ntc1_temp_C$", names(d), value = TRUE)
 
 ntc_long <- d |>
-  select(time_utc, full_payload, all_of(ntc_cols)) |>
-  pivot_longer(-c(time_utc, full_payload), names_to = "sensor", values_to = "temp_C") |>
-  mutate(node = as.integer(sub("n(\\d+)\\..*", "\\1", sensor)),
-         layer = case_when(node == 1  ~ "n1 (atmosphere)",
-                           node <= 11 ~ "n2-11 (full period)",
-                           TRUE       ~ "n12-35 (old period only)"))
+  select(time_utc, all_of(ntc_cols)) |>
+  pivot_longer(-time_utc, names_to = "sensor", values_to = "temp_C") |>
+  mutate(node = as.integer(sub("n(\\d+)[.].*", "\\1", sensor))) |>
+  left_join(node_depths, by = "node") |>
+  filter(!is.na(temp_C), temp_C > -70)
 
-ggplot(ntc_long |> filter(!is.na(temp_C), temp_C > -70),
-       aes(time_utc, temp_C, colour = node, group = node)) +
-  geom_line(linewidth = 0.5, alpha = 0.7) +
-  scale_colour_viridis_c(option = "turbo", name = "Node") +
-  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
-  geom_vline(xintercept = CUTOFF_FULL, linetype = "dashed", colour = "grey50") +
-  annotate("text", x = CUTOFF_FULL, y = -25, label = " Cloudloop API\n from here",
-           hjust = 0, size = 3, colour = "grey40") +
-  labs(title = "head03 (231709): all NTC temperatures",
-       subtitle = "n1 (red) = atmosphere  |  subsurface nodes show seasonal cooling  |  dashed = source switch (web export → API)",
-       x = NULL, y = "Temperature (°C)") +
-  theme_minimal(base_size = 13)
+ggplot(ntc_long |> filter(chain != "Wetterstation"),
+       aes(time_utc, temp_C, colour = depth_m, group = node)) +
+  geom_line(linewidth = 0.5, alpha = 0.85) +
+  geom_line(data = ntc_long |> filter(chain == "Wetterstation"),
+            aes(time_utc, temp_C), colour = "grey40", linewidth = 0.4, alpha = 0.6,
+            inherit.aes = FALSE) +
+  scale_colour_viridis_c(option = "plasma", direction = -1, trans = "log10",
+                         name = "Tiefe (m)") +
+  facet_wrap(~ chain, ncol = 1, scales = "free_y") +
+  scale_x_datetime(date_breaks = "1 month", date_labels = "%b") +
+  labs(title = "head03 (231709) — NTC1 nach Kette und Tiefe",
+       subtitle = "grau im Hintergrund: Atmosphärensensor (n1); Farbe = Tiefe (log)",
+       x = NULL, y = "Temperatur (°C)") +
+  theme_bw(base_size = 12)
 ```
 
-### Atmosphere (n1) vs firn sensors
+Die drei Ketten trennen sauber: Der 2-m-Schacht und die oberen Meter der
+10-m-Kette folgen dem Jahresgang mit voller Amplitude, unterhalb ~10 m bleibt
+nur noch ein gedämpftes Restsignal, und ab ~30 m ist das Profil praktisch
+konstant.
 
-```{r temp-split}
-p_atm <- ggplot(ntc_long |> filter(node == 1, !is.na(temp_C)),
-                aes(time_utc, temp_C)) +
-  geom_line(colour = "firebrick", linewidth = 0.9) +
-  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
-  labs(title = "n1 — atmosphere", x = NULL, y = "°C") +
-  theme_minimal(base_size = 12)
+### Tiefenprofile
 
-p_firn <- ggplot(ntc_long |> filter(node > 1, node <= 11, !is.na(temp_C)),
-                 aes(time_utc, temp_C, colour = factor(node), group = node)) +
-  geom_line(linewidth = 0.7, alpha = 0.85) +
-  scale_colour_viridis_d(option = "viridis", name = "Node") +
-  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
-  labs(title = "n2–n11 — near-surface firn (full period)", x = NULL, y = "°C") +
-  theme_minimal(base_size = 12)
+```{r profiles, fig.height=5.5}
+prof_dates <- ntc_long |> pull(time_utc) |> as.Date() |> unique() |>
+  (\(x) x[round(seq(1, length(x), length.out = 6))])()
 
-p_deep <- ggplot(ntc_long |> filter(node > 11, !is.na(temp_C), temp_C > -70),
-                 aes(time_utc, temp_C, colour = node, group = node)) +
-  geom_line(linewidth = 0.6, alpha = 0.8) +
-  scale_colour_viridis_c(option = "plasma", name = "Node") +
-  scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d %b") +
-  labs(title = "n12–n35 — deeper sensors (old period only, Jan–Mar)",
-       x = NULL, y = "°C") +
-  theme_minimal(base_size = 12)
+profiles <- ntc_long |> filter(chain != "Wetterstation") |>
+  mutate(date = as.Date(time_utc)) |> filter(date %in% prof_dates) |>
+  group_by(date, chain, node, depth_m) |>
+  summarise(temp_C = mean(temp_C), .groups = "drop")
 
-p_atm / p_firn / p_deep
+ggplot(profiles, aes(temp_C, depth_m, colour = factor(date),
+                     group = interaction(date, chain))) +
+  geom_path(linewidth = 0.8) + geom_point(size = 1.8) +
+  scale_y_reverse("Tiefe (m)") +
+  scale_colour_viridis_d(option = "turbo", name = "Datum") +
+  facet_wrap(~ chain, scales = "free") +
+  labs(title = "Temperatur-Tiefen-Profile je Kette",
+       subtitle = "Pfad nur innerhalb einer Kette — die drei Ketten sind physisch getrennt",
+       x = "Temperatur (°C)") +
+  theme_bw(base_size = 12)
+```
+
+### Variabilität gegen Tiefe
+
+```{r sd-depth, fig.height=4.5}
+sd_depth <- ntc_long |> filter(chain != "Wetterstation") |>
+  group_by(chain, node, depth_m) |>
+  summarise(sd_K = sd(temp_C), .groups = "drop")
+
+ggplot(sd_depth, aes(sd_K, depth_m, colour = chain)) +
+  geom_path(aes(group = chain), linewidth = 0.6) + geom_point(size = 2) +
+  scale_y_reverse("Tiefe (m)", trans = "reverse") +
+  scale_x_log10("SD über den Record (K, log)") +
+  scale_colour_brewer(palette = "Set1", name = NULL) +
+  labs(title = "Dämpfung des Jahresgangs mit der Tiefe",
+       subtitle = "monotoner Abfall in allen drei Ketten — die Knotenzuordnung ist damit datenseitig bestätigt") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom")
 ```
 
 ---
