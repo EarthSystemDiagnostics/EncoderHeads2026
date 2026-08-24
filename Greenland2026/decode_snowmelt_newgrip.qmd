@@ -638,12 +638,14 @@ unabhängigen Wegen: **Amplitudendämpfung** z = d·ln(A_Luft/A_unten) und
 **Phasenverzug** z = Δφ·ω·d (auf ±12 h abgewickelt). Beide teilen nur die
 Dämpfungstiefe **d**, die aus dem Amplitudenprofil der letzten 7 Tage bestimmt
 wird (Literatur-κ für lockeren Neuschnee, 2,5·10⁻⁷ m²/s, ergäbe 8,3 cm — als
-Plausibilitätskontrolle, nicht als Vorgabe). Die Summit-AWS läuft **völlig
-unabhängig** mit, nur auf denselben Startzeitraum bezogen (Median der ersten
-drei Tage) — es wird nichts aneinander gefittet. Tage mit Referenzamplitude
-< 2 K sind verworfen.
+Plausibilitätskontrolle, nicht als Vorgabe). Die Sensor-Schätzer sind physikalisch nullreferenziert (Tiefe 0 =
+freier Sensor) und brauchen keine Baseline; nur die **Summit-AWS** hat einen
+willkürlichen Nullpunkt und wird auf denselben Startzeitraum gelegt (Median der
+ersten drei Tage) — es wird nichts aneinander gefittet. Tage mit
+Referenzamplitude < 2 K sind verworfen; der Phasenverzug wird nur ausgewertet,
+solange der Sensor gedämpft ist (bei freiem Sensor ist er Rauschen).
 
-```{r einschnei-serie, eval=multi, fig.height=8.5, fig.width=10.5}
+```{r einschnei-serie, eval=multi, fig.height=5, fig.width=10.5}
 h_bot <- min(fitA$hoehe_cm)
 sub7  <- fitA |> filter(rA < 0.8, hoehe_cm < 60)
 d_fix <- if (nrow(sub7) >= 2) 1/coef(lm(log(A) ~ hoehe_cm, data = sub7))[2] else
@@ -675,38 +677,36 @@ res  <- bind_rows(lapply(dseq, perday)) |> filter(A_air >= 2)
 cols_s <- c(`Sensor: Amplitudendämpfung` = "#b2182b",
             `Sensor: Phasenverzug`       = "#2166ac",
             `Summit AWS (unabhängig)`    = "#1a9850")
-base3 <- function(x) median(head(x[is.finite(x)], 3))
+
+# Die Sensor-Schätzer sind physikalisch nullreferenziert (Tiefe 0 = freier
+# Sensor); nur die AWS hat einen willkürlichen Nullpunkt und wird auf den
+# gleichen Startzeitraum gelegt (Median der ersten 3 Tage des Sensorfensters).
+# Kein Fit aneinander.
+aws_line <- NULL
+if (exists("aws_raw") && !is.null(aws_raw) && "z_surf_combined" %in% names(aws_raw) && nrow(res)) {
+  aws_line <- aws_raw |> mutate(day = as.Date(time)) |>
+    filter(is.finite(z_surf_combined), day >= min(res$day), day <= max(res$day)) |>
+    group_by(day) |> summarise(z = 100*mean(z_surf_combined), .groups = "drop")
+  if (nrow(aws_line)) aws_line <- aws_line |>
+    mutate(wert = z - median(head(z[order(day)], 3)))
+}
 
 p_abs <- ggplot(res) + geom_hline(yintercept = 0, colour = "grey60") +
+  { if (!is.null(aws_line)) geom_line(data = aws_line, aes(day, wert,
+      colour = "Summit AWS (unabhängig)"), linewidth = 0.7) } +
+  { if (!is.null(aws_line)) geom_point(data = aws_line, aes(day, wert,
+      colour = "Summit AWS (unabhängig)"), size = 1.1) } +
   geom_line(aes(day, z_amp,   colour = "Sensor: Amplitudendämpfung"), linewidth = 0.7) +
   geom_point(aes(day, z_amp,  colour = "Sensor: Amplitudendämpfung"), size = 1.2) +
   geom_line(aes(day, z_phase, colour = "Sensor: Phasenverzug"), linewidth = 0.7) +
   geom_point(aes(day, z_phase, colour = "Sensor: Phasenverzug"), size = 1.2) +
   scale_colour_manual(NULL, values = cols_s) + scale_x_date(NULL) +
-  scale_y_continuous("Tiefe unterster Sensor (cm)") +
+  scale_y_continuous("Tiefe unterster Sensor bzw. Akkumulation (cm)") +
   labs(title = sprintf("Einschneitiefe des untersten Sensors (h = %d cm) — %s", h_bot, cfg$label),
-       subtitle = sprintf("Tageswelle, 3-Tage-Fenster, d = %.1f cm; > 0 = unter Schnee, ~0 = frei", d_fix)) +
+       subtitle = sprintf("zwei unabhängige Schätzer aus der Tageswelle (3-Tage-Fenster, d = %.1f cm); AWS unabhängig, nur gleicher Startzeitraum. > 0 = unter Schnee", d_fix)) +
   theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
 
-p_cmp <- NULL
-if (exists("aws_raw") && !is.null(aws_raw) && "z_surf_combined" %in% names(aws_raw) && nrow(res)) {
-  awd <- aws_raw |> mutate(day = as.Date(time)) |>
-    filter(is.finite(z_surf_combined), day >= min(res$day), day <= max(res$day)) |>
-    group_by(day) |> summarise(z = 100*mean(z_surf_combined), .groups = "drop")
-  cmp <- bind_rows(
-    res |> transmute(day, wert = z_amp   - base3(z_amp),   q = "Sensor: Amplitudendämpfung"),
-    res |> transmute(day, wert = z_phase - base3(z_phase), q = "Sensor: Phasenverzug"),
-    awd |> transmute(day, wert = z - base3(z),             q = "Summit AWS (unabhängig)"))
-  p_cmp <- ggplot(cmp, aes(day, wert, colour = q)) +
-    geom_hline(yintercept = 0, colour = "grey60") +
-    geom_line(linewidth = 0.7) + geom_point(size = 1.1) +
-    scale_colour_manual(NULL, values = cols_s) + scale_x_date(NULL) +
-    scale_y_continuous("Änderung seit Start (cm)") +
-    labs(subtitle = sprintf("Änderung seit %s — Sensorschätzer und AWS-Akkumulation unabhängig, nur gemeinsame Startreferenz (kein Fit aneinander)",
-                            format(min(res$day), "%d.%m."))) +
-    theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
-}
-if (is.null(p_cmp)) p_abs else p_abs / p_cmp
+p_abs
 ```
 
 ```{r einschnei-serie-text, eval=multi, results='asis'}
