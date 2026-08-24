@@ -1,0 +1,239 @@
+---
+title: "Heatwave-Analyse Kohnen B50 — n1 gegen quantile-gemappte ERA5-Klimatologie"
+subtitle: "Atmosphärensensor des head03 (Mean-S4), ERA5 1979–2021 an AWS9 kalibriert"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 13
+    fig-height: 7
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Der Atmosphärensensor **n1** (Node 20) des head03 an B50 gegen die
+Tagesklimatologie am Kohnen-Gitterpunkt. Heatwave-Kriterium wie im
+Ursprungsskript (`antwarm26/experiments/plot_n1_vs_era5.R`): Tagesanomalie
+> 2σ an **mindestens drei aufeinanderfolgenden Tagen**.
+
+Zwei Korrekturen sind für dieses Ergebnis entscheidend — beide wirken in
+**entgegengesetzte** Richtung, ihr Zusammentreffen ist Zufall:
+
+1. **Sensorkalibrierung.** N20 hat in der Calibration Registry keinen Eintrag
+   und lief früher auf der Beta-Nennkurve, die hier **+1,3 K (−15 °C) bis
+   +4,2 K (−50 °C) zu warm** liest. Seit `decode_combined.R` fällt n1 auf die
+   universelle **Mean-S4-Kurve** zurück.
+2. **ERA5-Bias.** ERA5 löst die bodennahe Winterinversion nicht auf: gegen
+   AWS9 ist es im Mittel **+2,3 K zu warm** (Juni +4,6 K, Januar −0,8 K) und
+   hat ein **Varianzdefizit** (SD 8,7 gegen 10,9 K). Eine reine
+   Mittelwertkorrektur würde σ zu klein lassen und zu viele Extremtage
+   erzeugen — deshalb **Quantile-Mapping**.
+
+```{r setup}
+library(dplyr); library(lubridate); library(readr); library(tidyr)
+library(ggplot2); library(patchwork); library(zoo)
+
+ERA5_RDS <- "/Users/tlaepple/data/antwarm26/experiments/era5_legacy_merged.rds"
+AWS9_RDA <- "/Users/tlaepple/data/t4m_ms26/data/processed/AWS9_daily.RData"
+have <- file.exists(ERA5_RDS) && file.exists(AWS9_RDA)
+```
+
+```{r load, eval=have}
+load(AWS9_RDA)                      # -> daily
+aws <- daily |> transmute(date = as.Date(day), t = t2m) |> filter(is.finite(t))
+era <- readRDS(ERA5_RDS) |>
+  transmute(date = as.Date(date), t = as.vector(t2m)) |> filter(is.finite(t))
+
+n1 <- read_csv("./data/decoded_head03_231709_combined.csv", show_col_types = FALSE) |>
+  mutate(date = as.Date(time_utc)) |> group_by(date) |>
+  summarise(T = mean(n1.ntc1_temp_C, na.rm = TRUE), .groups = "drop") |>
+  mutate(doy = pmin(yday(date), 365))
+```
+
+## Quantile-Mapping ERA5 → AWS9
+
+Transferfunktion **je Kalendermonat** (der Bias ist stark saisonal) aus 200
+Quantilen im Überlappungszeitraum, `rule = 2` an den Rändern (konstanter Offset
+jenseits des Kalibrierbereichs), angewandt auf den gesamten ERA5-Record.
+
+```{r qmap, eval=have}
+ov <- inner_join(aws |> rename(ta = t), era |> rename(te = t), by = "date") |>
+  mutate(mon = month(date))
+probs <- seq(0.005, 0.995, 0.005)
+qmap <- lapply(1:12, function(m) {
+  d <- ov |> filter(mon == m)
+  if (nrow(d) < 60) return(NULL)
+  list(q_mod = quantile(d$te, probs, na.rm = TRUE),
+       q_obs = quantile(d$ta, probs, na.rm = TRUE))
+})
+qm_apply <- function(t, mon) {
+  out <- rep(NA_real_, length(t))
+  for (m in 1:12) {
+    k <- which(mon == m); q <- qmap[[m]]
+    if (length(k) && !is.null(q)) out[k] <- approx(q$q_mod, q$q_obs, xout = t[k], rule = 2)$y
+  }
+  out
+}
+era <- era |> mutate(mon = month(date), t_qm = qm_apply(t, mon))
+val <- inner_join(aws |> rename(ta = t), era |> select(date, te = t, tqm = t_qm), by = "date")
+```
+
+```{r qmap-val, eval=have}
+knitr::kable(tibble(
+  Reihe = c("ERA5 roh", "ERA5 quantile-gemappt", "AWS9 (Referenz)"),
+  `Bias (K)` = c(mean(val$te - val$ta), mean(val$tqm - val$ta), 0),
+  `RMS (K)`  = c(sqrt(mean((val$te-val$ta)^2)), sqrt(mean((val$tqm-val$ta)^2)), 0),
+  `SD (K)`   = c(sd(val$te), sd(val$tqm), sd(val$ta))) |>
+  mutate(across(where(is.numeric), ~round(.x, 2))),
+  caption = sprintf("Validierung im Überlappungszeitraum %s–%s (n = %d Tage). Der verbleibende RMS ist echter Zeitfehler von ERA5 (r = %.3f) und durch kein Mapping korrigierbar.",
+                    format(min(val$date), "%Y"), format(max(val$date), "%Y"), nrow(val),
+                    cor(val$te, val$ta)))
+```
+
+```{r qmap-plot, eval=have, fig.height=4.5}
+qq <- bind_rows(lapply(c(1, 4, 7, 10), function(m) {
+  q <- qmap[[m]]; if (is.null(q)) return(NULL)
+  tibble(mod = as.numeric(q$q_mod), obs = as.numeric(q$q_obs),
+         Monat = factor(month.abb[m], levels = month.abb)) }))
+p_q <- ggplot(qq, aes(mod, obs, colour = Monat)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_path(linewidth = 0.8) +
+  scale_colour_brewer(palette = "Set1") +
+  labs(x = "ERA5-Quantil (°C)", y = "AWS9-Quantil (°C)",
+       title = "Transferfunktionen", subtitle = "unterhalb der 1:1-Linie = ERA5 zu warm") +
+  theme_bw(11)
+bias_mon <- ov |> group_by(mon) |> summarise(b = mean(te - ta), .groups = "drop")
+p_b <- ggplot(bias_mon, aes(factor(mon), b)) +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  geom_col(fill = "firebrick", alpha = 0.8) +
+  labs(x = "Monat", y = "ERA5 − AWS9 (K)", title = "Bias nach Monat",
+       subtitle = "maximal im Kernwinter — die Inversion fehlt im Modell") +
+  theme_bw(11)
+p_q + p_b
+```
+
+## Klimatologien und Anomalien
+
+```{r clims, eval=have}
+clim_of <- function(df, col, y0, y1) {
+  cr <- df |> filter(year(date) >= y0, year(date) <= y1) |>
+    mutate(doy = pmin(yday(date), 365)) |> group_by(doy) |>
+    summarise(m = mean(.data[[col]], na.rm = TRUE), s = sd(.data[[col]], na.rm = TRUE),
+              .groups = "drop") |> arrange(doy)
+  np <- 15
+  bind_rows(cr |> slice_tail(n = np) |> mutate(doy = doy - 365), cr,
+            cr |> slice_head(n = np) |> mutate(doy = doy + 365)) |>
+    mutate(clim_mean = as.vector(rollmean(m, 31, fill = NA, align = "center")),
+           clim_sd   = as.vector(rollmean(s, 31, fill = NA, align = "center"))) |>
+    filter(doy >= 1, doy <= 365) |> select(doy, clim_mean, clim_sd)
+}
+c_qm  <- clim_of(era, "t_qm", 1979, 2021)     # Hauptvariante
+c_raw <- clim_of(era, "t",    1979, 2021)
+c_aws <- clim_of(aws |> mutate(tt = t), "tt", 1998, 2016)
+
+anom <- function(cl) { j <- left_join(n1, cl, by = "doy"); (j$T - j$clim_mean)/j$clim_sd }
+n1 <- n1 |> mutate(a_qm = anom(c_qm), a_raw = anom(c_raw), a_aws = anom(c_aws))
+hw_flag <- function(a) { e <- !is.na(a) & a > 2; r <- rle(e); e & rep(r$lengths, r$lengths) >= 3 }
+n1 <- n1 |> mutate(hw = hw_flag(a_qm))
+```
+
+```{r sens, eval=have}
+sens <- tibble(Klimatologie = c("**ERA5 quantile-gemappt** (Hauptvariante)",
+                                "ERA5 roh", "AWS9 direkt (1998–2016)"),
+               a = list(n1$a_qm, n1$a_raw, n1$a_aws)) |>
+  rowwise() |>
+  mutate(`Tage > 2σ` = sum(a > 2, na.rm = TRUE),
+         `Heatwave-Tage` = sum(hw_flag(a), na.rm = TRUE),
+         `max σ` = round(max(a, na.rm = TRUE), 2),
+         `Mittel σ` = round(mean(a, na.rm = TRUE), 2)) |>
+  ungroup() |> select(-a)
+knitr::kable(sens, caption = "Sensitivität gegenüber der Klimatologie.")
+```
+
+```{r verdict, eval=have, results='asis'}
+nhw <- sum(n1$hw, na.rm = TRUE)
+if (nhw > 0) {
+  ev <- n1 |> filter(hw)
+  cat(sprintf("**Heatwave-Ereignis: %s bis %s** (%d Tage, %+.2f bis %+.2fσ, %.1f bis %.1f °C). Die Saison liegt im Mittel bei **%+.2fσ**, also klimatologisch normal.\n",
+              format(min(ev$date), "%d.%m."), format(max(ev$date), "%d.%m.%Y"), nrow(ev),
+              min(ev$a_qm), max(ev$a_qm), min(ev$T), max(ev$T), mean(n1$a_qm, na.rm = TRUE)))
+} else {
+  cat(sprintf("**Kein Heatwave-Ereignis** (kein Lauf von ≥ 3 Tagen über 2σ); Saisonmittel %+.2fσ.\n",
+              mean(n1$a_qm, na.rm = TRUE)))
+}
+```
+
+```{r plot, eval=have}
+rib <- c_qm |> filter(doy >= min(n1$doy), doy <= max(n1$doy)) |>
+  mutate(date = as.Date(format(min(n1$date), "%Y-01-01")) + doy - 1)
+raw_rib <- c_raw |> filter(doy >= min(n1$doy), doy <= max(n1$doy)) |>
+  mutate(date = as.Date(format(min(n1$date), "%Y-01-01")) + doy - 1)
+
+p1 <- ggplot(n1, aes(date, T)) +
+  geom_ribbon(data = rib, aes(x = date, ymin = clim_mean - 2*clim_sd,
+                              ymax = clim_mean + 2*clim_sd),
+              fill = "firebrick", alpha = 0.15, inherit.aes = FALSE) +
+  geom_line(data = rib, aes(date, clim_mean), colour = "grey40",
+            linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE) +
+  geom_line(data = raw_rib, aes(date, clim_mean), colour = "grey70",
+            linetype = "dotted", linewidth = 0.6, inherit.aes = FALSE) +
+  geom_line(colour = "firebrick", linewidth = 0.75) +
+  geom_point(data = filter(n1, a_qm > 2 & !hw), colour = "orange", size = 2.5,
+             shape = 21, stroke = 1.2, fill = "orange") +
+  geom_point(data = filter(n1, hw), colour = "firebrick", size = 3) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(x = NULL, y = "T (°C)",
+       title = "n1 (Kohnen B50, Mean-S4) gegen quantile-gemappte ERA5-Klimatologie",
+       subtitle = "Band = ±2σ | gestrichelt = QM-Klimatologie, gepunktet = ERA5 roh | orange = einzelner Tag > 2σ, rot = Heatwave") +
+  theme_minimal(base_size = 13)
+
+p2 <- ggplot(n1, aes(date, a_qm)) +
+  geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+  geom_hline(yintercept = c(-2, 2), colour = c("steelblue3", "firebrick"),
+             linetype = "dotted", linewidth = 0.9) +
+  geom_col(aes(fill = hw), show.legend = FALSE, width = 1) +
+  scale_fill_manual(values = c(`FALSE` = "grey65", `TRUE` = "firebrick")) +
+  scale_x_date(date_breaks = "2 weeks", date_labels = "%d %b") +
+  labs(x = NULL, y = "Anomalie (σ)",
+       subtitle = sprintf("Saisonmittel %+.2fσ", mean(n1$a_qm, na.rm = TRUE))) +
+  theme_minimal(base_size = 13)
+
+p1 / p2
+```
+
+```{r top, eval=have}
+knitr::kable(n1 |> arrange(desc(a_qm)) |> head(8) |>
+  transmute(Datum = format(date, "%d.%m.%Y"), `n1 (°C)` = round(T, 1),
+            `σ (QM)` = round(a_qm, 2), `σ (ERA5 roh)` = round(a_raw, 2),
+            `σ (AWS9)` = round(a_aws, 2)),
+  caption = "Wärmste Tage der Reihe unter den drei Klimatologien.")
+```
+
+## Vorbehalte
+
+1. **n1 hat keine Per-Sensor-Kalibrierung.** Die Mean-S4-Kurve entfernt den
+   systematischen Bias; einige zehntel Kelvin Restunsicherheit bleiben.
+2. **n1 ist kein ERA5-t2m.** Kein Strahlungsschutz, keine 2-m-Standardhöhe;
+   bei Schwachwind entkoppelt die bodennahe Inversion.
+3. **AWS9 steht an Kohnen, der Sensor an B50** — genau der Standortversatz, den
+   `vergleich_b50_b40.qmd` zwischen zwei Bohrlöchern zeigt.
+4. **AWS9-Winterabdeckung ist lückenhaft** (Juni ~213, August ~172 Tage gegen
+   424 im März) und Ausfälle sind vermutlich nicht zufällig (Sturm, Kälte).
+   Genau deshalb ist die quantile-gemappte ERA5 die Hauptvariante: lückenlose
+   43-Jahres-Zeitachse mit beobachteter Verteilung — statt einer direkt aus
+   AWS9 gerechneten Klimatologie mit halber Winterabdeckung.
+5. **Stationarität:** Die Transferfunktion stammt aus 1998–2016 und wird auf
+   1979–2021 angewandt.
+6. Der Record endet mit dem **Ausfall des head03 am 22.07.2026**
+   (siehe `ausfallanalyse_kohnen.qmd`).
+
+```{r missing, eval=!have, results='asis'}
+cat("**Eingangsdaten fehlen** — ERA5 (`", ERA5_RDS, "`) oder AWS9 (`", AWS9_RDA,
+    "`) nicht gefunden; Analyse übersprungen.\n", sep = "")
+```

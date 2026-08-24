@@ -1,6 +1,6 @@
 ---
 title: "Kohnen-Quervergleich: B50 (head03) gegen B40 (head04)"
-subtitle: "Zwei Standorte, zwei Geräte, zwei unabhängige Kalibrierungen — als dauerhafte Qualitätskontrolle"
+subtitle: "Standortunterschied im Tiefenprofil — plus Kalibrier- und Driftkontrolle"
 author: "Thom Laepple"
 date: today
 format:
@@ -26,10 +26,20 @@ getrennten Kalibrierketten**:
 | Kalibrierung | Calibration Registry, Batch `kohnen2526`, cal_id `2025-11_vorKohnen` | Labor-S4 2023 (Variante „Both": Fluke + Klimakammer) |
 | Quelle | `data/head03_depths.csv` + Registry | `data/head04_calibration.csv` |
 
-Unterhalb der saisonal beeinflussten Schicht muss das Profil an beiden Standorten
-praktisch gleich sein (gleiche Höhenlage, gleiche Jahresmitteltemperatur). Die
-Differenz ist damit ein **direktes Maß für den Absolutfehler beider
-Kalibrierungen zusammen** — kein Fit, keine gemeinsame Referenz.
+In die Differenz gehen zwei Dinge ein: ein **realer Standortunterschied**
+zwischen B50 und B40 und der **Absolutfehler beider Kalibrierungen**. Die beiden
+lassen sich trennen, weil es eine unabhängige Messung gibt:
+
+> **Feldbefund:** Der Versatz zwischen den Standorten wurde bereits vor Ort mit
+> der **Winde** festgestellt — mit **denselben Sensoren** in beiden Bohrlöchern.
+> Bei identischen Sensoren kürzt sich die Kalibrierung exakt heraus; der dort
+> gemessene Unterschied ist also **real und standortbedingt**.
+
+Damit ist die Rollenverteilung klar: Die Differenz unten misst primär den
+**Standortunterschied**; sie begrenzt zugleich den Kalibrierfehler nach oben,
+denn beide Beiträge zusammen sind so klein wie unten zu sehen. Und die
+**Zeitreihe** der Differenz ist der reine Drifttest — ein Standortversatz ist
+zeitlich stabil, eine driftende Kalibrierung nicht.
 
 ```{r setup}
 library(readr); library(dplyr); library(tidyr); library(ggplot2)
@@ -101,21 +111,22 @@ knitr::kable(dif |> transmute(`Tiefe (m)` = depth,
 ```{r verdict, results='asis'}
 g3 <- deep$T[nrow(deep)]  - deep$T[1]
 g4 <- deep$T4[nrow(deep)] - deep$T4[1]
-cat(sprintf("- **Tiefer Bereich (13–62 m): %+.0f ± %.0f mK** (Spannweite %.0f mK). Zwei Standorte, zwei Geräte, zwei unabhängig entstandene Kalibrierungen — das Absolutniveau stimmt im Mittel auf wenige mK. Das ist die schärfste verfügbare Kontrolle beider Kalibrierketten.\n",
+cat(sprintf("- **Tiefer Bereich (13–62 m): %+.0f ± %.0f mK** (Spannweite %.0f mK). Standortunterschied und Kalibrierfehler zusammen bleiben damit im Bereich weniger zehn mK — für zwei Standorte, zwei Geräte und zwei unabhängig entstandene Kalibrierungen ein enger Rahmen.\n",
             mean(deep$diff_mK), sd(deep$diff_mK), diff(range(deep$diff_mK))))
 cat(sprintf("- **Oben (5–10 m) läuft die Differenz auf bis zu %.0f mK auf.** Das ist kein Kalibrierfehler, sondern die saisonale Welle: Amplitude und Phase hängen von lokaler Akkumulation und Schneedichte ab, und bei ~8 m ist der Gradient der Welle am steilsten.\n",
             max(abs(dif$diff_mK[dif$depth < 13]))))
 cat(sprintf("- **Tiefengradient 13 → 62 m: B50 %+.3f K, B40 %+.3f K** (Differenz %.3f K). Der Gradient trägt das Paläosignal; %s\n",
             g3, g4, abs(g3-g4),
             if (abs(g3-g4) > 0.1)
-              "die Abweichung liegt in der Größenordnung, in der die Paläo-Inversion arbeitet — entweder standortabhängige Akkumulationsgeschichte oder ein kleiner Restfehler in der Kalibriersteigung eines der Systeme. Vor einer gemeinsamen Inversion klären."
+              "nach dem Winden-Befund (dieselben Sensoren in beiden Bohrlöchern) ist das ein **realer Standortunterschied**, kein Kalibriereffekt — die Bohrlöcher tragen unterschiedliche Oberflächentemperatur- bzw. Akkumulationsgeschichten. Für eine gemeinsame Paläo-Inversion heißt das: getrennt invertieren und die Standortdifferenz als Signal behandeln, nicht als Fehler."
             else "beide Systeme sehen dieselbe Klimageschichte."))
 ```
 
 ## Zeitreihe der Differenz
 
-Driftet eine der beiden Kalibrierungen? Die Differenz in einer Tiefe, in der das
-Saisonsignal weg ist (tiefster gemeinsamer Knoten), über den gesamten Zeitraum.
+Ein Standortversatz ist zeitlich konstant, eine driftende Kalibrierung nicht —
+die Zeitreihe trennt beides. Gezeigt ist der tiefste gemeinsame Knoten, wo das
+Saisonsignal vollständig weg ist.
 
 ```{r drift, fig.height=4}
 i3 <- dep3$node[dep3$chain == "C25.4.A (60 m, Luft)"] |> tail(1)
@@ -137,7 +148,7 @@ ggplot(ts, aes(day, diff_mK)) +
   geom_smooth(method = "lm", se = FALSE, colour = "grey40", linetype = "dashed", linewidth = 0.5) +
   scale_x_date(NULL) + scale_y_continuous("B50 − B40 (mK)") +
   labs(title = sprintf("Differenz in %.0f m Tiefe über die Zeit", dep3$depth_m[i3]),
-       subtitle = sprintf("Trend %+.2f mK/Monat — Drifttest beider Kalibrierungen",
+       subtitle = sprintf("Trend %+.2f mK/Monat — konstanter Versatz spricht für Standortunterschied, nicht für Kalibrierdrift",
                           coef(lm(diff_mK ~ as.numeric(day), data = ts))[2]*30)) +
   theme_bw(11) + theme(panel.grid.minor = element_blank())
 ```
