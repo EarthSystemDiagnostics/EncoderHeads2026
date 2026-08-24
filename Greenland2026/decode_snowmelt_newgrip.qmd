@@ -466,7 +466,7 @@ in Luft. Das Tape-/Folien-Fenster (Knoten 6–8, 02.–12.07.) ist hier — wie 
 allen Diagnostiken — ausgeschnitten; das Experiment hat seinen eigenen
 Abschnitt unten.
 
-```{r einschnei-amp, eval=multi, fig.height=6.5, fig.width=12}
+```{r einschnei-amp, eval=multi, fig.height=9, fig.width=12}
 s        <- cfg$spacing_cm
 rank_map <- c(ntc1_C = 1L, ntc2_C = 2L, testSB_C = 3L)
 
@@ -512,7 +512,76 @@ p_prof <- ggplot(prof_v, aes(ratio, hoehe_cm)) +
   labs(title = format(day_v, "%d.%m.%Y"), subtitle = "gestrichelt: Dämpfungsschwelle 0.35") +
   theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 
-p_hov + p_prof + plot_layout(widths = c(3.2, 1))
+# --- Oberflächenlage aus dem Amplituden- und Phasenprofil ------------------
+# Harmonische Regression (Tageswelle) je Sensorhöhe über die letzten 7 Tage:
+# T = m + A sin(wt+phi). ln(A) fällt linear mit der Tiefe -> Steigung = 1/d
+# (Dämpfungstiefe), und die Höhe, bei der die Gerade die Luftamplitude
+# erreicht, ist die Schneeoberfläche auf der Kettenachse.
+om <- 2*pi/86400
+fitA <- series_diag |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s,
+         ts = as.numeric(time)) |>
+  filter(time > max(time) - 7*86400) |>
+  group_by(hoehe_cm) |>
+  summarise(cf = list(coef(lm(temp_C ~ sin(om*ts) + cos(om*ts)))), .groups = "drop") |>
+  mutate(A = sapply(cf, function(c) sqrt(c[2]^2 + c[3]^2)),
+         phi = sapply(cf, function(c) atan2(c[3], c[2]))) |>
+  select(-cf) |> arrange(hoehe_cm)
+A_air <- median(fitA$A[fitA$hoehe_cm >= h_ref]); phi_air <- median(fitA$phi[fitA$hoehe_cm >= h_ref])
+fitA <- fitA |> mutate(rA = A/A_air, lag_h = ((phi_air - phi) %% (2*pi))/om/3600)
+sub  <- fitA |> filter(rA < 0.75)
+d_damp <- NA_real_; h_surf <- NA_real_
+if (nrow(sub) >= 2) {
+  lf <- lm(log(A) ~ hoehe_cm, data = sub)
+  if (coef(lf)[2] > 0) {
+    d_damp <- 1/coef(lf)[2]
+    h_surf <- (log(A_air) - coef(lf)[1])/coef(lf)[2]
+  }
+}
+
+# --- Summit-AWS auf dieselbe Höhenachse gelegt ------------------------------
+# z_surf_combined der AWS, so verschoben, dass sie am Urteilstag die aus der
+# Dämpfung bestimmte Oberflächenhöhe trifft -> direkt mit dem Hovmöller oben
+# vergleichbar (gleiche Höhenachse in cm, Ausschnitt).
+aws_url <- sprintf("https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/day/%s_day.csv", "SUM")
+aws_raw <- tryCatch({ options(timeout = 60)
+  suppressWarnings(readr::read_csv(aws_url, show_col_types = FALSE)) },
+  error = function(e) NULL)
+
+p_aws <- NULL
+if (!is.null(aws_raw) && "z_surf_combined" %in% names(aws_raw)) {
+  aw <- aws_raw |> mutate(day = as.Date(time)) |>
+    filter(day >= min(ratio_d$day), day <= max(ratio_d$day), is.finite(z_surf_combined)) |>
+    group_by(day) |> summarise(z = 100*mean(z_surf_combined), .groups = "drop")
+  if (nrow(aw)) {
+    anchor <- if (is.finite(h_surf)) h_surf else min(fitA$hoehe_cm)
+    z0 <- aw$z[which.min(abs(as.numeric(aw$day - day_v)))]
+    aw <- aw |> mutate(h_chain = z - z0 + anchor)
+    p_aws <- ggplot(aw, aes(day, h_chain)) +
+      geom_line(colour = "#2166ac", linewidth = 0.7) +
+      geom_point(colour = "#2166ac", size = 1) +
+      { if (is.finite(h_surf)) geom_hline(yintercept = h_surf, linetype = "dashed",
+                                          colour = "firebrick") } +
+      scale_x_date(NULL, expand = c(0, 0),
+                   limits = c(min(ratio_d$day), max(ratio_d$day))) +
+      scale_y_continuous("Höhe (cm)", limits = c(0, 60), breaks = seq(0, 60, 12)) +
+      labs(subtitle = sprintf("Summit-AWS (~30 km): Schneeoberfläche, auf dieselbe Höhenachse gelegt (Anker %.0f cm am %s); Ausschnitt 0–60 cm",
+                              if (is.finite(h_surf)) h_surf else 0, format(day_v, "%d.%m."))) +
+      theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+  }
+}
+
+if (is.finite(h_surf))
+  p_hov <- p_hov + geom_hline(yintercept = h_surf, linetype = "dashed", colour = "firebrick")
+
+if (is.null(p_aws)) {
+  p_hov + p_prof + plot_layout(widths = c(3.2, 1))
+} else {
+  (p_hov + p_prof + plot_layout(widths = c(3.2, 1))) /
+    (p_aws + patchwork::plot_spacer() + plot_layout(widths = c(3.2, 1))) +
+    plot_layout(heights = c(2.2, 1), guides = "collect") &
+    theme(legend.position = "right")
+}
 ```
 
 ```{r einschnei-verdict, eval=multi, results='asis'}
@@ -538,6 +607,18 @@ if (!any(prof_v$gedaempft) && bot$ratio >= 0.7) {
     bot$ref, h_snow, min(prof_v$hoehe_cm[!prof_v$gedaempft])))
 }
 
+# Tiefenabschätzung aus Dämpfung + Phase (siehe Fit oben)
+if (is.finite(h_surf) && is.finite(d_damp)) {
+  bot_h  <- min(fitA$hoehe_cm)
+  z_amp  <- h_surf - bot_h
+  z_ph   <- fitA$lag_h[fitA$hoehe_cm == bot_h] * 3600 * om * d_damp
+  kappa  <- (d_damp/100)^2 * om/2
+  cat(sprintf(
+    "\n**Tiefenabschätzung (Diffusionsmodell):** Dämpfungstiefe **d = %.1f cm** (Steigung von ln A über die Kettenhöhe) ⇒ κ ≈ %.1e m²/s (lockerer Neuschnee). Die Gerade erreicht die Luftamplitude bei **h = %.0f cm** — das ist die Schneeoberfläche auf der Kettenachse. Der unterste Sensor (%d cm) liegt damit **%.0f cm tief**; unabhängige Gegenprobe über den Phasenverzug (%.1f h): **%.0f cm**.\n",
+    d_damp, kappa, h_surf, bot_h, z_amp,
+    fitA$lag_h[fitA$hoehe_cm == bot_h], z_ph))
+}
+
 # Frühwarnung: fallendes Verhältnis am untersten Sensor über die letzten
 # verwertbaren Tage = einsetzendes Einschneien, bevor die 35 %-Schwelle fällt.
 r_bot <- ratio_d |> filter(hoehe_cm == min(hoehe_cm)) |> arrange(day) |> tail(5)
@@ -547,6 +628,93 @@ if (!any(prof_v$gedaempft) && nrow(r_bot) >= 3 &&
     "\n**Hinweis — beginnende Dämpfung:** das Verhältnis des untersten Sensors fällt über die letzten %d verwertbaren Tage (%s): %s. Das ist das erwartete Muster bei einsetzendem Einschneien; die 35 %%-Schwelle ist noch nicht unterschritten.\n",
     nrow(r_bot), paste(format(range(r_bot$day), "%d.%m."), collapse = " – "),
     paste(sprintf("%.2f", r_bot$ratio), collapse = " → ")))
+}
+```
+
+### Einschneitiefe über die Zeit — zwei unabhängige Schätzer vs. AWS
+
+Aus der Tageswelle folgt die Tiefe des untersten Sensors auf zwei voneinander
+unabhängigen Wegen: **Amplitudendämpfung** z = d·ln(A_Luft/A_unten) und
+**Phasenverzug** z = Δφ·ω·d (auf ±12 h abgewickelt). Beide teilen nur die
+Dämpfungstiefe **d**, die aus dem Amplitudenprofil der letzten 7 Tage bestimmt
+wird (Literatur-κ für lockeren Neuschnee, 2,5·10⁻⁷ m²/s, ergäbe 8,3 cm — als
+Plausibilitätskontrolle, nicht als Vorgabe). Die Summit-AWS läuft **völlig
+unabhängig** mit, nur auf denselben Startzeitraum bezogen (Median der ersten
+drei Tage) — es wird nichts aneinander gefittet. Tage mit Referenzamplitude
+< 2 K sind verworfen.
+
+```{r einschnei-serie, eval=multi, fig.height=8.5, fig.width=10.5}
+h_bot <- min(fitA$hoehe_cm)
+sub7  <- fitA |> filter(rA < 0.8, hoehe_cm < 60)
+d_fix <- if (nrow(sub7) >= 2) 1/coef(lm(log(A) ~ hoehe_cm, data = sub7))[2] else
+         sqrt(2*2.5e-7/om)*100
+
+ser_dat <- series_diag |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s, ts = as.numeric(time))
+
+perday <- function(dy, win = 3) {
+  t0 <- as.POSIXct(paste0(dy, " 12:00:00"), tz = "UTC")
+  w <- ser_dat |> filter(time >= t0 - win*43200, time <= t0 + win*43200)
+  if (n_distinct(w$time) < 8) return(NULL)
+  fa <- w |> group_by(hoehe_cm) |>
+    summarise(cf = list(coef(lm(temp_C ~ sin(om*ts) + cos(om*ts)))), .groups = "drop") |>
+    mutate(A = sapply(cf, function(c) sqrt(c[2]^2 + c[3]^2)),
+           phi = sapply(cf, function(c) atan2(c[3], c[2]))) |> select(-cf)
+  Aa <- median(fa$A[fa$hoehe_cm >= h_ref]); pa <- median(fa$phi[fa$hoehe_cm >= h_ref])
+  b  <- fa |> filter(hoehe_cm == h_bot)
+  if (!nrow(b)) return(NULL)
+  lag <- (((pa - b$phi + pi) %% (2*pi)) - pi)/om
+  # Der Phasenverzug ist nur aussagekräftig, wenn der Sensor überhaupt gedämpft
+  # ist — bei freiem Sensor ist die Phasendifferenz Rauschen.
+  zp <- if (b$A/Aa < 0.8) lag*om*d_fix else NA_real_
+  tibble(day = as.Date(dy), z_amp = d_fix*log(Aa/b$A), z_phase = zp, A_air = Aa)
+}
+dseq <- seq(as.Date(min(ser_dat$time)) + 2, as.Date(max(ser_dat$time)) - 2, by = "1 day")
+res  <- bind_rows(lapply(dseq, perday)) |> filter(A_air >= 2)
+
+cols_s <- c(`Sensor: Amplitudendämpfung` = "#b2182b",
+            `Sensor: Phasenverzug`       = "#2166ac",
+            `Summit AWS (unabhängig)`    = "#1a9850")
+base3 <- function(x) median(head(x[is.finite(x)], 3))
+
+p_abs <- ggplot(res) + geom_hline(yintercept = 0, colour = "grey60") +
+  geom_line(aes(day, z_amp,   colour = "Sensor: Amplitudendämpfung"), linewidth = 0.7) +
+  geom_point(aes(day, z_amp,  colour = "Sensor: Amplitudendämpfung"), size = 1.2) +
+  geom_line(aes(day, z_phase, colour = "Sensor: Phasenverzug"), linewidth = 0.7) +
+  geom_point(aes(day, z_phase, colour = "Sensor: Phasenverzug"), size = 1.2) +
+  scale_colour_manual(NULL, values = cols_s) + scale_x_date(NULL) +
+  scale_y_continuous("Tiefe unterster Sensor (cm)") +
+  labs(title = sprintf("Einschneitiefe des untersten Sensors (h = %d cm) — %s", h_bot, cfg$label),
+       subtitle = sprintf("Tageswelle, 3-Tage-Fenster, d = %.1f cm; > 0 = unter Schnee, ~0 = frei", d_fix)) +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+
+p_cmp <- NULL
+if (exists("aws_raw") && !is.null(aws_raw) && "z_surf_combined" %in% names(aws_raw) && nrow(res)) {
+  awd <- aws_raw |> mutate(day = as.Date(time)) |>
+    filter(is.finite(z_surf_combined), day >= min(res$day), day <= max(res$day)) |>
+    group_by(day) |> summarise(z = 100*mean(z_surf_combined), .groups = "drop")
+  cmp <- bind_rows(
+    res |> transmute(day, wert = z_amp   - base3(z_amp),   q = "Sensor: Amplitudendämpfung"),
+    res |> transmute(day, wert = z_phase - base3(z_phase), q = "Sensor: Phasenverzug"),
+    awd |> transmute(day, wert = z - base3(z),             q = "Summit AWS (unabhängig)"))
+  p_cmp <- ggplot(cmp, aes(day, wert, colour = q)) +
+    geom_hline(yintercept = 0, colour = "grey60") +
+    geom_line(linewidth = 0.7) + geom_point(size = 1.1) +
+    scale_colour_manual(NULL, values = cols_s) + scale_x_date(NULL) +
+    scale_y_continuous("Änderung seit Start (cm)") +
+    labs(subtitle = sprintf("Änderung seit %s — Sensorschätzer und AWS-Akkumulation unabhängig, nur gemeinsame Startreferenz (kein Fit aneinander)",
+                            format(min(res$day), "%d.%m."))) +
+    theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+}
+if (is.null(p_cmp)) p_abs else p_abs / p_cmp
+```
+
+```{r einschnei-serie-text, eval=multi, results='asis'}
+if (nrow(res) >= 5) {
+  la <- tail(res, 1)
+  cat(sprintf("Aktuell (%s): **%.1f cm** (Amplitude) bzw. **%.1f cm** (Phase). Die beiden unabhängigen Methoden stimmen über den Gesamtzeitraum auf **%.1f cm** (Median der Beträge der Differenz) überein — das ist die realistische Genauigkeit dieser Tiefenbestimmung.\n",
+              format(la$day, "%d.%m.%Y"), la$z_amp, la$z_phase,
+              median(abs(res$z_amp - res$z_phase), na.rm = TRUE)))
 }
 ```
 
