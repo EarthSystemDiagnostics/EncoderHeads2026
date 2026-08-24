@@ -2211,6 +2211,7 @@ vertical-align: -.125em;
   <ul class="collapse">
   <li><a href="#quantile-mapping-era5-aws9" id="toc-quantile-mapping-era5-aws9" class="nav-link active" data-scroll-target="#quantile-mapping-era5-aws9">Quantile-Mapping ERA5 → AWS9</a></li>
   <li><a href="#klimatologien-und-anomalien" id="toc-klimatologien-und-anomalien" class="nav-link" data-scroll-target="#klimatologien-und-anomalien">Klimatologien und Anomalien</a></li>
+  <li><a href="#wie-ungewöhnlich-ist-das" id="toc-wie-ungewöhnlich-ist-das" class="nav-link" data-scroll-target="#wie-ungewöhnlich-ist-das">Wie ungewöhnlich ist das?</a></li>
   <li><a href="#vorbehalte" id="toc-vorbehalte" class="nav-link" data-scroll-target="#vorbehalte">Vorbehalte</a></li>
   </ul>
 </nav>
@@ -2616,6 +2617,323 @@ vertical-align: -.125em;
 </div>
 </div>
 </section>
+<section id="wie-ungewöhnlich-ist-das" class="level2">
+<h2 class="anchored" data-anchor-id="wie-ungewöhnlich-ist-das">Wie ungewöhnlich ist das?</h2>
+<p>Einordnung als stationäres Wiederkehrereignis: dieselbe Klimatologie und dasselbe Kriterium, angewandt auf die <strong>quantile-gemappte ERA5-Reihe 1940–2026</strong> (87 Jahre). Damit ist der 2026er Wert direkt in die historische Verteilung einsortierbar.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>era_a <span class="ot">&lt;-</span> era <span class="sc">|&gt;</span> <span class="fu">mutate</span>(<span class="at">doy =</span> <span class="fu">pmin</span>(<span class="fu">yday</span>(date), <span class="dv">365</span>)) <span class="sc">|&gt;</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">left_join</span>(c_qm, <span class="at">by =</span> <span class="st">&quot;doy&quot;</span>) <span class="sc">|&gt;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">a =</span> (t_qm <span class="sc">-</span> clim_mean)<span class="sc">/</span>clim_sd, <span class="at">year =</span> <span class="fu">year</span>(date)) <span class="sc">|&gt;</span> <span class="fu">arrange</span>(date)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>era_a<span class="sc">$</span>a3 <span class="ot">&lt;-</span> <span class="fu">rollmean</span>(era_a<span class="sc">$</span>a, <span class="dv">3</span>, <span class="at">fill =</span> <span class="cn">NA</span>, <span class="at">align =</span> <span class="st">&quot;center&quot;</span>)</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>find_runs <span class="ot">&lt;-</span> <span class="cf">function</span>(df) {</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  x <span class="ot">&lt;-</span> <span class="sc">!</span><span class="fu">is.na</span>(df<span class="sc">$</span>a) <span class="sc">&amp;</span> df<span class="sc">$</span>a <span class="sc">&gt;</span> <span class="dv">2</span>; r <span class="ot">&lt;-</span> <span class="fu">rle</span>(x)</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  i <span class="ot">&lt;-</span> <span class="fu">which</span>(r<span class="sc">$</span>values <span class="sc">&amp;</span> r<span class="sc">$</span>lengths <span class="sc">&gt;=</span> <span class="dv">3</span>)</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="sc">!</span><span class="fu">length</span>(i)) <span class="fu">return</span>(<span class="fu">tibble</span>())</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  ends <span class="ot">&lt;-</span> <span class="fu">cumsum</span>(r<span class="sc">$</span>lengths); starts <span class="ot">&lt;-</span> ends <span class="sc">-</span> r<span class="sc">$</span>lengths <span class="sc">+</span> <span class="dv">1</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">tibble</span>(<span class="at">start =</span> df<span class="sc">$</span>date[starts[i]], <span class="at">end =</span> df<span class="sc">$</span>date[ends[i]], <span class="at">len =</span> r<span class="sc">$</span>lengths[i],</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>         <span class="at">maxa  =</span> <span class="fu">vapply</span>(i, <span class="cf">function</span>(k) <span class="fu">max</span>(df<span class="sc">$</span>a[starts[k]<span class="sc">:</span>ends[k]]), <span class="dv">0</span>),</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>         <span class="at">mean3 =</span> <span class="fu">vapply</span>(i, <span class="cf">function</span>(k) <span class="fu">mean</span>(df<span class="sc">$</span>a[starts[k]<span class="sc">:</span>ends[k]]), <span class="dv">0</span>))</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>ev_hist <span class="ot">&lt;-</span> <span class="fu">find_runs</span>(era_a)</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>n_years <span class="ot">&lt;-</span> <span class="fu">length</span>(<span class="fu">unique</span>(era_a<span class="sc">$</span>year))</span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>obs <span class="ot">&lt;-</span> n1 <span class="sc">|&gt;</span> <span class="fu">filter</span>(hw)</span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>obs_max <span class="ot">&lt;-</span> <span class="fu">max</span>(obs<span class="sc">$</span>a_qm); obs_m3 <span class="ot">&lt;-</span> <span class="fu">mean</span>(obs<span class="sc">$</span>a_qm)</span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>rp <span class="ot">&lt;-</span> <span class="fu">tibble</span>(<span class="at">Schwelle =</span> <span class="fu">c</span>(<span class="fl">2.0</span>, <span class="fl">2.5</span>, <span class="fu">round</span>(obs_m3, <span class="dv">2</span>), <span class="fl">3.0</span>, <span class="fl">3.5</span>)) <span class="sc">|&gt;</span> <span class="fu">rowwise</span>() <span class="sc">|&gt;</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="st">`</span><span class="at">Ereignisse (Jahr)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">sum</span>(ev_hist<span class="sc">$</span>mean3 <span class="sc">&gt;=</span> Schwelle),</span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>         <span class="st">`</span><span class="at">alle x Jahre</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">round</span>(n_years<span class="sc">/</span><span class="fu">max</span>(<span class="st">`</span><span class="at">Ereignisse (Jahr)</span><span class="st">`</span>, <span class="dv">1</span>), <span class="dv">1</span>),</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>         <span class="st">`</span><span class="at">Ereignisse (Apr–Sep)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">sum</span>(ev_hist<span class="sc">$</span>mean3 <span class="sc">&gt;=</span> Schwelle <span class="sc">&amp;</span> <span class="fu">month</span>(ev_hist<span class="sc">$</span>start) <span class="sc">%in%</span> <span class="dv">4</span><span class="sc">:</span><span class="dv">9</span>),</span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>         <span class="st">`</span><span class="at">alle x Jahre (Apr–Sep)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">round</span>(n_years<span class="sc">/</span><span class="fu">max</span>(<span class="st">`</span><span class="at">Ereignisse (Apr–Sep)</span><span class="st">`</span>, <span class="dv">1</span>), <span class="dv">1</span>)) <span class="sc">|&gt;</span> <span class="fu">ungroup</span>()</span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(rp, <span class="at">caption =</span> <span class="fu">sprintf</span>(</span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Wiederkehrzeit nach 3-Tage-Mittel der Anomalie, %d–%d (%d Jahre). Unser Ereignis liegt bei %.2f σ.&quot;</span>,</span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>  <span class="fu">min</span>(era_a<span class="sc">$</span>year), <span class="fu">max</span>(era_a<span class="sc">$</span>year), n_years, obs_m3))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<caption>Wiederkehrzeit nach 3-Tage-Mittel der Anomalie, 1940–2026 (87 Jahre). Unser Ereignis liegt bei 2.59 σ.</caption>
+<colgroup>
+<col style="width: 10%">
+<col style="width: 21%">
+<col style="width: 15%">
+<col style="width: 25%">
+<col style="width: 27%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: right;">Schwelle</th>
+<th style="text-align: right;">Ereignisse (Jahr)</th>
+<th style="text-align: right;">alle x Jahre</th>
+<th style="text-align: right;">Ereignisse (Apr–Sep)</th>
+<th style="text-align: right;">alle x Jahre (Apr–Sep)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">2.00</td>
+<td style="text-align: right;">160</td>
+<td style="text-align: right;">0.5</td>
+<td style="text-align: right;">94</td>
+<td style="text-align: right;">0.9</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2.50</td>
+<td style="text-align: right;">71</td>
+<td style="text-align: right;">1.2</td>
+<td style="text-align: right;">43</td>
+<td style="text-align: right;">2.0</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2.59</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">2.1</td>
+<td style="text-align: right;">24</td>
+<td style="text-align: right;">3.6</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">3.00</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">29.0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">43.5</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">3.50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">87.0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">87.0</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>n_ge <span class="ot">&lt;-</span> <span class="fu">sum</span>(ev_hist<span class="sc">$</span>mean3 <span class="sc">&gt;=</span> obs_m3)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>a_all <span class="ot">&lt;-</span> era_a<span class="sc">$</span>a[<span class="fu">is.finite</span>(era_a<span class="sc">$</span>a)]</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;- **Unser Ereignis (%.2f σ im 3-Tage-Mittel, Spitze %.2f σ) ist ein ~%.0f-Jahres-Ereignis** (im Winterhalbjahr ~%.0f Jahre) — kein Ausreißer der Klimatologie.</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span>,</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>            obs_m3, obs_max, n_years<span class="sc">/</span><span class="fu">max</span>(n_ge, <span class="dv">1</span>),</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>            n_years<span class="sc">/</span><span class="fu">max</span>(<span class="fu">sum</span>(ev_hist<span class="sc">$</span>mean3 <span class="sc">&gt;=</span> obs_m3 <span class="sc">&amp;</span> <span class="fu">month</span>(ev_hist<span class="sc">$</span>start) <span class="sc">%in%</span> <span class="dv">4</span><span class="sc">:</span><span class="dv">9</span>), <span class="dv">1</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<ul>
+<li><strong>Unser Ereignis (2.59 σ im 3-Tage-Mittel, Spitze 2.92 σ) ist ein ~2-Jahres-Ereignis</strong> (im Winterhalbjahr ~4 Jahre) — kein Ausreißer der Klimatologie.</li>
+</ul>
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;- **Das 2σ-Kriterium ist an diesem Standort schwach:** %d Ereignisse in %d Jahren, also fast zwei pro Jahr. Grund ist die Verteilung: %.2f %% aller Tage liegen über 2σ (Gauß-Erwartung 2,28 %%), die Schiefe beträgt **%+.2f**, und die Lag-1-Autokorrelation **%.2f** — bei so viel Persistenz ist „drei Tage in Folge</span><span class="sc">\&quot;</span><span class="st"> kaum eine zusätzliche Hürde. Ab **3σ** wird es selten (%d Ereignisse in %d Jahren).</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span>,</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>            <span class="fu">nrow</span>(ev_hist), n_years, <span class="dv">100</span><span class="sc">*</span><span class="fu">mean</span>(a_all <span class="sc">&gt;</span> <span class="dv">2</span>),</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>            <span class="fu">mean</span>((a_all<span class="sc">-</span><span class="fu">mean</span>(a_all))<span class="sc">^</span><span class="dv">3</span>)<span class="sc">/</span><span class="fu">sd</span>(a_all)<span class="sc">^</span><span class="dv">3</span>,</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>            <span class="fu">cor</span>(a_all[<span class="sc">-</span><span class="dv">1</span>], a_all[<span class="sc">-</span><span class="fu">length</span>(a_all)]),</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>            <span class="fu">sum</span>(ev_hist<span class="sc">$</span>mean3 <span class="sc">&gt;=</span> <span class="dv">3</span>), n_years))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<ul>
+<li><strong>Das 2σ-Kriterium ist an diesem Standort schwach:</strong> 160 Ereignisse in 87 Jahren, also fast zwei pro Jahr. Grund ist die Verteilung: 4.17 % aller Tage liegen über 2σ (Gauß-Erwartung 2,28 %), die Schiefe beträgt <strong>+0.67</strong>, und die Lag-1-Autokorrelation <strong>0.82</strong> — bei so viel Persistenz ist „drei Tage in Folge” kaum eine zusätzliche Hürde. Ab <strong>3σ</strong> wird es selten (3 Ereignisse in 87 Jahren).</li>
+</ul>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>yr_tab <span class="ot">&lt;-</span> era_a <span class="sc">|&gt;</span> <span class="fu">filter</span>(year <span class="sc">&gt;=</span> <span class="dv">2013</span>, year <span class="sc">&lt;=</span> <span class="dv">2025</span>) <span class="sc">|&gt;</span> <span class="fu">group_by</span>(year) <span class="sc">|&gt;</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="st">`</span><span class="at">max 3-Tage-Mittel (σ)</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">round</span>(<span class="fu">max</span>(a3, <span class="at">na.rm =</span> <span class="cn">TRUE</span>), <span class="dv">2</span>),</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>            <span class="st">`</span><span class="at">Tage &gt; 2σ</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">sum</span>(a <span class="sc">&gt;</span> <span class="dv">2</span>, <span class="at">na.rm =</span> <span class="cn">TRUE</span>),</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>            <span class="st">`</span><span class="at">Mehrtagesereignisse</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">sum</span>(<span class="fu">year</span>(ev_hist<span class="sc">$</span>start) <span class="sc">==</span> <span class="fu">first</span>(year)),</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>            <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>) <span class="sc">|&gt;</span> <span class="fu">rename</span>(<span class="at">Jahr =</span> year)</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(yr_tab, <span class="at">caption =</span> <span class="st">&quot;Jahresvergleich aus der QM-ERA5-Reihe (2026 fehlt, da der ERA5-Record am 22.01.2026 endet).&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<caption>Jahresvergleich aus der QM-ERA5-Reihe (2026 fehlt, da der ERA5-Record am 22.01.2026 endet).</caption>
+<thead>
+<tr class="header">
+<th style="text-align: right;">Jahr</th>
+<th style="text-align: right;">max 3-Tage-Mittel (σ)</th>
+<th style="text-align: right;">Tage &gt; 2σ</th>
+<th style="text-align: right;">Mehrtagesereignisse</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">2013</td>
+<td style="text-align: right;">2.69</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2014</td>
+<td style="text-align: right;">2.81</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2015</td>
+<td style="text-align: right;">2.50</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2016</td>
+<td style="text-align: right;">3.04</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2017</td>
+<td style="text-align: right;">2.65</td>
+<td style="text-align: right;">17</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2018</td>
+<td style="text-align: right;">2.88</td>
+<td style="text-align: right;">28</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2019</td>
+<td style="text-align: right;">2.49</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2020</td>
+<td style="text-align: right;">2.86</td>
+<td style="text-align: right;">22</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2021</td>
+<td style="text-align: right;">2.59</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2022</td>
+<td style="text-align: right;">2.79</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2023</td>
+<td style="text-align: right;">3.21</td>
+<td style="text-align: right;">44</td>
+<td style="text-align: right;">6</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">2024</td>
+<td style="text-align: right;">2.76</td>
+<td style="text-align: right;">43</td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">2025</td>
+<td style="text-align: right;">2.72</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">4</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(ev_hist <span class="sc">|&gt;</span> <span class="fu">arrange</span>(<span class="fu">desc</span>(mean3)) <span class="sc">|&gt;</span> <span class="fu">head</span>(<span class="dv">8</span>) <span class="sc">|&gt;</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">transmute</span>(<span class="at">Beginn =</span> <span class="fu">format</span>(start, <span class="st">&quot;%d.%m.%Y&quot;</span>), <span class="at">Ende =</span> <span class="fu">format</span>(end, <span class="st">&quot;%d.%m.%Y&quot;</span>),</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>            <span class="at">Tage =</span> len, <span class="st">`</span><span class="at">max σ</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">round</span>(maxa, <span class="dv">2</span>), <span class="st">`</span><span class="at">3-Tage-Mittel σ</span><span class="st">`</span> <span class="ot">=</span> <span class="fu">round</span>(mean3, <span class="dv">2</span>)),</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">caption =</span> <span class="st">&quot;Stärkste Ereignisse des Records.&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<caption>Stärkste Ereignisse des Records.</caption>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Beginn</th>
+<th style="text-align: left;">Ende</th>
+<th style="text-align: right;">Tage</th>
+<th style="text-align: right;">max σ</th>
+<th style="text-align: right;">3-Tage-Mittel σ</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">25.05.2009</td>
+<td style="text-align: left;">27.05.2009</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">3.33</td>
+<td style="text-align: right;">3.20</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">19.04.2016</td>
+<td style="text-align: left;">21.04.2016</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">3.18</td>
+<td style="text-align: right;">3.04</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">15.11.2023</td>
+<td style="text-align: left;">20.11.2023</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">3.25</td>
+<td style="text-align: right;">3.01</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">04.11.2007</td>
+<td style="text-align: left;">14.11.2007</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">3.44</td>
+<td style="text-align: right;">2.96</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">23.02.2003</td>
+<td style="text-align: left;">01.03.2003</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">3.36</td>
+<td style="text-align: right;">2.91</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">09.04.1947</td>
+<td style="text-align: left;">12.04.1947</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">3.17</td>
+<td style="text-align: right;">2.85</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">14.06.1969</td>
+<td style="text-align: left;">16.06.1969</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2.96</td>
+<td style="text-align: right;">2.83</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">17.01.1981</td>
+<td style="text-align: left;">24.01.1981</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">2.99</td>
+<td style="text-align: right;">2.82</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>e24 <span class="ot">&lt;-</span> era_a <span class="sc">|&gt;</span> <span class="fu">filter</span>(year <span class="sc">==</span> <span class="dv">2024</span>)</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>ev24 <span class="ot">&lt;-</span> ev_hist <span class="sc">|&gt;</span> <span class="fu">filter</span>(<span class="fu">year</span>(start) <span class="sc">==</span> <span class="dv">2024</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">sprintf</span>(<span class="st">&quot;**Vergleich 2024:** max Tagesanomalie **%+.2f σ** (%s), max 3-Tage-Mittel **%+.2f σ**, **%d Tage** über 2σ und **%d** Mehrtagesereignisse — darunter eines über **%d Tage** (%s–%s), also in derselben Jahreszeit wie unseres, aber dreimal so lang. 2024 (und 2023 mit %d Tagen über 2σ) waren damit deutlich anomaler als 2026.</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span>,</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">max</span>(e24<span class="sc">$</span>a, <span class="at">na.rm =</span> <span class="cn">TRUE</span>), <span class="fu">format</span>(e24<span class="sc">$</span>date[<span class="fu">which.max</span>(e24<span class="sc">$</span>a)], <span class="st">&quot;%d.%m.&quot;</span>),</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">max</span>(e24<span class="sc">$</span>a3, <span class="at">na.rm =</span> <span class="cn">TRUE</span>), <span class="fu">sum</span>(e24<span class="sc">$</span>a <span class="sc">&gt;</span> <span class="dv">2</span>, <span class="at">na.rm =</span> <span class="cn">TRUE</span>), <span class="fu">nrow</span>(ev24),</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">max</span>(ev24<span class="sc">$</span>len), <span class="fu">format</span>(ev24<span class="sc">$</span>start[<span class="fu">which.max</span>(ev24<span class="sc">$</span>len)], <span class="st">&quot;%d.%m.&quot;</span>),</span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">format</span>(ev24<span class="sc">$</span>end[<span class="fu">which.max</span>(ev24<span class="sc">$</span>len)], <span class="st">&quot;%d.%m.&quot;</span>),</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">sum</span>(era_a<span class="sc">$</span>a[era_a<span class="sc">$</span>year <span class="sc">==</span> <span class="dv">2023</span>] <span class="sc">&gt;</span> <span class="dv">2</span>, <span class="at">na.rm =</span> <span class="cn">TRUE</span>)))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<p><strong>Vergleich 2024:</strong> max Tagesanomalie <strong>+2.89 σ</strong> (22.02.), max 3-Tage-Mittel <strong>+2.76 σ</strong>, <strong>43 Tage</strong> über 2σ und <strong>5</strong> Mehrtagesereignisse — darunter eines über <strong>9 Tage</strong> (25.07.–02.08.), also in derselben Jahreszeit wie unseres, aber dreimal so lang. 2024 (und 2023 mit 44 Tagen über 2σ) waren damit deutlich anomaler als 2026.</p>
+</section>
 <section id="vorbehalte" class="level2">
 <h2 class="anchored" data-anchor-id="vorbehalte">Vorbehalte</h2>
 <ol type="1">
@@ -2624,12 +2942,13 @@ vertical-align: -.125em;
 <li><strong>AWS9 steht an Kohnen, der Sensor an B50</strong> — genau der Standortversatz, den <code>vergleich_b50_b40.qmd</code> zwischen zwei Bohrlöchern zeigt.</li>
 <li><strong>AWS9-Winterabdeckung ist lückenhaft</strong> (Juni ~213, August ~172 Tage gegen 424 im März) und Ausfälle sind vermutlich nicht zufällig (Sturm, Kälte). Genau deshalb ist die quantile-gemappte ERA5 die Hauptvariante: lückenlose 43-Jahres-Zeitachse mit beobachteter Verteilung — statt einer direkt aus AWS9 gerechneten Klimatologie mit halber Winterabdeckung.</li>
 <li><strong>Stationarität:</strong> Die Transferfunktion stammt aus 1998–2016 und wird auf 1979–2021 angewandt.</li>
+<li><strong>Wiederkehrzeiten sind die stationäre Näherung.</strong> Die Reihe ist über 87 Jahre nicht stationär (Häufung 2023/2024), und der 2026er Wert stammt vom Sensor, die Vergleichsstatistik aus korrigierter ERA5 — der Zeitfehler von 2,56 K RMS kann ein Einzelereignis um einige zehntel σ verschieben.</li>
 <li>Der Record endet mit dem <strong>Ausfall des head03 am 22.07.2026</strong> (siehe <code>ausfallanalyse_kohnen.qmd</code>).</li>
 </ol>
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;**Eingangsdaten fehlen** — ERA5 (`&quot;</span>, ERA5_RDS, <span class="st">&quot;`) oder AWS9 (`&quot;</span>, AWS9_RDA,</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;`) nicht gefunden; Analyse übersprungen.</span><span class="sc">\n</span><span class="st">&quot;</span>, <span class="at">sep =</span> <span class="st">&quot;&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;**Eingangsdaten fehlen** — ERA5 (`&quot;</span>, ERA5_RDS, <span class="st">&quot;`) oder AWS9 (`&quot;</span>, AWS9_RDA,</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;`) nicht gefunden; Analyse übersprungen.</span><span class="sc">\n</span><span class="st">&quot;</span>, <span class="at">sep =</span> <span class="st">&quot;&quot;</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 </section>
 

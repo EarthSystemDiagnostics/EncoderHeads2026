@@ -215,6 +215,87 @@ knitr::kable(n1 |> arrange(desc(a_qm)) |> head(8) |>
   caption = "Wärmste Tage der Reihe unter den drei Klimatologien.")
 ```
 
+## Wie ungewöhnlich ist das?
+
+Einordnung als stationäres Wiederkehrereignis: dieselbe Klimatologie und
+dasselbe Kriterium, angewandt auf die **quantile-gemappte ERA5-Reihe
+1940–2026** (87 Jahre). Damit ist der 2026er Wert direkt in die historische
+Verteilung einsortierbar.
+
+```{r rp, eval=have}
+era_a <- era |> mutate(doy = pmin(yday(date), 365)) |>
+  left_join(c_qm, by = "doy") |>
+  mutate(a = (t_qm - clim_mean)/clim_sd, year = year(date)) |> arrange(date)
+era_a$a3 <- rollmean(era_a$a, 3, fill = NA, align = "center")
+
+find_runs <- function(df) {
+  x <- !is.na(df$a) & df$a > 2; r <- rle(x)
+  i <- which(r$values & r$lengths >= 3)
+  if (!length(i)) return(tibble())
+  ends <- cumsum(r$lengths); starts <- ends - r$lengths + 1
+  tibble(start = df$date[starts[i]], end = df$date[ends[i]], len = r$lengths[i],
+         maxa  = vapply(i, function(k) max(df$a[starts[k]:ends[k]]), 0),
+         mean3 = vapply(i, function(k) mean(df$a[starts[k]:ends[k]]), 0))
+}
+ev_hist <- find_runs(era_a)
+n_years <- length(unique(era_a$year))
+
+obs <- n1 |> filter(hw)
+obs_max <- max(obs$a_qm); obs_m3 <- mean(obs$a_qm)
+
+rp <- tibble(Schwelle = c(2.0, 2.5, round(obs_m3, 2), 3.0, 3.5)) |> rowwise() |>
+  mutate(`Ereignisse (Jahr)` = sum(ev_hist$mean3 >= Schwelle),
+         `alle x Jahre` = round(n_years/max(`Ereignisse (Jahr)`, 1), 1),
+         `Ereignisse (Apr–Sep)` = sum(ev_hist$mean3 >= Schwelle & month(ev_hist$start) %in% 4:9),
+         `alle x Jahre (Apr–Sep)` = round(n_years/max(`Ereignisse (Apr–Sep)`, 1), 1)) |> ungroup()
+knitr::kable(rp, caption = sprintf(
+  "Wiederkehrzeit nach 3-Tage-Mittel der Anomalie, %d–%d (%d Jahre). Unser Ereignis liegt bei %.2f σ.",
+  min(era_a$year), max(era_a$year), n_years, obs_m3))
+```
+
+```{r rp-verdict, eval=have, results='asis'}
+n_ge <- sum(ev_hist$mean3 >= obs_m3)
+a_all <- era_a$a[is.finite(era_a$a)]
+cat(sprintf("- **Unser Ereignis (%.2f σ im 3-Tage-Mittel, Spitze %.2f σ) ist ein ~%.0f-Jahres-Ereignis** (im Winterhalbjahr ~%.0f Jahre) — kein Ausreißer der Klimatologie.
+",
+            obs_m3, obs_max, n_years/max(n_ge, 1),
+            n_years/max(sum(ev_hist$mean3 >= obs_m3 & month(ev_hist$start) %in% 4:9), 1)))
+cat(sprintf("- **Das 2σ-Kriterium ist an diesem Standort schwach:** %d Ereignisse in %d Jahren, also fast zwei pro Jahr. Grund ist die Verteilung: %.2f %% aller Tage liegen über 2σ (Gauß-Erwartung 2,28 %%), die Schiefe beträgt **%+.2f**, und die Lag-1-Autokorrelation **%.2f** — bei so viel Persistenz ist „drei Tage in Folge\" kaum eine zusätzliche Hürde. Ab **3σ** wird es selten (%d Ereignisse in %d Jahren).
+",
+            nrow(ev_hist), n_years, 100*mean(a_all > 2),
+            mean((a_all-mean(a_all))^3)/sd(a_all)^3,
+            cor(a_all[-1], a_all[-length(a_all)]),
+            sum(ev_hist$mean3 >= 3), n_years))
+```
+
+```{r rp-years, eval=have}
+yr_tab <- era_a |> filter(year >= 2013, year <= 2025) |> group_by(year) |>
+  summarise(`max 3-Tage-Mittel (σ)` = round(max(a3, na.rm = TRUE), 2),
+            `Tage > 2σ` = sum(a > 2, na.rm = TRUE),
+            `Mehrtagesereignisse` = sum(year(ev_hist$start) == first(year)),
+            .groups = "drop") |> rename(Jahr = year)
+knitr::kable(yr_tab, caption = "Jahresvergleich aus der QM-ERA5-Reihe (2026 fehlt, da der ERA5-Record am 22.01.2026 endet).")
+```
+
+```{r rp-top, eval=have}
+knitr::kable(ev_hist |> arrange(desc(mean3)) |> head(8) |>
+  transmute(Beginn = format(start, "%d.%m.%Y"), Ende = format(end, "%d.%m.%Y"),
+            Tage = len, `max σ` = round(maxa, 2), `3-Tage-Mittel σ` = round(mean3, 2)),
+  caption = "Stärkste Ereignisse des Records.")
+```
+
+```{r rp-2024, eval=have, results='asis'}
+e24 <- era_a |> filter(year == 2024)
+ev24 <- ev_hist |> filter(year(start) == 2024)
+cat(sprintf("**Vergleich 2024:** max Tagesanomalie **%+.2f σ** (%s), max 3-Tage-Mittel **%+.2f σ**, **%d Tage** über 2σ und **%d** Mehrtagesereignisse — darunter eines über **%d Tage** (%s–%s), also in derselben Jahreszeit wie unseres, aber dreimal so lang. 2024 (und 2023 mit %d Tagen über 2σ) waren damit deutlich anomaler als 2026.
+",
+  max(e24$a, na.rm = TRUE), format(e24$date[which.max(e24$a)], "%d.%m."),
+  max(e24$a3, na.rm = TRUE), sum(e24$a > 2, na.rm = TRUE), nrow(ev24),
+  max(ev24$len), format(ev24$start[which.max(ev24$len)], "%d.%m."),
+  format(ev24$end[which.max(ev24$len)], "%d.%m."),
+  sum(era_a$a[era_a$year == 2023] > 2, na.rm = TRUE)))
+```
+
 ## Vorbehalte
 
 1. **n1 hat keine Per-Sensor-Kalibrierung.** Die Mean-S4-Kurve entfernt den
@@ -230,7 +311,12 @@ knitr::kable(n1 |> arrange(desc(a_qm)) |> head(8) |>
    AWS9 gerechneten Klimatologie mit halber Winterabdeckung.
 5. **Stationarität:** Die Transferfunktion stammt aus 1998–2016 und wird auf
    1979–2021 angewandt.
-6. Der Record endet mit dem **Ausfall des head03 am 22.07.2026**
+6. **Wiederkehrzeiten sind die stationäre Näherung.** Die Reihe ist über
+   87 Jahre nicht stationär (Häufung 2023/2024), und der 2026er Wert stammt
+   vom Sensor, die Vergleichsstatistik aus korrigierter ERA5 — der
+   Zeitfehler von 2,56 K RMS kann ein Einzelereignis um einige zehntel σ
+   verschieben.
+7. Der Record endet mit dem **Ausfall des head03 am 22.07.2026**
    (siehe `ausfallanalyse_kohnen.qmd`).
 
 ```{r missing, eval=!have, results='asis'}
