@@ -50,11 +50,9 @@ pA <- ggplot(n1, aes(date,T)) +
            label="Band: ±2σ der Klimatologie 1979–2021 (ERA5, an AWS9 quantil-korrigiert)") +
   scale_x_date(NULL, date_breaks="1 month", date_labels="%b", expand=c(0.01,0)) +
   scale_y_continuous("Lufttemperatur (°C)", breaks=seq(-70,-20,10)) +
-  labs(title="Was an Kohnen passiert — und was wir davon messen",
-       subtitle="A · Atmosphäre: Tagesmittel 2026 gegen die Klimatologie") +
+  labs(subtitle="A · Atmosphäre: Tagesmittel 2026 gegen die Klimatologie") +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), panel.grid.major.x=element_blank(),
-        plot.title=element_text(face="bold", size=15),
         plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
 
 ## --- Panel B: 2-m-Schacht, Eindringen des Juli-Ereignisses ------------------
@@ -142,7 +140,7 @@ pD <- ggplot(amp, aes(sd, depth, group=chain)) +
 
 fig <- pA / (pB + pC + pD + plot_layout(widths=c(1.15,1.35,0.8))) + plot_layout(heights=c(1,0.95)) &
   theme(plot.background=element_rect(fill=SURF, colour=NA))
-ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=13, height=8.4, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=13, height=8.0, dpi=200, bg=SURF)
 hw2 <- n1 |> filter(hw) |> mutate(dK = T - clim_mean)
 cat(sprintf("HW: %s .. %s | T %.1f..%.1f | Klima %.1f | Anomalie %.1f..%.1f K | sigma %.2f..%.2f\n",
   format(min(hw2$date)), format(max(hw2$date)), min(hw2$T), max(hw2$T),

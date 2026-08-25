@@ -39,12 +39,9 @@ p <- ggplot() +
   annotate("text", x=-2.35e6, y=-1.78e6, hjust=0, size=3.5, colour=GREY, lineheight=1,
            label="5 800 km Traverse, ~15 Standorte —\ndasselbe System als Netzwerk") +
   coord_sf(xlim=c(-2.5e6, 2.9e6), ylim=c(-2.3e6, 2.3e6), expand=FALSE) +
-  labs(title="Vom Einzelpunkt zum Netzwerk",
-       subtitle="Kohnen zeigt, dass es funktioniert — die Traverse macht daraus eine Messkette über den Kontinent") +
+
   theme_void(base_size=12) +
-  theme(plot.title=element_text(face="bold", size=15, margin=margin(b=2)),
-        plot.subtitle=element_text(colour=GREY, margin=margin(b=8)),
-        plot.background=element_rect(fill=SURF, colour=NA),
+  theme(plot.background=element_rect(fill=SURF, colour=NA),
         plot.margin=margin(12,12,10,12))
 ggsave(file.path(SP, "fig2_netzwerk.png"), p, width=10, height=7.4, dpi=200, bg=SURF)
 cat("ok\n")
