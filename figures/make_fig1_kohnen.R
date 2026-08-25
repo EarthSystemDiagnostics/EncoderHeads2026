@@ -110,7 +110,7 @@ pC <- ggplot(firn_i, aes(date, depth, fill=z)) +
                        breaks=c(-2,2), labels=c("kalt","warm")) +
   scale_y_reverse("Tiefe (m)", breaks=c(0.2,2,4,6,8,10), expand=c(0,0)) +
   scale_x_date(NULL, date_breaks="2 months", date_labels="%b", expand=c(0,0)) +
-  labs(subtitle="C · Jahreswelle bis 10 m") +
+  labs(subtitle="C · Jahreswelle: der Sommer erreicht im Winter 6–8 m Tiefe") +
   theme_minimal(base_size=12) +
   theme(panel.grid=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)),
         legend.key.width=unit(0.35,"cm"), legend.key.height=unit(0.7,"cm"),
@@ -138,9 +138,9 @@ pD <- ggplot(amp, aes(sd, depth, group=chain)) +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
 
-fig <- pA / (pB + pC + pD + plot_layout(widths=c(1.15,1.35,0.8))) + plot_layout(heights=c(1,0.95)) &
+fig <- pA / (pB + pC + plot_layout(widths=c(1,1.5))) + plot_layout(heights=c(1,0.95)) &
   theme(plot.background=element_rect(fill=SURF, colour=NA))
-ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=13, height=8.0, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=11, height=7.6, dpi=200, bg=SURF)
 hw2 <- n1 |> filter(hw) |> mutate(dK = T - clim_mean)
 cat(sprintf("HW: %s .. %s | T %.1f..%.1f | Klima %.1f | Anomalie %.1f..%.1f K | sigma %.2f..%.2f\n",
   format(min(hw2$date)), format(max(hw2$date)), min(hw2$T), max(hw2$T),

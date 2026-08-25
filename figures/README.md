@@ -5,16 +5,15 @@ Aufruf aus diesem Ordner: `Rscript make_fig1_kohnen.R` bzw. `Rscript make_fig2_n
 
 ## fig1_kohnen.png — „Was an Kohnen passiert, und was wir davon messen"
 
-Ein Winter an Kohnen, gemessen von der Luft bis 62 m Tiefe. **(A)** Tagesmittel der
+Ein Winter an Kohnen, gemessen von der Luft bis in den Firn. **(A)** Tagesmittel der
 Lufttemperatur 2026 gegen die Klimatologie 1979–2021 (Band = ±2σ; ERA5, mit den
 Stationsdaten der AWS9 quantil-korrigiert). Ende Juni erreicht ein Warmluftvorstoß
 **bis +22 K über dem Mittel**. **(B)** Derselbe Vorstoß im 2-m-Schacht: die Wärme dringt
 in den Schnee ein — nach zwei Tagen steht sie bei 0,8 m, nach zehn bei 1,5 m, gedämpft
 von 12 K auf 2 K. **(C)** Auf der Jahresskala dasselbe Prinzip: die Sommerwärme von
 Januar/Februar wandert nach unten und erreicht **im Winter 6–8 m Tiefe** (standardisiert
-je Tiefe, sonst wäre die Welle unterhalb weniger Meter unsichtbar). **(D)** Über die
-gesamte Kette fällt die Jahresvariabilität um **vier Größenordnungen**, von 10 K an der
-Oberfläche auf unter 10 mK unterhalb 30 m.
+je Tiefe, sonst wäre die Welle unterhalb weniger Meter unsichtbar). Dieselbe Kette misst
+weiter bis 62 m, wo das Jahressignal auf unter 10 mK gedämpft ist.
 
 **Warum die oberen 10–20 m zählen:** Dort entsteht das Eiskernarchiv. Die
 Firntemperatur steuert die Isotopendiffusion und den Dampftransport, die das Klimasignal
