@@ -19,6 +19,8 @@
 Rplots.pdf
 .DS_Store
 
+# Präsentationsgrafiken werden getrackt (figures/)
+
 # Field decode outputs (Greenland2026/data/) are tracked — filenames are keyed
 # by measurement time, so they stay stable per message/dataset.
 
