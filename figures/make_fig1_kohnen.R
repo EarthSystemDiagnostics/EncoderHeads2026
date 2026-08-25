@@ -57,7 +57,36 @@ pA <- ggplot(n1, aes(date,T)) +
         plot.title=element_text(face="bold", size=15),
         plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
 
-## --- Panel B: Firn (standardisierte Anomalie, regelmäßiges Tiefengitter) -----
+## --- Panel B: 2-m-Schacht, Eindringen des Juli-Ereignisses ------------------
+nP <- dep3 |> filter(chain=="C25.4.C (2 m Schacht)", depth_m <= 1.5)
+pit <- lapply(seq_len(nrow(nP)), function(i){
+  v <- rowMeans(cbind(d3[[sprintf("n%d.ntc1_temp_C",nP$node[i])]],
+                      d3[[sprintf("n%d.ntc2_temp_C",nP$node[i])]]), na.rm=TRUE)
+  tibble(date=as.Date(d3$time_utc), depth=nP$depth_m[i], T=v)}) |> bind_rows() |>
+  group_by(depth,date) |> summarise(T=mean(T,na.rm=TRUE), .groups="drop") |>
+  filter(date >= as.Date("2026-06-20"), date <= as.Date("2026-07-20"))
+base <- pit |> filter(date <= as.Date("2026-06-29")) |> group_by(depth) |>
+  summarise(b=mean(T,na.rm=TRUE), .groups="drop")
+pit <- pit |> left_join(base, by="depth") |> mutate(dT=T-b, lab=sprintf("%.1f m", depth))
+lastp <- pit |> filter(depth %in% c(0.2,0.6,1.0,1.5)) |> group_by(depth) |> slice_max(date, n=1) |> ungroup()
+pB <- ggplot(pit, aes(date, dT, colour=depth, group=depth)) +
+  annotate("rect", xmin=as.Date("2026-06-30"), xmax=as.Date("2026-07-02"),
+           ymin=-Inf, ymax=Inf, fill=ORANGE, alpha=0.12) +
+  geom_hline(yintercept=0, colour="grey80", linewidth=0.3) +
+  geom_line(linewidth=0.8) +
+  geom_text(data=lastp, aes(label=lab), hjust=-0.15, size=3.1, show.legend=FALSE) +
+  annotate("text", x=as.Date("2026-07-01"), y=13.6, size=3.2, colour=ORANGE, hjust=0.5,
+           label="Ereignis") +
+  scale_colour_gradient(low="#86b6ef", high="#0d366b", guide="none") +
+  scale_x_date(NULL, date_breaks="10 days", date_labels="%d.%m.",
+               expand=expansion(mult=c(0.02,0.14))) +
+  scale_y_continuous("Erwärmung im Schnee (K)", breaks=seq(0,12,4)) +
+  labs(subtitle="B · 2-m-Schacht: die Wärme dringt ein") +
+  theme_minimal(base_size=12) +
+  theme(panel.grid.minor=element_blank(), panel.grid.major.x=element_blank(),
+        plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
+
+## --- Panel C: Jahreswelle im Firn 0,2-10 m -----------------------------------
 nB <- dep3 |> filter(chain=="C25.4.B (10 m, Schnee)")
 firn <- lapply(seq_len(nrow(nB)), function(i){
   v <- rowMeans(cbind(d3[[sprintf("n%d.ntc1_temp_C",nB$node[i])]],
@@ -72,40 +101,48 @@ firn_i <- bind_rows(lapply(fs, function(d) {
   d <- d[order(d$depth), ]
   tibble(date = d$date[1], depth = grid, z = approx(d$depth, d$z, xout = grid, rule = 2)$y)
 }))
-pB <- ggplot(firn_i, aes(date, depth, fill=z)) +
+pC <- ggplot(firn_i, aes(date, depth, fill=z)) +
   geom_raster(interpolate=TRUE) +
-  scale_fill_gradient2(name="standardisiert", low=BLUE, mid="#f0efec", high=RED,
+  annotate("text", x=as.Date("2026-04-20"), y=3.4, size=3.3, colour="white", fontface="bold",
+           label="Sommer 2026") +
+  annotate("segment", x=as.Date("2026-02-20"), xend=as.Date("2026-06-20"),
+           y=1.2, yend=7.2, colour="white", linewidth=0.4, linetype="22") +
+  scale_fill_gradient2(name=NULL, low=BLUE, mid="#f0efec", high=RED,
                        midpoint=0, limits=c(-2,2), oob=scales::squish,
-                       breaks=c(-2,0,2), labels=c("kalt","", "warm")) +
-  scale_y_reverse("Tiefe im Firn (m)", breaks=c(0.2,2,4,6,8,10), expand=c(0,0)) +
-  scale_x_date(NULL, date_breaks="1 month", date_labels="%b", expand=c(0,0)) +
-  labs(subtitle="B · Firn 0,2–10 m: dieselbe Welle wandert nach unten, gedämpft und verzögert") +
+                       breaks=c(-2,2), labels=c("kalt","warm")) +
+  scale_y_reverse("Tiefe (m)", breaks=c(0.2,2,4,6,8,10), expand=c(0,0)) +
+  scale_x_date(NULL, date_breaks="2 months", date_labels="%b", expand=c(0,0)) +
+  labs(subtitle="C · Jahreswelle bis 10 m") +
   theme_minimal(base_size=12) +
   theme(panel.grid=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)),
-        legend.key.width=unit(0.45,"cm"), legend.key.height=unit(0.8,"cm"))
+        legend.key.width=unit(0.35,"cm"), legend.key.height=unit(0.7,"cm"),
+        legend.text=element_text(size=8))
 
-## --- Panel C: Variabilität gegen Tiefe (je Kette getrennt) -------------------
+## --- Panel D: Variabilität gegen Tiefe (je Kette getrennt) -------------------
 amp <- lapply(seq_len(nrow(dep3)), function(i){
   if (is.na(dep3$depth_m[i])) return(NULL)
   v <- rowMeans(cbind(d3[[sprintf("n%d.ntc1_temp_C",dep3$node[i])]],
                       d3[[sprintf("n%d.ntc2_temp_C",dep3$node[i])]]), na.rm=TRUE)
   tibble(depth=dep3$depth_m[i], sd=sd(v,na.rm=TRUE), chain=dep3$chain[i])}) |> bind_rows()
-pC <- ggplot(amp, aes(sd, depth, group=chain)) +
+pD <- ggplot(amp, aes(sd, depth, group=chain)) +
   geom_path(colour=GREY, linewidth=0.3, alpha=0.45) +
   geom_point(colour=BLUE, size=2.2) +
-  annotate("text", x=0.0035, y=45, hjust=0, size=3.3, colour=GREY, lineheight=0.95,
-           label="unter 30 m:\nSignal < 10 mK") +
+  annotate("rect", xmin=0.0009, xmax=20, ymin=0.15, ymax=20, fill=ORANGE, alpha=0.07) +
+  annotate("text", x=15, y=17, hjust=1, vjust=1, size=3.2, colour=ORANGE, lineheight=0.95,
+           fontface="bold", label="0–20 m = letzte ~140 Jahre:\nhier entsteht das Archiv") +
+  annotate("text", x=15, y=45, hjust=1, size=3.2, colour=GREY, lineheight=0.95,
+           label="darunter: Jahrhunderte,\nSignal unter 10 mK") +
   scale_y_continuous("Tiefe (m)", trans=scales::compose_trans("log10","reverse"),
                      breaks=c(0.2,1,3,10,30,62)) +
   scale_x_log10("Jahresvariabilität (K)", breaks=c(0.001,0.01,0.1,1,10),
                 labels=c("0,001","0,01","0,1","1","10")) +
-  labs(subtitle="C · bis 62 m Tiefe") +
+  labs(subtitle="D · Archivtiefe") +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
 
-fig <- pA / (pB + pC + plot_layout(widths=c(2,1))) + plot_layout(heights=c(1,1.05)) &
+fig <- pA / (pB + pC + pD + plot_layout(widths=c(1.15,1.35,0.8))) + plot_layout(heights=c(1,0.95)) &
   theme(plot.background=element_rect(fill=SURF, colour=NA))
-ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=11, height=8.2, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=13, height=8.4, dpi=200, bg=SURF)
 hw2 <- n1 |> filter(hw) |> mutate(dK = T - clim_mean)
 cat(sprintf("HW: %s .. %s | T %.1f..%.1f | Klima %.1f | Anomalie %.1f..%.1f K | sigma %.2f..%.2f\n",
   format(min(hw2$date)), format(max(hw2$date)), min(hw2$T), max(hw2$T),
