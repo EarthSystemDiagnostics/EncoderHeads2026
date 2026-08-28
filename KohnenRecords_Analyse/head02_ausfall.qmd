@@ -1,0 +1,155 @@
+---
+title: "head02 (B46, Modem 231708) — Analyse des Datenausfalls Februar 2026"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 10
+    fig-height: 5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+head02 stand an **B46** und wurde abgestellt, nachdem die Daten unbrauchbar wurden.
+Grundlage dieser Analyse sind die 204 MO-Nachrichten in
+`data/messages-1781290180297_old.csv` (13.01.–17.02.2026); der Kopf ist nicht in
+`decode_combined.R` eingebunden, die Auswertung erfolgt hier direkt aus dem Payload.
+
+```{r setup}
+library(readr); library(dplyr); library(tidyr); library(lubridate)
+library(ggplot2); library(patchwork)
+
+raw <- read_csv("./data/messages-1781290180297_old.csv", show_col_types = FALSE) |>
+  filter(grepl("231708", Device)) |>
+  transmute(recv = dmy_hms(`Date Time (UTC)`, tz = "UTC"),
+            nbytes = `Length (Bytes)`, hex = Payload) |>
+  arrange(recv)
+
+hx <- function(h, from, n) strtoi(substr(h, from, from + n - 1L), 16L)   # 1-basiert, in Hex-Zeichen
+u24 <- function(h, from) strtoi(substr(h, from, from + 5L), 16L)
+
+# Format ab 14.01.: 209 B ohne Trenner = 4 B Zeit + 3 B ADC-Temp
+# + 25 Knoten x (NTC1 3 B, GND 2 B, Druck 3 B) + 2 B Batterie.
+NODES <- 25L
+msg <- raw |> mutate(
+  t_int   = as_datetime(hx(hex, 1, 8)),
+  adc_C   = 6.101e-5 * u24(hex, 9) - 256.6,
+  bat_mV  = strtoi(substr(hex, nchar(hex) - 3L, nchar(hex)), 16L),
+  sep     = lengths(regmatches(hex, gregexpr("7c", hex, ignore.case = TRUE))))
+
+ntc <- function(h) {
+  if (nchar(h) < 40) return(rep(NA_real_, NODES))
+  sapply(seq_len(NODES), function(k) {
+    p <- 15L + (k - 1L) * 16L                      # 7 B Kopf = 14 Hex-Zeichen
+    if (p + 5L > nchar(h) - 4L) NA_real_ else u24(h, p) })
+}
+nodes <- do.call(rbind, lapply(msg$hex, ntc))
+colnames(nodes) <- paste0("n", seq_len(NODES))
+msg <- bind_cols(msg, as_tibble(nodes))
+long <- msg |> select(recv, nbytes, bat_mV, num_range("n", 1:NODES)) |>
+  pivot_longer(num_range("n", 1:NODES), names_to = "node", values_to = "counts") |>
+  mutate(node = as.integer(sub("n", "", node)))
+EVENT <- as_datetime("2026-02-02 15:00:00")
+```
+
+## Befund
+
+```{r verdict, results='asis'}
+pre  <- long |> filter(recv < EVENT, nbytes == 209)
+post <- long |> filter(recv > as_datetime("2026-02-04"), nbytes > 150)
+spread <- function(d) d |> group_by(recv) |> summarise(rs = (max(counts, na.rm=TRUE)-min(counts, na.rm=TRUE))/
+                                                            median(counts, na.rm=TRUE), .groups="drop")
+cat(sprintf("- **Bis 02.02.2026 13:12 UTC arbeitete die Kette vollständig.** Alle %d Knoten liefern in den 209-B-Nachrichten Werte, die als Tiefenprofil geordnet sind (Median %s–%s Counts, geordnet nach Tiefe); relative Spannweite je Nachricht %.0f %%.\n",
+  NODES, format(round(min(pre |> group_by(node) |> summarise(m=median(counts,na.rm=TRUE)) |> pull(m))), big.mark="."),
+  format(round(max(pre |> group_by(node) |> summarise(m=median(counts,na.rm=TRUE)) |> pull(m))), big.mark="."),
+  100*median(spread(pre)$rs)))
+cat(sprintf("- **Zwischen 13:12 und 17:13 UTC am 02.02.2026 bricht es ab.** Die folgenden sechs Nachrichten sind auf 10–133 B verstümmelt und melden **Batterie = 0 mV**.\n"))
+cat(sprintf("- **Ab 03.02.2026 17:12 UTC senden Kopf und Modem wieder vollständig** (209 B, Batterie %d–%d mV), aber die Knotenwerte sind unbrauchbar: relative Spannweite %.0f %%, Werte an den Wandlergrenzen statt im Messbereich.\n",
+  min(post$bat_mV, na.rm=TRUE), max(post$bat_mV, na.rm=TRUE), 100*median(spread(post)$rs)))
+cat(sprintf("- **Die Elektronik selbst blieb intakt.** Zeitstempel, Batteriemessung und die Platinentemperatur laufen weiter: %.2f °C am 02.02., %.2f °C am 17.02. — eine glatte Drift von %.2f K über zwei Wochen.\n",
+  msg$adc_C[max(which(msg$recv < EVENT))], tail(msg$adc_C,1),
+  tail(msg$adc_C,1) - msg$adc_C[max(which(msg$recv < EVENT))]))
+cat("- head03 und head04 sendeten am 02./03.02.2026 unauffällig weiter; das Ereignis betrifft nur head02.\n")
+```
+
+## Zeitreihe
+
+```{r ts, fig.height=7}
+p1 <- ggplot(long |> filter(!is.na(counts)), aes(recv, counts, group = node)) +
+  annotate("rect", xmin = EVENT, xmax = max(long$recv), ymin = -Inf, ymax = Inf,
+           fill = "#eb6834", alpha = 0.08) +
+  geom_line(colour = "#2a78d6", alpha = 0.5, linewidth = 0.3) +
+  annotate("text", x = EVENT, y = 1.6e7, hjust = -0.05, size = 3.4, colour = "#eb6834",
+           label = "02.02. 13:12 UTC letzte gültige Nachricht") +
+  scale_y_continuous("NTC1 (Counts)", labels = scales::label_number(scale = 1e-6, suffix = " M")) +
+  scale_x_datetime(NULL, date_breaks = "1 week", date_labels = "%d.%m.") +
+  labs(subtitle = "A · alle 25 Knoten: geordnetes Profil bis zum Ereignis, danach Werte an den Wandlergrenzen") +
+  theme_minimal(base_size = 12)
+
+p2 <- ggplot(msg, aes(recv)) +
+  annotate("rect", xmin = EVENT, xmax = max(msg$recv), ymin = -Inf, ymax = Inf,
+           fill = "#eb6834", alpha = 0.08) +
+  geom_step(aes(y = bat_mV), colour = "#2a78d6", linewidth = 0.5) +
+  scale_y_continuous("Batterie (mV)") +
+  scale_x_datetime(NULL, date_breaks = "1 week", date_labels = "%d.%m.") +
+  labs(subtitle = "B · Batterie: 0 mV in den verstümmelten Nachrichten, danach fast konstant") +
+  theme_minimal(base_size = 12)
+
+p3 <- ggplot(msg, aes(recv, adc_C)) +
+  annotate("rect", xmin = EVENT, xmax = max(msg$recv), ymin = -Inf, ymax = Inf,
+           fill = "#eb6834", alpha = 0.08) +
+  geom_line(colour = "#2a78d6", linewidth = 0.5) +
+  scale_y_continuous("Platine (°C)") +
+  scale_x_datetime(NULL, date_breaks = "1 week", date_labels = "%d.%m.") +
+  labs(subtitle = "C · Platinentemperatur: läuft unverändert weiter") +
+  theme_minimal(base_size = 12)
+
+p1 / p2 / p3 + plot_layout(heights = c(2, 1, 1))
+```
+
+## Profil vor dem Ausfall
+
+```{r profile, fig.height=4}
+pre_prof <- long |> filter(recv < EVENT, nbytes == 209) |>
+  group_by(node) |> summarise(counts = median(counts, na.rm = TRUE), .groups = "drop")
+ggplot(pre_prof, aes(node, counts)) +
+  geom_line(colour = "grey70") + geom_point(colour = "#2a78d6", size = 2) +
+  scale_y_continuous("NTC1 (Counts)", labels = scales::label_number(scale = 1e-6, suffix = " M")) +
+  scale_x_continuous("Knoten", breaks = seq(1, 25, 2)) +
+  labs(subtitle = "Median je Knoten, 18.01.–02.02.2026 — geordnetes Profil, keine Ausfälle") +
+  theme_minimal(base_size = 12)
+```
+
+## Deutung
+
+Das Muster nach dem 02.02. — alle Kanäle an den Wandlergrenzen, benachbarte Knoten
+innerhalb einer Nachricht nahezu identisch mit kleinen monotonen Inkrementen — ist die
+Signatur eines **offenen bzw. nicht mehr angesteuerten Eingangs**: Der Wandler misst für
+jeden Knoten dasselbe Potenzial und driftet währenddessen langsam. Es sind keine
+verrauschten Sensorwerte, sondern gar keine Sensorwerte.
+
+Dass Zeitstempel, Batteriemessung und Platinentemperatur weiterlaufen, grenzt den Ort
+ein: **Logger und Modem sind in Ordnung, die Verbindung zur Kette ist es nicht.** Die
+verstümmelten Nachrichten mit Batterie 0 mV am 02.02. zwischen 13:12 und 17:13 UTC
+datieren das auslösende Ereignis auf wenige Stunden und deuten auf einen
+Spannungseinbruch (Brown-out) hin — danach kam die Kette nicht zurück, obwohl das
+Systemende sich wieder fing.
+
+Als Ursachen kommen in Frage: Unterbrechung oder Kurzschluss auf dem Kettenbus
+(Steckverbindung, Kabel), Ausfall der Versorgung des Kettenzweigs, oder ein defekter
+Multiplexer/Treiber im Kettenpfad. Aus der Telemetrie allein sind diese nicht zu
+trennen; entscheiden ließe sich das nur am Gerät.
+
+## Nebenbefund: Formatwechsel am 14.01.2026
+
+Bis zum 13.01. sendete head02 **Nachrichtenpaare** (340 B + 146 B) mit `0x7C`-Trennern
+und 22 Knoten à vier Feldern (NTC1, NTC2, GND, Druck). Ab dem 14.01. kommen einzelne
+209-B-Nachrichten **ohne Trenner** mit 25 Knoten à drei Feldern (NTC1, GND, Druck) —
+also ein anderer Firmware-/Konfigurationsstand. Beide Formate sind für sich konsistent;
+der Wechsel liegt drei Wochen vor dem Ausfall und ist von ihm unabhängig.
