@@ -45,12 +45,12 @@ pA <- ggplot(n1, aes(date,T)) +
   annotate("segment", x=as.Date("2026-06-10"), xend=as.Date("2026-06-28"),
            y=-27.5, yend=-30.5, colour=ORANGE, linewidth=0.4) +
   annotate("text", x=as.Date("2026-06-09"), y=-27, hjust=1, size=3.6, colour=ORANGE, lineheight=0.95,
-           label="Wärmeereignis 30.06.–02.07.\nbis +22 K über dem Mittel") +
+           label="Warm event 30 Jun – 2 Jul\nup to +22 K above the mean") +
   annotate("text", x=as.Date("2026-02-20"), y=-63, hjust=0, size=3.2, colour=GREY,
-           label="Band: ±2σ der Klimatologie 1979–2021 (ERA5, an AWS9 quantil-korrigiert)") +
+           label="Band: ±2σ of the 1979–2021 climatology (ERA5, quantile-mapped to AWS9)") +
   scale_x_date(NULL, date_breaks="1 month", date_labels="%b", expand=c(0.01,0)) +
-  scale_y_continuous("Lufttemperatur (°C)", breaks=seq(-70,-20,10)) +
-  labs(subtitle="A · Atmosphäre: Tagesmittel 2026 gegen die Klimatologie") +
+  scale_y_continuous("Air temperature (°C)", breaks=seq(-70,-20,10)) +
+  labs(subtitle="A · Atmosphere: daily means 2026 against the climatology") +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), panel.grid.major.x=element_blank(),
         plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
@@ -74,12 +74,12 @@ pB <- ggplot(pit, aes(date, dT, colour=depth, group=depth)) +
   geom_line(linewidth=0.8) +
   geom_text(data=lastp, aes(label=lab), hjust=-0.15, size=3.1, show.legend=FALSE) +
   annotate("text", x=as.Date("2026-07-01"), y=13.6, size=3.2, colour=ORANGE, hjust=0.5,
-           label="Ereignis") +
+           label="event") +
   scale_colour_gradient(low="#86b6ef", high="#0d366b", guide="none") +
-  scale_x_date(NULL, date_breaks="10 days", date_labels="%d.%m.",
+  scale_x_date(NULL, date_breaks="10 days", date_labels="%d %b",
                expand=expansion(mult=c(0.02,0.14))) +
-  scale_y_continuous("Erwärmung im Schnee (K)", breaks=seq(0,12,4)) +
-  labs(subtitle="B · 2-m-Schacht: die Wärme dringt ein") +
+  scale_y_continuous("Warming in the snow (K)", breaks=seq(0,12,4)) +
+  labs(subtitle="B · 2 m pit: the heat penetrates") +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), panel.grid.major.x=element_blank(),
         plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
@@ -102,15 +102,15 @@ firn_i <- bind_rows(lapply(fs, function(d) {
 pC <- ggplot(firn_i, aes(date, depth, fill=z)) +
   geom_raster(interpolate=TRUE) +
   annotate("text", x=as.Date("2026-04-20"), y=3.4, size=3.3, colour="white", fontface="bold",
-           label="Sommer 2026") +
+           label="summer 2026") +
   annotate("segment", x=as.Date("2026-02-20"), xend=as.Date("2026-06-20"),
            y=1.2, yend=7.2, colour="white", linewidth=0.4, linetype="22") +
   scale_fill_gradient2(name=NULL, low=BLUE, mid="#f0efec", high=RED,
                        midpoint=0, limits=c(-2,2), oob=scales::squish,
-                       breaks=c(-2,2), labels=c("kalt","warm")) +
-  scale_y_reverse("Tiefe (m)", breaks=c(0.2,2,4,6,8,10), expand=c(0,0)) +
+                       breaks=c(-2,2), labels=c("cold","warm")) +
+  scale_y_reverse("Depth (m)", breaks=c(0.2,2,4,6,8,10), expand=c(0,0)) +
   scale_x_date(NULL, date_breaks="2 months", date_labels="%b", expand=c(0,0)) +
-  labs(subtitle="C · Jahreswelle: der Sommer erreicht im Winter 6–8 m Tiefe") +
+  labs(subtitle="C · Annual wave: summer reaches 6–8 m depth by winter") +
   theme_minimal(base_size=12) +
   theme(panel.grid=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)),
         legend.key.width=unit(0.35,"cm"), legend.key.height=unit(0.7,"cm"),
@@ -127,20 +127,37 @@ pD <- ggplot(amp, aes(sd, depth, group=chain)) +
   geom_point(colour=BLUE, size=2.2) +
   annotate("rect", xmin=0.0009, xmax=20, ymin=0.15, ymax=20, fill=ORANGE, alpha=0.07) +
   annotate("text", x=15, y=17, hjust=1, vjust=1, size=3.2, colour=ORANGE, lineheight=0.95,
-           fontface="bold", label="0–20 m = letzte ~140 Jahre:\nhier entsteht das Archiv") +
+           fontface="bold", label="0–20 m = last ~140 years:\nwhere the archive forms") +
   annotate("text", x=15, y=45, hjust=1, size=3.2, colour=GREY, lineheight=0.95,
-           label="darunter: Jahrhunderte,\nSignal unter 10 mK") +
-  scale_y_continuous("Tiefe (m)", trans=scales::compose_trans("log10","reverse"),
+           label="below: centuries,\nsignal under 10 mK") +
+  scale_y_continuous("Depth (m)", trans=scales::compose_trans("log10","reverse"),
                      breaks=c(0.2,1,3,10,30,62)) +
-  scale_x_log10("Jahresvariabilität (K)", breaks=c(0.001,0.01,0.1,1,10),
-                labels=c("0,001","0,01","0,1","1","10")) +
-  labs(subtitle="D · Archivtiefe") +
+  scale_x_log10("Annual variability (K)", breaks=c(0.001,0.01,0.1,1,10),
+                labels=c("0.001","0.01","0.1","1","10")) +
+  labs(subtitle="D · Archive depth") +
   theme_minimal(base_size=12) +
   theme(panel.grid.minor=element_blank(), plot.subtitle=element_text(colour=GREY, margin=margin(b=6)))
 
-fig <- pA / (pB + pC + plot_layout(widths=c(1,1.5))) + plot_layout(heights=c(1,0.95)) &
-  theme(plot.background=element_rect(fill=SURF, colour=NA))
-ggsave(file.path("../figures", "fig1_kohnen.png"), fig, width=11, height=7.6, dpi=200, bg=SURF)
+
+## --- Beschriftungsvarianten ------------------------------------------------
+## voll      : "A · Text"      (Standard)
+## nolabel   : "Text"          (ohne Panelbuchstaben)
+## bare      : ohne Untertitel (Titel setzt der Vortragende)
+strip_letter <- function(p) { st <- p$labels$subtitle
+  if (!is.null(st)) p$labels$subtitle <- sub("^[A-D] . ", "", st); p }
+drop_sub <- function(p) { p$labels$subtitle <- NULL; p }
+
+build1 <- function(f) f(pA) / (f(pB) + f(pC) + plot_layout(widths=c(1,1.5))) +
+  plot_layout(heights=c(1,0.95)) & theme(plot.background=element_rect(fill=SURF, colour=NA))
+
+ggsave(file.path("../figures", "fig1_kohnen.png"),         build1(identity),     width=11, height=7.6, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1_kohnen_nolabel.png"), build1(strip_letter), width=11, height=7.6, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1_kohnen_bare.png"),    build1(drop_sub),     width=11, height=7.2, dpi=200, bg=SURF)
+
+## Einzelpanels ohne Beschriftung, fuer freie Verwendung im Vortrag
+ggsave(file.path("../figures", "fig1a_atmosphere_bare.png"), drop_sub(pA), width=11, height=4.2, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1b_pit_bare.png"),        drop_sub(pB), width=5.0, height=4.2, dpi=200, bg=SURF)
+ggsave(file.path("../figures", "fig1c_annualwave_bare.png"), drop_sub(pC), width=7.0, height=4.2, dpi=200, bg=SURF)
 hw2 <- n1 |> filter(hw) |> mutate(dK = T - clim_mean)
 cat(sprintf("HW: %s .. %s | T %.1f..%.1f | Klima %.1f | Anomalie %.1f..%.1f K | sigma %.2f..%.2f\n",
   format(min(hw2$date)), format(max(hw2$date)), min(hw2$T), max(hw2$T),

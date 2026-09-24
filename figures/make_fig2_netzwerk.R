@@ -31,13 +31,13 @@ p <- ggplot() +
   geom_text(data=kco, aes(X, Y, label=lab, hjust=hj, vjust=vj), size=3.5, colour=GREY,
             lineheight=0.95) +
   annotate("text", x=-2.35e6, y=1.55e6, hjust=0, size=4.2, colour=BLUE, fontface="bold",
-           label="Kohnen: läuft seit 2026") +
+           label="Kohnen: running since 2026") +
   annotate("text", x=-2.35e6, y=1.33e6, hjust=0, size=3.5, colour=GREY, lineheight=1,
-           label="35 Sensoren, Luft bis 62 m Tiefe,\nTelemetrie täglich") +
+           label="35 sensors, air to 62 m depth,\ndaily telemetry") +
   annotate("text", x=-2.35e6, y=-1.55e6, hjust=0, size=4.2, colour=ORANGE, fontface="bold",
            label="PlateauInSync 2028/29") +
   annotate("text", x=-2.35e6, y=-1.78e6, hjust=0, size=3.5, colour=GREY, lineheight=1,
-           label="5 800 km Traverse, ~15 Standorte —\ndasselbe System als Netzwerk") +
+           label="5,800 km traverse, ~15 sites —\nthe same system as a network") +
   coord_sf(xlim=c(-2.5e6, 2.9e6), ylim=c(-2.3e6, 2.3e6), expand=FALSE) +
 
   theme_void(base_size=12) +

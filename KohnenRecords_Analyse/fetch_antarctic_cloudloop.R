@@ -18,7 +18,7 @@
 suppressMessages({library(httr2); library(jsonlite); library(base64enc)
                   library(dplyr); library(purrr); library(lubridate); library(readr)})
 `%||%` <- function(a, b) if (is.null(a)) b else a
-FROM <- "2026-01-01T00:00:00"; TO <- "2026-09-01T00:00:00"
+FROM <- "2026-01-01T00:00:00"; TO <- format(Sys.time() + 86400, "%Y-%m-%dT%H:%M:%S", tz = "UTC")
 
 tok <- Sys.getenv("CLOUDLOOP_TOKEN", unset=NA)
 if (is.na(tok) || !nzchar(tok)) tok <- trimws(readLines("../cloudloop/.token", warn=FALSE)[1])

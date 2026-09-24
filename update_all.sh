@@ -18,13 +18,13 @@ echo "== 2/4  Antarctic fetch + decode (→ KohnenRecords_Analyse/data/) =="
 
 echo "== 3/4  Render Greenland reports =="
 (cd Greenland2026 &&
-   for d in decode_snowmelt_newgrip decode_snowmelt_dye3 decode_chain system_state; do
+   for d in decode_snowmelt_newgrip decode_snowmelt_dye3 decode_chain druck_temperatur system_state; do
      quarto render "$d.qmd"
    done)
 
 echo "== 4/4  Render Kohnen reports =="
 (cd KohnenRecords_Analyse &&
-   for d in head03_profile head04_profile ausfallanalyse_kohnen vergleich_b50_b40 heatwave_n1; do
+   for d in head02_profile head03_profile head04_profile ausfallanalyse_kohnen vergleich_b50_b40 heatwave_n1; do
      quarto render "$d.qmd"
    done)
 

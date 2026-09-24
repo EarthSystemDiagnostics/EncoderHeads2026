@@ -591,6 +591,515 @@ knitr::kable(
 
 ---
 
+---
+
+# Bohrloch-Experiment: Luft gegen Schnee
+
+Beide Ketten wurden am **08.07.2026** in frisch gebohrte Löcher eingebracht, rund
+**10 m voneinander entfernt**, mit identischer Tiefenbelegung. **Kette 1 steht im offenen,
+luftgefüllten Bohrloch, Kette 2 im mit Schnee verfüllten** (Tiefentabelle: „CGB 10 Nodes
+in SNOW!"). Die Frage für künftige Firntemperatur-Messungen: muss das Loch verfüllt werden?
+
+Zwei Störgrößen sind zu trennen:
+
+* **Bohrstörung.** Beide Löcher wurden frisch gebohrt, die Ketten mit Oberflächen­temperatur
+  eingebracht. Der Firn braucht Zeit bis zum Gleichgewicht; die Angleichung ist ein
+  Übergangsvorgang, keine Eigenschaft der Verfüllung.
+* **Sensor-Offsets.** Diese Ketten laufen auf der universellen Mean-S4-Kurve, nicht auf
+  Lab-S4 pro Sensor. Der **Mittelwert** der Differenz zweier Sensoren ist damit auf einige
+  10 mK unsicher. Die **Streuung einer Zeitreihe um sich selbst** ist davon nicht betroffen
+  — deshalb ist die Tag-zu-Tag-Unruhe (A) das belastbare Kriterium, nicht die Differenz (C).
+
+Wie groß dieser Rest ist, zeigen die **Replikate NTC1/NTC2 desselben Knotens**: sie sitzen am
+selben Ort, jede Differenz zwischen ihnen ist Kalibrierrest.
+
+```{r cal-residual}
+cal_res <- series |> filter(!is.na(ntc_C), time >= max(time) - 30 * 86400) |>
+  group_by(chain, depth_m) |> summarise(d_mK = mean(ntc1_C - ntc2_C) * 1000, .groups = "drop")
+cat(sprintf("NTC1 - NTC2 desselben Knotens (Mean-S4-Kurve, %d Knoten): RMS %.0f mK, Spannweite %.0f bis %+.0f mK.\n",
+            nrow(cal_res), sqrt(mean(cal_res$d_mK^2)), min(cal_res$d_mK), max(cal_res$d_mK)))
+```
+
+Für diese beiden Ketten liegt **keine Lab-S4-Kalibrierung pro Sensor** vor: die Knoten-IDs
+(Kette 1: 34, 1, 3, 5, 6, 7, 8, 15, 16, 17; Kette 2: 33, 4, 10, 11, 12, 13, 20, 21, 22, 24)
+kommen in der Calibration Registry im Batch `greenland26` nicht vor — der enthält SM1/SM2
+und die Nachkalibriersätze vom 06./07.07.2026. Sobald eine Kalibrierung dieser Ketten
+vorliegt, wird sie über `head_config$calibration` eingehängt; die Diagnostik A bleibt davon
+unberührt, C wird dann auf 10-mK-Niveau auswertbar.
+
+## A · Tag-zu-Tag-Unruhe je Bohrloch
+
+Aus den Tagesdifferenzen `T(t+1d) − T(t)` folgt die Streuung `σ_Tag = sd(ΔT)/√2`. Das
+Instrumentenniveau liefern die **Replikate NTC1/NTC2 desselben Knotens**: bewegen sich
+beide Kanäle gemeinsam, ist die Unruhe physikalisch und keine Elektronik. Ausgewertet wird
+das **letzte 30-Tage-Fenster**, damit die Angleichung nach dem Einbau nicht mitzählt.
+
+```{r noise-daily, eval=multi}
+QUIET_DAYS <- 30
+t_end  <- max(series$time)
+quiet  <- series |> filter(!is.na(ntc_C), time >= t_end - QUIET_DAYS * 86400)
+
+noise <- quiet |> arrange(chain, depth_m, time) |> group_by(chain, depth_m) |>
+  mutate(dt_d = as.numeric(difftime(time, lag(time), units = "days")),
+         dT   = ntc_C - lag(ntc_C)) |>
+  filter(!is.na(dT), dt_d > 0.5, dt_d < 1.5) |>
+  summarise(n = n(),
+            sd_day  = sd(dT) / sqrt(2) * 1000,
+            sd_repl = sd(ntc1_C - ntc2_C, na.rm = TRUE) / sqrt(2) * 1000,
+            .groups = "drop")
+
+knitr::kable(
+  noise |> select(chain, depth_m, n, sd_day, sd_repl) |>
+    tidyr::pivot_wider(id_cols = depth_m, names_from = chain,
+                       values_from = c(sd_day, sd_repl)) |> arrange(depth_m) |>
+    (\(d) transmute(d, `Tiefe (m)` = depth_m,
+        `Luft: σ_Tag (mK)`   = round(`sd_day_Kette 1`, 1),
+        `Schnee: σ_Tag (mK)` = round(`sd_day_Kette 2`, 1),
+        `Verhältnis`         = round(`sd_day_Kette 1` / `sd_day_Kette 2`, 1),
+        `Luft: Replikat (mK)`   = round(`sd_repl_Kette 1`, 1),
+        `Schnee: Replikat (mK)` = round(`sd_repl_Kette 2`, 1)))(),
+  caption = sprintf("Tag-zu-Tag-Streuung der letzten %d Tage, gegen das Replikat-Rauschen desselben Knotens.", QUIET_DAYS))
+```
+
+```{r noise-plot, eval=multi, fig.height=4.5, fig.width=9}
+ggplot(noise, aes(sd_day, depth_m, colour = chain)) +
+  geom_path(linewidth = 0.6) + geom_point(size = 2.4) +
+  geom_path(aes(sd_repl, depth_m, group = chain), linetype = "dotted", linewidth = 0.5) +
+  scale_x_log10(name = expression(sigma[Tag]*"  (mK, log)")) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_colour_manual(values = chain_cols, name = NULL,
+                      labels = c("Kette 1 — Luft", "Kette 2 — Schnee")) +
+  labs(title = "Tag-zu-Tag-Unruhe gegen Tiefe",
+       subtitle = sprintf("durchgezogen = Zeitreihe, gepunktet = Replikat NTC1/NTC2 (Instrumentenniveau); letzte %d Tage", QUIET_DAYS)) +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+## B · Zwei tiefe Sensoren im Detail
+
+Bei 21 und 30 m ist die Firntemperatur physikalisch träge: die Jahreswelle hat dort eine
+Amplitude von wenigen 10 mK und eine Zeitskala von Monaten, eine Tagesänderung von mehr als
+1 mK ist ausgeschlossen. Was schneller schwankt, kommt nicht aus dem Firn.
+
+```{r deep-detail, eval=multi, fig.height=5, fig.width=10}
+deep_ex <- series |> filter(depth_m %in% c(21, 30), !is.na(ntc_C),
+                            time >= t_end - QUIET_DAYS * 86400) |>
+  mutate(depth_lab = sprintf("%d m", depth_m))
+
+ggplot(deep_ex, aes(time, ntc_C, colour = chain)) +
+  geom_line(linewidth = 0.5) + geom_point(size = 1.5) +
+  scale_colour_manual(values = chain_cols, name = NULL,
+                      labels = c("Kette 1 — Luft", "Kette 2 — Schnee")) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  facet_wrap(~ depth_lab, scales = "free_y") +
+  labs(title = "Tiefe Sensoren, letzte 30 Tage", x = "Zeit (UTC)",
+       y = "Temperatur (°C, Mittel NTC1/NTC2)") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+```{r deep-repl, eval=multi}
+knitr::kable(
+  deep_ex |> group_by(chain, depth_m) |>
+    summarise(`Spannweite (mK)` = round(diff(range(ntc_C)) * 1000, 1),
+              `mittlere Drift (mK/d)` = round(coef(lm(ntc_C ~ as.numeric(time)))[2] * 86400 * 1000, 2),
+              `NTC1−NTC2 (mK)` = round(mean(ntc1_C - ntc2_C) * 1000, 1),
+              `dessen sd (mK)` = round(sd(ntc1_C - ntc2_C) * 1000, 1), .groups = "drop") |>
+    rename(Kette = chain, `Tiefe (m)` = depth_m),
+  caption = "Konstante Replikat-Differenz bei schwankender Temperatur = beide NTC-Kanäle bewegen sich gemeinsam; die Schwankung ist keine Sensorstörung.")
+```
+
+## C · Angleichung der beiden Bohrlöcher
+
+`ΔT(z,t) = T_Luft − T_Schnee` bei gleicher Tiefe. Der Übergangsanteil ist die
+unterschiedliche Erholung von der Bohrung, der Endwert enthält den Bohrloch-Effekt **und**
+den Kalibrier-Offset der Sensorpaare — deshalb nur als Größenordnung zu lesen.
+
+```{r dT-relax, eval=multi, fig.height=5, fig.width=10}
+# Der Einbautag selbst (Ketten noch oberflächenwarm, ΔT über 10 K) bleibt außen vor.
+dTs <- series |> filter(!is.na(ntc_C)) |>
+  select(time, chain, depth_m, ntc_C) |>
+  tidyr::pivot_wider(names_from = chain, values_from = ntc_C) |>
+  filter(!is.na(`Kette 1`), !is.na(`Kette 2`)) |>
+  mutate(dT = `Kette 1` - `Kette 2`,
+         td = as.numeric(difftime(time, min(time), units = "days"))) |>
+  filter(td >= 1)
+
+ggplot(dTs, aes(td, dT * 1000, colour = factor(depth_m))) +
+  geom_hline(yintercept = 0, colour = "grey60") +
+  geom_line(linewidth = 0.5) + geom_point(size = 1.2) +
+  scale_colour_viridis_d(name = "Tiefe (m)", option = "D", end = 0.9) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 50),
+                     breaks = c(-1000, -300, -100, -30, 0, 30, 100)) +
+  labs(title = "Differenz Luft − Schnee je Tiefe", x = "Tage seit Einbau",
+       y = expression(Delta*"T = T"[Luft]*" − T"[Schnee]*"  (mK, pseudo-log)")) +
+  theme_bw(base_size = 13)
+```
+
+Statt einer Zeitkonstanten aus einem Exponentialfit — die Angleichung ist keine reine
+Exponentielle — wird direkt abgelesen, **ab wann ΔT innerhalb von 100 bzw. 30 mK um seinen
+Endwert liegt** (Endwert = Mittel der letzten zehn Tage).
+
+```{r dT-tab, eval=multi}
+dt_tab <- bind_rows(lapply(split(dTs, dTs$depth_m), function(g) {
+  g <- g[order(g$td), ]
+  ende <- mean(tail(g$dT, 10))
+  hit  <- function(tol) { ok <- abs(g$dT - ende) < tol
+    j <- which(ok & !rev(cumsum(rev(!ok)) > 0))          # ab hier dauerhaft innerhalb
+    if (length(j)) g$td[min(j)] else NA_real_ }
+  data.frame(depth_m = g$depth_m[1], start = g$dT[1] * 1000, ende = ende * 1000,
+             t100 = hit(0.100), t30 = hit(0.030))
+}))
+
+knitr::kable(dt_tab |> transmute(`Tiefe (m)` = depth_m,
+    `ΔT nach 1 Tag (mK)` = round(start, 0), `ΔT letzte 10 Tage (mK)` = round(ende, 0),
+    `dauerhaft <100 mK (Tage)` = round(t100, 0), `dauerhaft <30 mK (Tage)` = round(t30, 0)),
+  caption = "Angleichung der beiden Bohrlöcher: Tage nach Einbau, ab denen ΔT dauerhaft innerhalb der Toleranz um seinen Endwert bleibt.")
+```
+
+Unterhalb von 8 m ist die Angleichung nach wenigen Tagen (100 mK) bzw. zwei bis drei Wochen
+(30 mK) abgeschlossen. Bei 1–5 m erreicht ΔT keinen festen Endwert: dort folgt das offene
+Loch der Oberfläche mit eigener Amplitude, die Differenz bleibt ein laufendes Signal und
+kein Übergangsvorgang. Die Restwerte von 30–110 mK unterhalb 8 m liegen in der Größenordnung
+der Kalibrier-Offsets der Mean-S4-Kurve und sind daher keine Aussage über das Bohrloch.
+
+## D · Zusammenhang mit Wind und Schichtung
+
+Getestet wird, ob die Unruhe im Luftloch einem äußeren Antrieb folgt: Windgeschwindigkeit
+der Summit-AWS (~30 km) und Schichtung der Luftsäule im Loch (`T(1 m) − T(30 m)`; positiv =
+oben wärmer = stabil, freie Konvektion unterdrückt).
+
+```{r noise-drivers, eval=multi}
+aws_d <- tryCatch({ options(timeout = 60)
+  suppressWarnings(readr::read_csv(
+    "https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/day/SUM_day.csv",
+    show_col_types = FALSE)) |> mutate(day = as.Date(time)) |>
+    select(day, wspd = wspd_u, t_air = t_u, p_aws = p_u) },
+  error = function(e) NULL)
+
+drv <- series |> filter(!is.na(ntc_C), depth_m >= 16,
+                        time >= t_end - QUIET_DAYS * 86400) |>
+  arrange(chain, depth_m, time) |> group_by(chain, depth_m) |>
+  mutate(dT_day = abs(ntc_C - lag(ntc_C))) |> ungroup() |>
+  filter(!is.na(dT_day)) |>
+  group_by(chain, day = as.Date(time)) |> summarise(unruhe = mean(dT_day) * 1000, .groups = "drop")
+
+strat <- series |> filter(depth_m %in% c(1, 30), !is.na(ntc_C),
+                          time >= t_end - QUIET_DAYS * 86400) |>
+  group_by(day = as.Date(time), depth_m) |> summarise(t = mean(ntc_C), .groups = "drop") |>
+  tidyr::pivot_wider(names_from = depth_m, values_from = t, names_prefix = "d") |>
+  mutate(schichtung = d1 - d30)
+
+if (!is.null(aws_d)) {
+  dd <- drv |> left_join(strat, by = "day") |> left_join(aws_d, by = "day")
+  knitr::kable(
+    dd |> group_by(Kette = chain) |>
+      summarise(`Tage` = sum(is.finite(unruhe)),
+                `mittlere Unruhe (mK/d)` = round(mean(unruhe, na.rm = TRUE), 1),
+                `r(Wind)` = round(cor(unruhe, wspd, use = "complete.obs"), 2),
+                `r(Schichtung)` = round(cor(unruhe, schichtung, use = "complete.obs"), 2),
+                `Schichtung (K)` = round(mean(schichtung, na.rm = TRUE), 1)),
+    caption = sprintf("Tagesunruhe der Sensoren ab 16 m im ruhigen Fenster (letzte %d Tage) gegen Wind und Schichtung der Luftsäule.", QUIET_DAYS))
+} else cat("Summit-AWS nicht erreichbar — Abschnitt D übersprungen.\n")
+```
+
+## E · Auslegung: wie tief muss verfüllt werden?
+
+Verfüllen kostet Zeit und Material, und zwar mit der Lochlänge. Die Frage ist deshalb nicht
+„Luft oder Schnee", sondern **ab welcher Tiefe die Unruhe des Luftlochs für das jeweilige
+Ziel klein genug ist**. Entscheidend dafür ist nicht σ_Tag allein, sondern ob sich die
+Unruhe **wegmitteln** lässt.
+
+```{r noise-structure, eval=multi}
+STRUCT_DAYS <- 45
+st <- series |> filter(!is.na(ntc_C), time >= t_end - STRUCT_DAYS * 86400)
+
+struct <- bind_rows(lapply(split(st, list(st$chain, st$depth_m), drop = TRUE), function(x) {
+  x <- x[order(x$time), ]; if (nrow(x) < 20) return(NULL)
+  x$td <- as.numeric(difftime(x$time, min(x$time), units = "days"))
+  r <- resid(loess(ntc_C ~ td, data = x, span = 0.5))
+  blk <- tapply(r, cut(seq_along(r), ceiling(length(r) / 10)), mean)
+  data.frame(chain = x$chain[1], depth_m = x$depth_m[1],
+             sigma = sd(r) * 1000, acf1 = acf(r, plot = FALSE, lag.max = 1)$acf[2],
+             sd_blk = sd(blk) * 1000, sd_mon = sd(r) * 1000 / sqrt(30))
+}))
+
+# Signal: gemessene Änderung der verfüllten Kette über das Fenster, je Tiefe
+sig <- st |> filter(chain == "Kette 2") |> arrange(depth_m, time) |> group_by(depth_m) |>
+  summarise(signal = abs(mean(tail(ntc_C, 3)) - mean(head(ntc_C, 3))) * 1000, .groups = "drop")
+
+# Dämpfungslänge der Saisonwelle aus denselben Amplituden (3–16 m)
+dfit <- lm(log(signal) ~ depth_m, data = sig |> filter(depth_m >= 3, depth_m <= 16, signal > 0))
+d_ann <- -1 / coef(dfit)[2]
+
+knitr::kable(
+  struct |> filter(chain == "Kette 1") |> left_join(sig, by = "depth_m") |>
+    mutate(saison = exp(predict(dfit, newdata = data.frame(depth_m = depth_m)))) |>
+    transmute(`Tiefe (m)` = depth_m,
+              `Änderung 6 Wochen (mK)` = round(signal, 0),
+              `Saisonwelle erwartet (mK)` = round(saison, 1),
+              `σ_Tag Luft (mK)` = round(sigma, 1),
+              `ACF(1 Tag)` = round(acf1, 2),
+              `σ 30-Tage-Mittel (mK)` = round(sd_mon, 1),
+              `σ Jahresmittel (mK)` = round(sigma / sqrt(365), 2)),
+  caption = sprintf("Luftloch: Rauschstruktur der letzten %d Tage. Spalte 2 ist die gemessene Änderung im verfüllten Loch (ab 16 m Restrelaxation, kein Saisonsignal), Spalte 3 die aus der Dämpfungslänge extrapolierte Saisonwelle.", STRUCT_DAYS))
+
+cat(sprintf("\nDämpfungslänge aus den Amplituden 3–16 m: d = %.1f m (R² = %.2f).\n",
+            d_ann, summary(dfit)$r.squared))
+```
+
+```{r noise-avg-plot, eval=multi, fig.height=5, fig.width=9}
+struct |> select(chain, depth_m, sigma, sd_mon) |>
+  tidyr::pivot_longer(c(sigma, sd_mon), names_to = "was", values_to = "mK") |>
+  mutate(was = factor(was, c("sigma", "sd_mon"), c("Einzelmessung", "30-Tage-Mittel"))) |>
+  ggplot(aes(mK, depth_m, colour = chain, linetype = was)) +
+  geom_path(linewidth = 0.6) + geom_point(size = 2) +
+  geom_path(data = sig, aes(signal, depth_m), inherit.aes = FALSE,
+            colour = "grey40", linewidth = 0.7) +
+  annotate("text", x = max(sig$signal) * 0.5, y = 2, label = "Signal (6 Wochen)",
+           colour = "grey40", size = 3.4, hjust = 0) +
+  scale_x_log10(name = "mK (log)") +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_colour_manual(values = chain_cols, name = NULL,
+                      labels = c("Kette 1 — Luft", "Kette 2 — Schnee")) +
+  scale_linetype_manual(values = c("solid", "22"), name = NULL) +
+  labs(title = "Rauschen vor und nach Mittelung, gegen das vorhandene Signal") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+**Was daraus folgt.** Die Unruhe des Luftlochs ist **weiß bis leicht antikorreliert**
+(ACF(1 Tag) ≤ 0). Sie mittelt sich damit voll heraus: aus 15–25 mK Einzelmessung bei 16–21 m
+werden 3–4 mK im Monatsmittel und rund 1 mK im Jahresmittel. Für alles, was langsamer läuft
+als ein Monat — Jahreswelle, mehrjähriger Trend, Paläosignal —, ist das Luftloch ab etwa 8 m
+brauchbar. In den obersten 5 m ist es das nicht: dort liegt die Unruhe bei 150–250 mK und das
+Ziel ist gerade das schnelle Signal.
+
+Die Saisonwelle selbst endet mit der Dämpfungslänge von 2,5 m ohnehin oberhalb von 20 m: bei
+16 m sind noch wenige mK zu erwarten, bei 21 m und tiefer nichts mehr. Die tiefen Sensoren
+messen das langsame Signal, und dafür ist die Mittelung über Monate der Normalfall.
+
+Nicht aus diesen Daten zu bestimmen ist ein **systematischer** Versatz des Luftlochs. Die
+gemessene Restdifferenz beider Löcher unterhalb 8 m (14–110 mK) liegt im Bereich der
+Kalibrierreste der Mean-S4-Kurve; ein tiefenabhängiger Versatz des Luftlochs in dieser
+Größenordnung lässt sich damit **nicht ausschließen**. Für Gradienten-Auswertungen ist das
+die relevante Restunsicherheit, nicht das Rauschen.
+
+**Vorschlag für die Auslegung**
+
+* **Tiefes Loch in Luft, Sensoren erst ab ~8–10 m.** Oberhalb bringt es nichts, unterhalb
+  reicht es für Monats- und Jahresmittel. Das Verfüllen entfällt dort, wo es am meisten
+  Material und Zeit kostet.
+* **Flaches Loch (10–20 m) verfüllt**, mit der dichten Sensorbelegung der obersten Meter.
+  Dort sitzt das schnelle Signal, dort ist Verfüllen billig: bei 5 cm Lochradius sind 20 m
+  rund 0,16 m³ ≈ 60 kg Schnee, 30 m wären 0,24 m³ ≈ 90 kg.
+* **Überlappung 10–16 m in beiden Löchern.** Das ist der Teil, den man nicht weglassen
+  sollte: nur dort lässt sich ein systematischer Versatz des Luftlochs überhaupt messen und
+  das tiefe Profil an das verfüllte anbinden.
+* **Lab-S4-Kalibrierung pro Sensor** für beide Ketten. Ohne sie bleibt der Versatz zwischen
+  den Löchern bei ~40 mK stecken, unabhängig davon, wie lange gemessen wird.
+
+## Einordnung und Empfehlung
+
+Die Literatur zu luftgefüllten Bohrlöchern deckt sich mit dem Befund: flache, luftgefüllte
+Löcher gelten als anfällig für konvektive Durchmischung, weshalb Bohrlöcher und Schächte für
+Firntemperaturmessungen mit Bohrklein und lockerem Schnee verfüllt werden — um die Störung
+des Firns gering zu halten und den Wärmekontakt herzustellen
+([Zhang et al., Law Dome](https://www.cambridge.org/core/journals/annals-of-glaciology/article/nearsurface-temperatures-in-the-dome-summit-south-law-dome-east-antarctica-borehole/BA3F7D8F8A848B9FCFDB0BE64341C58D);
+[Brandt & Warren, South Pole](https://www.cambridge.org/core/journals/journal-of-glaciology/article/temperature-measurements-and-heat-transfer-in-nearsurface-snow-at-the-south-pole/72AE1533ABE19467FB56442091F81105);
+[Marchenko et al., Lomonosovfonna](https://tc.copernicus.org/articles/13/1843/2019/)).
+
+**Die Bohrstörung ist hier eine andere als in der Bohrloch-Literatur.** Die Erholungszeiten
+dort — Stunden bis Tage im Firn, Monate in warmem Eis — gelten für **thermisches** Bohren
+mit Schmelzwasser und Wiedergefrieren ([Talalay et al.](https://doi.org/10.3390/w16233460)).
+**Trocken mechanisch gebohrt** entfällt dieser Eintrag; die Reibungswärme des Bohrers ist
+gegen die Wärmekapazität des Firns vernachlässigbar. Übrig bleiben drei Beiträge, alle
+Massen- statt Prozesswärme:
+
+* die **oberflächenwarm eingebrachte Kette** samt Kabel,
+* die **Durchlüftung des offenen Lochs** mit Oberflächenluft während des Bohrens,
+* im verfüllten Loch der **Verfüllschnee selbst**, der mit Oberflächentemperatur eingebracht
+  wird und pro Meter die mit Abstand größte Masse stellt.
+
+Der letzte Beitrag lässt sich abschätzen: Verfüllschnee der Dichte ρ_f im Loch mit Radius a,
+um ΔT₀ wärmer als der Firn in der Tiefe, hebt den Firn im Umkreis R um
+`ΔT₀ · ρ_f a² / (ρ_Firn (R² − a²))`. Mit a = 5 cm, ρ_f ≈ ρ_Firn, R = 0,5 m und ΔT₀ = 20 K
+sind das rund **0,2 K** — die Größenordnung der gemessenen Anfangsdifferenz. Dazu passt das
+**Vorzeichen**: ΔT = Luft − Schnee ist zu Beginn in allen Tiefen negativ, das verfüllte Loch
+ist also das anfangs wärmere. Die Zeitskala der Angleichung in Abschnitt C ist damit die
+Antwort für die eigene Konfiguration; die Literaturwerte für thermisches Bohren sind hier
+nicht anwendbar.
+
+Für die Planung folgt daraus: **verfüllen**. Die Kosten des offenen Lochs sind nicht der
+Mittelwert — der stimmt nach der Angleichung in beiden Löchern —, sondern die dauerhafte
+Tagesunruhe, die im Firn kein Gegenstück hat und jede Auswertung auf mK-Niveau limitiert.
+
+---
+
+# Druck: barometrisches Signal oder Firn-Pumping?
+
+Jeder Knoten misst den Druck. Die Frage ist, ob der Schnee um die Sensoren die Fluktuationen
+verändert und woher sie kommen.
+
+```{r p-aws, eval=multi, fig.height=4.5, fig.width=10}
+p_node <- series |> filter(!is.na(pressure_hPa))
+p_common <- p_node |> group_by(time) |> summarise(p_chain = mean(pressure_hPa), .groups = "drop") |>
+  mutate(day = as.Date(time))
+
+if (!is.null(aws_d)) {
+  pc <- p_common |> left_join(aws_d, by = "day") |> filter(is.finite(p_aws))
+  fitp <- lm(p_chain ~ p_aws, pc)
+  ggplot(pc, aes(day)) +
+    geom_line(aes(y = p_chain, colour = "Kette (Mittel 20 Knoten)"), linewidth = 0.6) +
+    geom_line(aes(y = p_aws,   colour = "Summit-AWS"), linewidth = 0.6) +
+    scale_colour_manual(values = c("Kette (Mittel 20 Knoten)" = "#2a78d6",
+                                   "Summit-AWS" = "#eb6834"), name = NULL) +
+    labs(title = "Druck der Kette gegen die Summit-AWS", x = NULL, y = "Druck (hPa)",
+         subtitle = sprintf("r = %.3f, Steigung %.3f, sd(Residuum) = %.2f hPa über %.0f hPa Spannweite",
+                            cor(pc$p_chain, pc$p_aws), coef(fitp)[2], sd(resid(fitp)),
+                            diff(range(pc$p_aws)))) +
+    theme_bw(base_size = 13) + theme(legend.position = "bottom")
+}
+```
+
+Der Vergleich der beiden Bohrlöcher braucht einen Bezug **innerhalb** derselben Kette,
+sonst schlägt ein Signal der einen Kette mit umgekehrtem Vorzeichen in die andere durch.
+Verwendet wird deshalb die **interne Luftsäule** `Δp(z) = p(z) − p(1 m)` derselben Kette.
+Erwartet wird der hydrostatische Gradient `ρg ≈ 9.5 Pa/m` (ρ ≈ 0,97 kg/m³ bei 675 hPa,
+−30 °C).
+
+```{r p-column, eval=multi, fig.height=4.5, fig.width=10}
+p_top <- p_node |> filter(depth_m == min(depth_m)) |>
+  select(time, chain, p_top = pressure_hPa)
+p_col <- p_node |> left_join(p_top, by = c("time", "chain")) |>
+  mutate(dp_Pa = (pressure_hPa - p_top) * 100)
+
+# Statistik im ruhigen Fenster: die Einbautage tragen sonst die Angleichung der
+# Sensortemperaturen in die Druckstreuung hinein.
+p_col_q <- p_col |> filter(time >= t_end - QUIET_DAYS * 86400, depth_m > min(depth_m))
+
+col_stat <- p_col_q |> group_by(chain, depth_m) |>
+  summarise(mittel = mean(dp_Pa), streu = sd(dp_Pa), .groups = "drop")
+
+ggplot(col_stat, aes(mittel, depth_m, colour = chain)) +
+  geom_abline(slope = 1 / 9.5, intercept = 1, linetype = "dashed", colour = "grey50") +
+  geom_path(linewidth = 0.6) + geom_point(size = 2.4) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(1, 3, 5, 8, 10, 13, 16, 21, 26, 30)) +
+  scale_x_continuous(name = "Δp gegen den 1-m-Knoten derselben Kette (Pa)") +
+  scale_colour_manual(values = chain_cols, name = NULL,
+                      labels = c("Kette 1 — Luft", "Kette 2 — Schnee")) +
+  labs(title = "Interne Luftsäule beider Bohrlöcher",
+       subtitle = "gestrichelt: hydrostatisch 9.5 Pa/m") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+```{r p-tab, eval=multi}
+p_day <- p_col_q |> arrange(chain, depth_m, time) |>
+  group_by(chain, depth_m) |>
+  mutate(dt_d = as.numeric(difftime(time, lag(time), units = "days")),
+         d_dp = dp_Pa - lag(dp_Pa)) |>
+  filter(!is.na(d_dp), dt_d > 0.5, dt_d < 1.5) |>
+  summarise(tag_zu_tag = sd(d_dp) / sqrt(2), .groups = "drop")
+
+knitr::kable(
+  col_stat |> left_join(p_day, by = c("chain", "depth_m")) |>
+    tidyr::pivot_wider(id_cols = depth_m, names_from = chain,
+                       values_from = c(mittel, streu, tag_zu_tag)) |> arrange(depth_m) |>
+    (\(d) transmute(d, `Tiefe (m)` = depth_m,
+        `Δp Luft (Pa)`   = round(`mittel_Kette 1`, 0),
+        `Δp Schnee (Pa)` = round(`mittel_Kette 2`, 0),
+        `Streuung Luft (Pa)`   = round(`streu_Kette 1`, 1),
+        `Streuung Schnee (Pa)` = round(`streu_Kette 2`, 1),
+        `σ_Tag Luft (Pa)`   = round(`tag_zu_tag_Kette 1`, 1),
+        `σ_Tag Schnee (Pa)` = round(`tag_zu_tag_Kette 2`, 1)))(),
+  caption = sprintf("Interne Luftsäule je Kette im ruhigen Fenster (letzte %d Tage): Mittelwert, zeitliche Streuung und Tag-zu-Tag-Streuung.", QUIET_DAYS))
+```
+
+```{r p-wind, eval=multi}
+if (!is.null(aws_d)) {
+  pw <- p_col_q |> filter(depth_m == max(depth_m)) |> mutate(day = as.Date(time)) |>
+    left_join(aws_d, by = "day") |> arrange(chain, time) |> group_by(chain) |>
+    mutate(d_dp = dp_Pa - lag(dp_Pa), d_w = wspd - lag(wspd)) |>
+    filter(!is.na(d_dp), !is.na(d_w))
+  knitr::kable(
+    pw |> summarise(n = n(),
+        `sd Tagesänderung (Pa)` = round(sd(d_dp), 1),
+        `r(ΔWind)` = round(cor(d_dp, d_w), 2),
+        `p-Wert` = signif(cor.test(d_dp, d_w)$p.value, 2)) |> rename(Kette = chain),
+    caption = "Tagesänderung der 30-m-Säule gegen die Tagesänderung der Windgeschwindigkeit (Windpumpen-Test).")
+}
+```
+
+## Zeitreihen gegen Tiefe
+
+Der Rohdruck aller 20 Knoten: das synoptische Signal von rund 23 hPa dominiert und läuft in
+beiden Bohrlöchern identisch durch.
+
+```{r p-raw, eval=multi, fig.height=5, fig.width=11}
+ggplot(p_node, aes(time, pressure_hPa, colour = depth_m, group = interaction(chain, depth_m))) +
+  geom_line(linewidth = 0.4) +
+  scale_colour_viridis_c(name = "Tiefe (m)", option = "D", end = 0.9, direction = -1) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  facet_wrap(~ chain) +
+  labs(title = "Druck aller Knoten", x = "Zeit (UTC)", y = "Druck (hPa)") +
+  theme_bw(base_size = 13)
+```
+
+Nach Abzug des 1-m-Knotens derselben Kette bleibt die interne Luftsäule. Sie ist in beiden
+Bohrlöchern über die zwei Monate konstant; sichtbar sind nur die Einbautage und danach ein
+Band von wenigen Pa.
+
+```{r p-col-ts, eval=multi, fig.height=5, fig.width=11}
+ggplot(p_col |> filter(depth_m > min(depth_m)),
+       aes(time, dp_Pa, colour = factor(depth_m))) +
+  geom_line(linewidth = 0.45) +
+  scale_colour_viridis_d(name = "Tiefe (m)", option = "D", end = 0.9) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  facet_wrap(~ chain) +
+  labs(title = "Interne Luftsäule Δp(z) = p(z) − p(1 m) über die Zeit",
+       x = "Zeit (UTC)", y = "Δp (Pa)") +
+  theme_bw(base_size = 13)
+```
+
+Dasselbe als **Abweichung jedes Knotens von seinem eigenen Mittel** im ruhigen Fenster —
+das ist der Teil, in dem ein lokaler Pumpvorgang sichtbar würde.
+
+```{r p-col-anom, eval=multi, fig.height=5, fig.width=11}
+p_col_q |> group_by(chain, depth_m) |> mutate(dev = dp_Pa - mean(dp_Pa)) |> ungroup() |>
+  ggplot(aes(time, dev, colour = factor(depth_m))) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_line(linewidth = 0.45) +
+  scale_colour_viridis_d(name = "Tiefe (m)", option = "D", end = 0.9) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  facet_wrap(~ chain) +
+  labs(title = "Abweichung der Luftsäule vom eigenen Mittel (ruhiges Fenster)",
+       x = "Zeit (UTC)", y = "Δp − Mittel (Pa)") +
+  theme_bw(base_size = 13)
+```
+
+**Woher die Fluktuationen kommen.** Die Kette folgt der AWS über den vollen Bereich von rund
+23 hPa; das sind synoptische Druckwechsel, kein lokaler Effekt. Nach Abzug dieses Signals
+bleibt je Knoten nur eine Streuung von 1–3 Pa und eine Tagesänderung unter 1,5 Pa — in
+beiden Bohrlöchern gleich groß, und ohne Zusammenhang mit dem Wind. Der Schnee um die
+Sensoren ändert am Drucksignal also nichts, und mehr als diese wenigen Pa kann ein lokaler
+Pumpvorgang bei Tagesauflösung nicht beitragen.
+
+Das entspricht der Literatur: Firn ist mit Permeabilitäten bis ~3·10⁻⁸ m² so durchlässig
+([Albert et al., Siple Dome](https://www.cambridge.org/core/journals/annals-of-glaciology/article/snow-and-firn-permeability-at-siple-dome-antarctica/5FAF88CCA571A1F9C35EC3CA8164AE2F)),
+dass sich synoptische Druckänderungen praktisch unverzögert bis in mehrere Zehnermeter
+fortpflanzen — barometrisches Pumpen wirkt deshalb über die ganze Firnsäule
+([Buizert & Severinghaus](https://tc.copernicus.org/articles/12/2021/2018/)). Windpumpen ist
+dagegen ein **hochfrequenter** Vorgang: gemessen wird eine Dämpfung der Druckstörung im
+Schnee, die unterhalb 0,6 m nur noch Frequenzen über ~0,2 Hz betrifft
+([Drake et al.](https://www.frontiersin.org/journals/earth-science/articles/10.3389/feart.2019.00201/full)).
+Ein Tagesprofil kann davon nichts sehen; die hier gemessene Reststreuung ist die Obergrenze.
+
+## Druck und Temperatur
+
+Die Temperatur im Firn folgt dem Luftdruck: im verfüllten Loch messbar mit rund
+0,03 mK/hPa, im offenen von der Advektion in der Bohrlochluft überdeckt. Messung, Theorie
+(`b = φ/(ρ c)`) und die Herkunft der Unruhe im offenen Loch stehen in einem eigenen
+Dokument: **`druck_temperatur.qmd`**.
+
+---
+
 ## Save result
 
 ```{r save}

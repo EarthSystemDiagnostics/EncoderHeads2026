@@ -1,0 +1,554 @@
+---
+title: "head02 (B46) — Profil, Kalibrierung und der gemeinsame Anteil"
+subtitle: "60-m- und 10-m-Kette in Schnee, 13.01.–02.02.2026, vier Telegramme am Tag"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+**head02** stand an **B46** mit zwei verfüllten Bohrlöchern — einer **60-m-Kette** und einer
+**10-m-Kette** — sowie einem Lufttemperatursensor in 2 m Höhe. Übertragen werden je Knoten
+**NTC1, GND und Druck**, dazu Zeit, Platinentemperatur und Batteriespannung; ein NTC2 oder
+Referenzwiderstand fehlt. Der Kopf sendete **alle vier Stunden** und ist am 02.02.2026
+ausgefallen — die Analyse des Ausfalls steht in `head02_ausfall.qmd`, hier geht es um die
+Messungen davor.
+
+```{r setup}
+library(readr); library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
+source("../Greenland2026/decode_core.R")
+
+BLUE <- "#2a78d6"; ORANGE <- "#eb6834"; AQUA <- "#1baf7a"
+
+raw <- read_csv("./data/messages-1781290180297_old.csv", show_col_types = FALSE) |>
+  filter(grepl("231708", Device)) |>
+  transmute(recv = lubridate::dmy_hms(`Date Time (UTC)`, tz = "UTC"),
+            nb = `Length (Bytes)`, hex = tolower(Payload)) |>
+  filter(nb == 209, !grepl("6f6f", hex),
+         recv < as.POSIXct("2026-02-02 17:13", tz = "UTC")) |>
+  arrange(recv)
+
+s_int <- function(h) { v <- strtoi(h, 16L); n <- nchar(h)/2
+                       ifelse(v >= 2^(8*n-1), v - 2^(8*n), v) }
+
+# 209 B = 4 B Zeit + 3 B ADC + 25 x (NTC1 3 B, GND 2 B, Druck 3 B) + 2 B Batterie
+head_ch <- raw |> mutate(
+  adc_C = 6.101e-5 * strtoi(substr(hex, 9, 14), 16L) - 256.6,
+  batt  = strtoi(substr(hex, nchar(hex) - 3, nchar(hex)), 16L),
+  hr    = as.integer(format(recv, "%H"))) |>
+  filter(adc_C > -50, adc_C < -35)            # fünf Ausreißer des Platinenkanals raus
+
+nodes <- bind_rows(lapply(seq_len(nrow(head_ch)), function(i) {
+  h <- head_ch$hex[i]
+  data.frame(recv = head_ch$recv[i], position = 1:25,
+    counts = s_int(substring(h, seq(15, by = 16, length.out = 25),
+                                seq(20, by = 16, length.out = 25))),
+    gnd = s_int(substring(h, seq(21, by = 16, length.out = 25),
+                             seq(24, by = 16, length.out = 25))),
+    p_hPa = strtoi(substring(h, seq(25, by = 16, length.out = 25),
+                                seq(30, by = 16, length.out = 25)), 16L) / 1000) }))
+
+dmap  <- read_csv("./data/head02_depths.csv", show_col_types = FALSE)
+nodes <- nodes |> left_join(dmap, by = "position")
+```
+
+Ausgewertet werden `r nrow(head_ch)` Telegramme von `r format(min(head_ch$recv), "%d.%m.")`
+bis `r format(max(head_ch$recv), "%d.%m.%Y")`.
+
+## Knoten, Tiefen, Kalibrierung
+
+Die Abfragereihenfolge und die Einbautiefen stehen in `data/head02_depths.csv`. Für die
+Kalibrierung wird die **Calibration Registry** genutzt, Batch `kohnen2526`
+(cal_id `2025-11_vorKohnen`); wo kein Eintrag vorliegt, greift die universelle Mean-S4-Kurve.
+
+```{r calib}
+CALIB_REG <- "/Users/tlaepple/sharedAI/CalibrationRegistry"
+reg_ok <- file.exists(file.path(CALIB_REG, "R/calib_registry.R"))
+if (reg_ok) {
+  Sys.setenv(CALIB_REGISTRY = file.path(CALIB_REG, "calibrations.csv"))
+  source(file.path(CALIB_REG, "R/calib_registry.R"))
+}
+
+cal_one <- function(counts, node) {
+  key <- paste0(node, "_NTC1")
+  if (!reg_ok) return(list(T = NTC_mean(counts), src = "Mean-S4"))
+  tryCatch(list(T = calib_T(counts, key, batch = "kohnen2526"), src = "Registry"),
+           error = function(e) list(T = NTC_mean(counts), src = "Mean-S4"))
+}
+
+nodes <- nodes |> group_by(position) |> group_modify(function(g, k) {
+  nd <- dmap$node[dmap$position == k$position]
+  r  <- cal_one(g$counts, nd)
+  g$T <- r$T; g$T_mean <- NTC_mean(g$counts); g$src <- r$src; g }) |> ungroup()
+
+knitr::kable(
+  nodes |> group_by(position, node, depth_m, chain, src) |>
+    summarise(`T (°C)` = round(mean(T), 2),
+              `Mean-S4 (°C)` = round(mean(T_mean), 2),
+              `Differenz (K)` = round(mean(T - T_mean), 3), .groups = "drop") |>
+    arrange(position) |>
+    rename(Pos = position, Node = node, `Tiefe (m)` = depth_m, Kette = chain, Quelle = src),
+  caption = "Knotenliste mit Kalibrierquelle. Zeitmittel über den ausgewerteten Zeitraum.")
+```
+
+`r sum(nodes$src[!duplicated(nodes$position)] == "Registry")` der 25 Knoten haben eine
+Lab-Kalibrierung in der Registry; es fehlt allein **N21**, der Lufttemperatursensor. Die
+Registry-Werte weichen von der Mean-S4-Kurve um höchstens 0,11 K ab — die universelle Kurve
+trifft diese Sensoren also gut, und der Absolutwert der Kette ändert sich durch die
+Kalibrierung nur wenig.
+
+## Tiefenprofil
+
+```{r profile, fig.height=5.5, fig.width=9}
+prof <- nodes |> filter(chain != "Luft") |> group_by(chain, depth_m) |>
+  summarise(T = mean(T), .groups = "drop")
+
+ggplot(prof, aes(T, depth_m, colour = chain)) +
+  geom_path(linewidth = 0.6) + geom_point(size = 2.4) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = c(0.2, 1, 2, 3, 5, 8, 10, 13, 16, 21, 26, 32, 40, 50, 62)) +
+  scale_x_continuous(name = "Temperatur (°C)") +
+  scale_colour_manual(values = c("60m-Kette" = BLUE, "10m-Kette" = ORANGE), name = NULL) +
+  labs(title = "Mittleres Tiefenprofil, 18.01.–02.02.2026",
+       subtitle = "Sommerprofil: warme Oberfläche, Minimum der Kurve bei 5 m, darunter der gedämpfte Bereich") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+```{r profile-cmp}
+knitr::kable(
+  prof |> filter(depth_m %in% c(5, 8, 10)) |>
+    pivot_wider(names_from = chain, values_from = T) |>
+    transmute(`Tiefe (m)` = depth_m,
+              `60m-Kette (°C)` = round(`60m-Kette`, 2),
+              `10m-Kette (°C)` = round(`10m-Kette`, 2),
+              `Differenz (K)` = round(`60m-Kette` - `10m-Kette`, 2)),
+  caption = "Gleiche Tiefe in beiden Bohrlöchern.")
+```
+
+Bei 8 und 10 m stimmen die beiden Bohrlöcher auf rund 0,1 K überein. Der 5-m-Knoten der
+60-m-Kette (N23) liegt 1,7 K daneben — er ist als einziger vom Typ **PM**, alle anderen sind
+MM; die Abweichung ist eine Eigenschaft dieses Sensortyps, nicht des Bohrlochs.
+
+Der gedämpfte Bereich liegt bei **−40,3 bis −41,0 °C**. Das ist rund 3,5 K wärmer als der
+Wert, den head04 an B40 zeigt; ob das ein Standortunterschied ist, gehört zusammen mit dem
+Vergleich B50/B40 (`vergleich_b50_b40.qmd`) geprüft.
+
+## Zeitreihen
+
+```{r ts, fig.height=6, fig.width=10}
+sel <- c(0.2, 1, 3, 5, 10, 26, 62)
+nodes |> filter(depth_m %in% sel, chain != "Luft") |>
+  mutate(lab = factor(sprintf("%s m", depth_m), levels = sprintf("%s m", sel))) |>
+  ggplot(aes(recv, T)) +
+  geom_line(colour = BLUE, linewidth = 0.5) + geom_point(colour = BLUE, size = 0.8) +
+  facet_wrap(~ lab, scales = "free_y", ncol = 2) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  labs(title = "Temperatur an ausgewählten Tiefen", x = NULL, y = "°C") +
+  theme_bw(base_size = 12)
+```
+
+Die vierstündliche Abtastung löst in den obersten Metern den Tagesgang auf — im
+antarktischen Januar bei Polartag ist er flach, aber vorhanden.
+
+## Der gemeinsame Anteil
+
+Für die Auswertung auf mK-Niveau ist der wichtigste Befund dieser Reihe, dass sich die
+Residuen aller Knoten **gemeinsam** bewegen.
+
+```{r cm-build}
+# Ab 20.01.: davor liegt die Platinentemperatur 2,5 K tiefer (anderer Zustand), und am
+# 19.01. fiel die Kette für acht Stunden aus (siehe head02_ausfall.qmd).
+STABLE <- as.POSIXct("2026-01-20", tz = "UTC")
+nodes_s <- nodes |> filter(recv >= STABLE)
+head_s  <- head_ch |> filter(recv >= STABLE)
+
+deep_pos <- dmap$position[dmap$chain == "60m-Kette" & dmap$depth_m >= 13]
+tms  <- sort(unique(nodes_s$recv))
+td   <- as.numeric(difftime(tms, min(tms), units = "days"))
+
+R <- sapply(sort(unique(nodes_s$position)), function(p) {
+  z <- nodes_s |> filter(position == p) |> arrange(recv)
+  resid(loess(z$T ~ td, span = 0.4)) * 1000 })      # Residuum in mK
+colnames(R) <- sort(unique(nodes_s$position))
+Rd <- R[, as.character(deep_pos)]
+CM <- rowMeans(Rd)
+
+knitr::kable(data.frame(
+  Größe = c("Streuung je Knoten (tiefe Knoten)", "Streuung des gemeinsamen Anteils",
+            "Streuung nach dessen Abzug", "mittlere Korrelation zwischen den Knoten"),
+  Wert = c(sprintf("%.1f mK", mean(apply(Rd, 2, sd))), sprintf("%.1f mK", sd(CM)),
+           sprintf("%.1f mK", mean(apply(Rd - CM, 2, sd))),
+           sprintf("%.2f", mean(cor(Rd)[upper.tri(cor(Rd))])))),
+  row.names = FALSE, caption = "Knoten 13–62 m der 60-m-Kette.")
+```
+
+Die Korrelation von 1,00 heißt: die 26 mK Streuung jedes einzelnen Knotens **sind** ein
+einziger Anteil. Nach seinem Abzug liegt jeder Knoten unter 1 mK — die Sensoren selbst
+messen also deutlich besser, als die Rohreihe vermuten lässt.
+
+```{r cm-diurnal, fig.height=4.4, fig.width=9}
+cm_df <- data.frame(recv = tms, cm = CM, hr = as.integer(format(tms, "%H")))
+hfit  <- lm(cm ~ cos(2*pi*hr/24) + sin(2*pi*hr/24), data = cm_df)
+amp   <- unname(sqrt(sum(coef(hfit)[2:3]^2)))
+phase <- unname((atan2(coef(hfit)[3], coef(hfit)[2]) * 12/pi) %% 24)
+
+ggplot(cm_df, aes(hr, cm)) +
+  geom_hline(yintercept = 0, colour = "grey70") +
+  geom_point(size = 1.8, colour = BLUE, alpha = 0.7) +
+  stat_summary(fun = mean, geom = "line", colour = ORANGE, linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", colour = ORANGE, size = 3) +
+  scale_x_continuous(breaks = seq(0, 21, 3), name = "Stunde UTC (Kohnen liegt auf 0° Länge)") +
+  labs(title = "Der gemeinsame Anteil ist ein Tagesgang",
+       subtitle = sprintf("Amplitude %.1f mK, Maximum %.1f UTC, erklärt %.0f %% der Varianz",
+                          amp, phase, 100*summary(hfit)$r.squared),
+       y = "gemeinsamer Anteil (mK)") +
+  theme_bw(base_size = 13)
+```
+
+**Die Elektronik ist es nicht.** Der Kopf liegt 8–10 m tief im Firn; dort gibt es keinen
+Tagesgang, und die Hauskanäle bestätigen das.
+
+```{r cm-house}
+diu <- function(v, hr) { f <- lm(v ~ cos(2*pi*hr/24) + sin(2*pi*hr/24))
+  c(amp = unname(sqrt(sum(coef(f)[2:3]^2))),
+    max = unname((atan2(coef(f)[3], coef(f)[2]) * 12/pi) %% 24),
+    r2  = summary(f)$r.squared) }
+td_h  <- as.numeric(difftime(head_s$recv, min(head_s$recv), units = "days"))
+d_adc <- diu(resid(loess(head_s$adc_C ~ td_h, span = 0.4)) * 1000, head_s$hr)
+d_bat <- diu(resid(loess(head_s$batt  ~ td_h, span = 0.4)),        head_s$hr)
+d_cm  <- diu(CM, cm_df$hr)
+
+knitr::kable(data.frame(
+  Kanal = c("NTC1, gemeinsamer Anteil", "Platinentemperatur", "Batteriespannung"),
+  `Amplitude` = c(sprintf("%.1f mK", d_cm["amp"]), sprintf("%.0f mK", d_adc["amp"]),
+                  sprintf("%.1f mV", d_bat["amp"])),
+  `Maximum (UTC)` = round(c(d_cm["max"], d_adc["max"], d_bat["max"]), 1),
+  `R²` = round(c(d_cm["r2"], d_adc["r2"], d_bat["r2"]), 2),
+  `r mit dem gemeinsamen Anteil` = c("1.00", sprintf("%+.2f", cor(CM, head_s$adc_C)),
+                                     sprintf("%+.2f", cor(CM, head_s$batt))),
+  check.names = FALSE), row.names = FALSE,
+  caption = "Nur die Knotenkanäle tragen den Tagesgang.")
+```
+
+**Es ist eine Verstärkungsänderung, kein Nullpunktfehler.** In der Temperatur sehen beide
+gleich aus, in den Rohcounts nicht: additiv verschiebt alle Knoten um denselben Betrag,
+multiplikativ proportional zum Messwert.
+
+```{r cm-gain, fig.height=4.4, fig.width=9}
+rC <- sapply(deep_pos, function(p) {
+  z <- nodes_s |> filter(position == p) |> arrange(recv)
+  resid(loess(z$counts ~ td, span = 0.4)) })
+lvl <- vapply(deep_pos, function(p) median(nodes_s$counts[nodes_s$position == p]), 0)
+slp <- vapply(seq_along(deep_pos), function(i) unname(coef(lm(rC[, i] ~ CM))[2]), 0)
+eps <- abs(mean(slp) / mean(lvl))
+
+ggplot(data.frame(lvl = lvl/1e6, slp = slp), aes(lvl, slp)) +
+  geom_abline(slope = -eps*1e6, intercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_point(size = 3, colour = BLUE) +
+  labs(title = "Antwort der Rohcounts gegen den Messwert des Knotens",
+       subtitle = sprintf("gestrichelt: reine Verstärkungsänderung; %.1e je mK, bei %.0f mK Amplitude %.1e (rund %.2f %%)",
+                          eps, amp, eps*amp, 100*eps*amp),
+       x = "Messwert des Knotens (Mio. Counts)", y = "Counts je mK gemeinsamer Anteil") +
+  theme_bw(base_size = 13)
+```
+
+Der GND-Kanal passt dazu: bei rund −780 Counts müsste eine 0,1-%-Verstärkungsänderung dort
+0,8 Counts ausmachen. Gemessen sind 0,77 Counts — die richtige Größe, bei 4 Counts Streuung
+aber nicht signifikant. **GND taugt damit nicht als Korrekturkanal**; ein mitgemessener
+Referenzwiderstand im selben Messpfad würde 0,1 % direkt erfassen und den Anteil abziehbar
+machen.
+
+### Der gemeinsame Anteil folgt der Lufttemperatur
+
+Der Kopf liegt zu tief für einen Tagesgang — aber der **Lufttemperatursensor** in 2 m Höhe
+sitzt an der Oberfläche, und sein Signal erklärt den gemeinsamen Anteil vollständig.
+
+```{r cm-air, fig.height=7.5, fig.width=10}
+air <- nodes_s |> filter(chain == "Luft") |> arrange(recv)
+r_air <- resid(loess(air$T ~ td, span = 0.4))
+fit_air <- lm(CM ~ r_air)
+
+p_ts <- ggplot(data.frame(t = tms, cm = CM, sk = coef(fit_air)[2] * r_air)) +
+  geom_hline(yintercept = 0, colour = "grey80") +
+  geom_line(aes(t, sk, colour = "Lufttemperatur × (−5,8 mK/K)"), linewidth = 0.7) +
+  geom_line(aes(t, cm, colour = "gemeinsamer Anteil der 24 Knoten"), linewidth = 0.5) +
+  geom_point(aes(t, cm, colour = "gemeinsamer Anteil der 24 Knoten"), size = 1) +
+  scale_colour_manual(values = c("gemeinsamer Anteil der 24 Knoten" = BLUE,
+                                 "Lufttemperatur × (−5,8 mK/K)" = ORANGE), name = NULL) +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  labs(title = "Die beiden Reihen liegen übereinander",
+       subtitle = "blau: aus den Knoten 13–62 m gerechnet; orange: allein aus dem Luftsensor skaliert",
+       x = NULL, y = "mK") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom")
+
+p_sc <- ggplot(data.frame(air = r_air, cm = CM), aes(air, cm)) +
+  geom_smooth(method = "lm", se = FALSE, colour = ORANGE, linewidth = 0.7) +
+  geom_point(size = 1.8, colour = BLUE) +
+  labs(subtitle = sprintf("%.2f mK je K, R² = %.4f, r = %.4f",
+                          coef(fit_air)[2], summary(fit_air)$r.squared, cor(CM, r_air)),
+       x = "Lufttemperatur, Abweichung vom Trend (K)", y = "gemeinsamer Anteil (mK)") +
+  theme_bw(base_size = 12)
+
+p_res <- ggplot(data.frame(t = tms, r = resid(fit_air)), aes(t, r)) +
+  geom_hline(yintercept = 0, colour = "grey80") +
+  geom_line(colour = "grey40", linewidth = 0.4) + geom_point(size = 1, colour = "grey30") +
+  scale_x_datetime(date_labels = "%d.%m.") +
+  labs(subtitle = sprintf("Rest nach Abzug: sd = %.2f mK", sd(resid(fit_air))),
+       x = NULL, y = "mK") +
+  theme_bw(base_size = 12)
+
+p_ts / (p_sc | p_res) + patchwork::plot_layout(heights = c(1.1, 1))
+```
+
+### Wo im Messpfad das ansetzt
+
+Der Systemaufbau entscheidet, welche Erklärung möglich ist. Auf dem Sensorboard sitzen zwei
+NTC-Spannungsteiler und ein Referenzteiler mit Silizium-Sensor; die Signale werden **im
+Knoten gepuffert**, nur niederohmige Ausgänge gehen aufs Kabel. Zum Kopf laufen acht Adern:
+`Head_TxD`, `Head_RxD`, `Node IN`, `−0,3 V`, `GND`, `+3,3 V`, **`Vref`**, `GND`. Der ADC im
+Kopf misst **ratiometrisch gegen Vref**.
+
+Damit gibt es genau einen Punkt, an dem eine Störung **alle** Kanäle gleichzeitig und
+proportional zu ihrem Messwert verschiebt: **Vref**. Jede Änderung dort geht als
+`counts → counts · (1 + δ)` in jeden Knoten ein, unabhängig davon, in welchem Bohrloch er
+hängt. Eine Störung auf der Analogleitung `Node IN` wirkte dagegen **additiv** — gleicher
+Betrag in Counts für alle Knoten. Die Daten trennen das:
+
+```{r add-vs-mult}
+sel <- bind_rows(
+  tibble(depth_m = c(1.5, 2, 3, 4, 6, 10), chain = "10m-Kette"),
+  tibble(depth_m = c(13, 21, 32, 62),      chain = "60m-Kette"))
+
+amv <- bind_rows(lapply(seq_len(nrow(sel)), function(i) {
+  z <- nodes_s |> filter(depth_m == sel$depth_m[i], chain == sel$chain[i]) |> arrange(recv)
+  r <- resid(loess(z$counts ~ td, span = 0.4))
+  data.frame(depth_m = sel$depth_m[i], chain = sel$chain[i],
+             lvl = median(z$counts), slope = unname(coef(lm(r ~ CM))[2])) }))
+k_mult <- mean(amv$slope / amv$lvl); k_add <- mean(amv$slope)
+amv <- amv |> mutate(mult = k_mult * lvl, add = k_add)
+
+knitr::kable(amv |> transmute(`Tiefe (m)` = depth_m, Kette = chain,
+    `Pegel (Mio. Counts)` = round(lvl/1e6, 2), `gemessen (Counts je mK)` = round(slope, 1),
+    `multiplikativ erwartet` = round(mult, 1), `additiv erwartet` = round(add, 1)),
+  row.names = FALSE,
+  caption = sprintf("Antwort der Rohcounts über einen Pegelhub von %.0f %%. Reststreuung: multiplikativ %.1f Counts, additiv %.1f Counts.",
+                    100*diff(range(amv$lvl))/mean(amv$lvl), sd(amv$slope - amv$mult), sd(amv$slope - amv$add)))
+```
+
+Die Antwort folgt dem Pegel, nicht einem festen Betrag — die Störung sitzt also im
+**Referenzzweig**, nicht auf der Signalleitung. Damit ist die naheliegende Deutung nicht ein
+Kontaktwiderstand, der sich mit der Lufttemperatur ändert, sondern eine **Einkopplung in
+Vref**: der einzige Knoten, der einen großen Temperaturhub sieht, ist der in 2 m Höhe, und
+sein Kanal moduliert offenbar die Referenz, gegen die alle anderen gemessen werden — über
+Leckströme im Analogschalter, den Puffer oder die Steckverbindung.
+
+Welcher Kanal des Luftknotens einkoppelt, lässt die Reihe offen — siehe die Prädiktoren
+unten; die Unterschiede liegen im Bereich der Krümmung, die der Teiler ohnehin schon
+weitgehend herausnimmt.
+
+Die Größenordnung, die dafür nötig wäre: 200 ppm/K bedeutet bei einer Referenz von rund 2,5 V
+etwa 0,5 mV/K, über den beobachteten Hub von 17,5 K also rund 9 mV auf Vref. Das ist für
+einen bloßen Leckstrom viel — welcher Pfad das leistet, lässt sich nur am Gerät oder an einem
+baugleichen Aufbau klären, etwa durch Messung von Vref am Kopf, während der Luftknoten
+gezielt temperiert wird.
+
+Die Korrelation von −1,00 gilt auch **nach Abzug des Tagesgangs aus beiden Reihen**, also
+nicht nur für den täglichen Takt, sondern auch für die synoptischen Schwankungen der
+Lufttemperatur. Damit ist die Kopplung nicht zufällig gleichphasig, sondern dieselbe Größe:
+
+* Die Verstärkung der Messkette ändert sich um rund **200 ppm je Kelvin Lufttemperatur**
+  (aus −5,8 mK/K und 3,4·10⁻⁵ relativer Änderung je mK).
+* Die Platinentemperatur ist unbeteiligt (r = +0,06), die Batteriespannung ebenfalls.
+* Betroffen sind alle 24 Knotenkanäle in beiden Bohrlöchern gleichzeitig.
+
+### Wo der Pfad die Luft sieht
+
+An der Oberfläche liegen nur drei Dinge: die **Antenne**, das **Koaxkabel** und der **Knoten
+in 2 m Höhe**, der über ein **7-adriges Kabel** angebunden ist — seriell, die
+Stromversorgungen und der Analogkanal. Antenne und Koax führen kein Messsignal und können
+die Verstärkung der NTC-Messung nicht ändern. Bleibt das 7-adrige Kabel samt seinen
+Steckverbindungen, und darin genau die Adern, die alle Knoten gemeinsam benutzen.
+
+Welches Element es trägt, sagt die Form des Zusammenhangs:
+
+```{r cm-linear}
+# Drei Kandidaten für die Größe, der die Störung folgt. Achtung: der Teiler linearisiert den
+# NTC bereits, die drei Prädiktoren sind daher zu >99 % dasselbe.
+FS <- 2^24                                   # 24-Bit-Vollausschlag
+air <- air |> mutate(ratio = counts / FS, R_ntc = 499e3 * ratio / (1 - ratio))
+r_cnt <- resid(loess(air$counts ~ td, span = 0.4))
+r_res <- resid(loess(air$R_ntc ~ td, span = 0.4))
+
+mods <- list(`Temperatur des Luftknotens (kalibriert)` = r_air,
+             `Rohcounts = Teilerausgang (übertragener Messwert)` = r_cnt,
+             `NTC-Widerstand (aus dem Teilerverhältnis)` = r_res)
+tab <- bind_rows(lapply(names(mods), function(nm) {
+  f <- lm(CM ~ mods[[nm]])
+  data.frame(Modell = nm, `R²` = round(summary(f)$r.squared, 5),
+             `Reststreuung (mK)` = round(sd(resid(f)), 2), check.names = FALSE) }))
+
+# Kontrolle: derselbe Test mit dem gemeinsamen Anteil in ROHCOUNTS statt in mK, damit
+# nicht die Kalibrierung der tiefen Knoten die Reihenfolge bestimmt.
+CM_counts <- rowMeans(sapply(deep_pos, function(p) {
+  z <- nodes_s |> filter(position == p) |> arrange(recv)
+  resid(loess(z$counts ~ td, span = 0.4)) }))
+
+tab$`R² (CM in Counts)` <- vapply(names(mods), function(nm)
+  round(summary(lm(CM_counts ~ mods[[nm]]))$r.squared, 5), 0)
+
+knitr::kable(tab, row.names = FALSE,
+  caption = sprintf("Die Prädiktoren korrelieren untereinander mit %.4f bis %.4f — die Reihenfolge entscheidet eine Krümmung von unter einem Prozent. Letzte Spalte: dieselbe Rechnung mit dem gemeinsamen Anteil in Rohcounts (CM in mK und in Counts korrelieren mit %.6f).",
+                    min(abs(c(cor(r_air, r_cnt), cor(r_air, r_res), cor(r_cnt, r_res)))),
+                    max(abs(c(cor(r_air, r_cnt), cor(r_air, r_res), cor(r_cnt, r_res)))),
+                    abs(cor(CM, CM_counts))))
+```
+
+Ein Einwand vorweg: der gemeinsame Anteil ist oben aus den **kalibrierten** Temperaturen der
+tiefen Knoten gerechnet, verglichen wird er mit der Temperatur des Luftknotens — die
+Kalibrierung könnte die Reihenfolge erzeugen. Sie tut es nicht: die tiefen Knoten liegen alle
+bei −40,5 °C, dort ist die Kennlinie praktisch gerade, und der gemeinsame Anteil in Counts
+korreliert mit dem in mK zu 1,000000. Die letzte Spalte der Tabelle wiederholt den Test
+deshalb Counts gegen Counts — dieselben Werte auf vier Stellen. Die Reihenfolge ist eine
+Eigenschaft der **Luftseite**, nicht der Einheit.
+
+Trotzdem ist Vorsicht geboten: der **Teiler linearisiert den NTC bereits**. Über den Bereich des
+Luftknotens (−34,6 bis −17,1 °C, Teilerverhältnis 0,101 bis 0,201, entsprechend rund 56 bis
+126 kΩ) hängen die drei Prädiktoren zu 99,3 bis 99,95 % zusammen; der Rest ist eine Krümmung
+von 0,6 % der Varianz. Die Reihenfolge ist konsistent — je linearer in der Temperatur, desto
+besser der Fit —, trägt aber nur so weit: der gemeinsame Anteil folgt der **Temperatur** des
+Luftknotens etwas besser als seinem Teilerausgang und diesem wiederum besser als dem
+NTC-Widerstand. Ein Kanal, dessen Ausgang von sich aus linear in T ist — der
+TMP6331-Referenzzweig auf demselben Board — passt dazu besser als der NTC-Zweig; entscheiden
+lässt sich das mit 0,6 % Krümmung nicht — zumal N21 als einziger Knoten **keine
+Lab-Kalibrierung** hat und seine „Temperatur" damit die Form der universellen Mean-S4-Kurve
+trägt.
+
+Die Größenordnung: 200 ppm/K gegen den Temperaturkoeffizienten von Kupfer (3900 ppm/K)
+bedeutet, dass der von der Luft gesehene Widerstand **rund 5 % des Widerstands ausmacht, der
+die Verstärkung bestimmt**. Für 12 m eines 7-adrigen Kabels mit 0,5–2 Ω ist das nur dann
+erreichbar, wenn der maßgebliche Widerstand selbst sehr klein ist; bei einer Referenz in der
+Größenordnung von Kiloohm wären 5 % rund 50 Ω, also **kein normales Kabel, sondern eine
+schlechte Kontaktstelle**. Ohne die Schaltung ist die Umrechnung in Ohm nicht abschließend —
+der Anteil von 5 % ist es aber, denn er folgt allein aus 200 zu 3900 ppm/K.
+
+Über die Lufttemperaturspanne des Auswertefensters von 17,5 K ergibt das einen Hub des
+gemeinsamen Anteils von rund 100 mK.
+
+### Abgrenzung: head03 und head04 messen etwas anderes
+
+Ein naheliegender Vergleich mit den beiden anderen Kohnen-Köpfen führt in die Irre, wenn man
+die Bohrlochfüllung außer Acht lässt. **head03** (B50) hat eine **luftgefüllte** 60-m-Kette
+neben einer schneeverfüllten 10-m-Kette, **head04** (B40) eine 200-m-Kette im offenen
+Bohrloch neben einer flachen Kette in Schnee. In luftgefüllten Löchern bewegen sich die
+Sensoren gemeinsam, weil die Bohrlochluft vertikal verschoben wird und ihre Temperatur
+mitträgt — das ist Physik des Lochs, kein Fehler der Messkette.
+
+```{r cm-abgrenzung}
+korr <- function(path, depths, sel_a, sel_b, lab_a, lab_b, label) {
+  x <- tryCatch(read_csv(path, show_col_types = FALSE), error = function(e) NULL)
+  if (is.null(x)) return(NULL)
+  x  <- x[order(x$time_utc), ]
+  t2 <- as.numeric(difftime(x$time_utc, min(x$time_utc), units = "days"))
+  mk <- function(nodes) {
+    M <- sapply(nodes, function(nd) { cc <- sprintf("n%d.ntc1_temp_C", nd)
+      if (!cc %in% names(x)) return(rep(NA_real_, nrow(x)))
+      y <- x[[cc]]; ok <- is.finite(y); r <- rep(NA_real_, length(y))
+      if (sum(ok) > 100) r[ok] <- resid(loess(y[ok] ~ t2[ok], span = 0.25)) * 1000; r })
+    M[, colSums(is.finite(M)) > 100, drop = FALSE] }
+  A <- mk(sel_a); B <- mk(sel_b); C <- cor(cbind(A, B), use = "pairwise.complete.obs")
+  ia <- seq_len(ncol(A)); ib <- ncol(A) + seq_len(ncol(B))
+  data.frame(Kopf = label,
+    `sd A (mK)` = round(mean(apply(A, 2, sd, na.rm = TRUE)), 1),
+    `sd B (mK)` = round(mean(apply(B, 2, sd, na.rm = TRUE)), 1),
+    `r innerhalb A` = round(mean(C[ia, ia][upper.tri(C[ia, ia])]), 2),
+    `r innerhalb B` = round(mean(C[ib, ib][upper.tri(C[ib, ib])]), 2),
+    `r zwischen A und B` = round(mean(C[ia, ib]), 2),
+    `A` = lab_a, `B` = lab_b, check.names = FALSE) }
+
+d3 <- read_csv("./data/head03_depths.csv", show_col_types = FALSE)
+h3_luft   <- d3$node[grepl("Luft", d3$chain)   & !is.na(d3$depth_m) & d3$depth_m >= 21]
+h3_schnee <- d3$node[grepl("Schnee", d3$chain) & !is.na(d3$depth_m) & d3$depth_m >= 7]
+
+vgl <- bind_rows(
+  korr("./data/decoded_head03_231709_combined.csv", NULL, h3_luft, h3_schnee,
+       "60-m-Loch, Luft (≥21 m)", "10-m-Kette, Schnee (≥7 m)", "head03 (B50)"),
+  korr("./data/decoded_head04_231710_combined.csv", NULL, 8:20, 21:25,
+       "200-m-Loch, Luft (≥21 m)", "flache Kette, Schnee", "head04 (B40)"))
+
+knitr::kable(bind_rows(vgl |> select(Kopf, A, B, everything()),
+  data.frame(Kopf = "head02 (B46)", A = "60-m-Kette, Schnee (≥13 m)", B = "10-m-Kette, Schnee (≥7 m)",
+             `sd A (mK)` = round(mean(apply(Rd, 2, sd)), 1), `sd B (mK)` = NA,
+             `r innerhalb A` = round(mean(cor(Rd)[upper.tri(cor(Rd))]), 2),
+             `r innerhalb B` = NA, `r zwischen A und B` = NA, check.names = FALSE)),
+  row.names = FALSE,
+  caption = "Korrelation der Residuen innerhalb und zwischen den Ketten eines Kopfes.")
+```
+
+Das Ergebnis trennt die beiden Ursachen sauber:
+
+* **head03**: innerhalb der luftgefüllten Kette r = 0,99 bei 4,8 mK, innerhalb der
+  Schnee-Kette r = 0,87 bei 0,8 mK — **zwischen beiden Ketten aber nur r = 0,10**. Ein
+  Störer des Kopfes müsste beide gleich treffen; er tut es nicht.
+* **head04**: innerhalb des Bohrlochs r = 0,94 bei 6,7 mK, zur flachen Kette in Schnee
+  r = 0,01.
+* **head02**: beide Ketten in **Schnee**, in zwei getrennten Bohrlöchern, über 0,2 bis 62 m —
+  und trotzdem r = 1,00 bei 23 mK.
+
+head03 und head04 haben also **keinen** gemeinsamen Anteil der Messkette; was dort korreliert,
+ist die Unruhe der Bohrlochluft (in Grönland an der Doppelkette direkt gemessen, siehe
+`../Greenland2026/decode_chain.qmd`). Bei head02 ist das ausgeschlossen: dort gibt es kein
+luftgefülltes Loch, und die Korrelation läuft über zwei getrennte Bohrlöcher hinweg. Zusammen
+mit dem Verstärkungscharakter und dem Tagesgang bleibt für head02 nur die Messkette.
+
+Dass es bei head03 und head04 nicht auffiel, hat also nichts mit ihrem Sendeschema zu tun —
+sie haben es schlicht nicht. Ob head02s Anteil ein Defekt dieses Kopfes ist oder ein Effekt,
+den die anderen wegen ihrer festen Sendezeiten nur nicht zeigen könnten, lässt sich mit dem
+Sendeschema von head03 (09 und 21 UTC) nicht entscheiden: an diesen beiden Stunden ist der
+in head02 gemessene Tagesgang gerade im Nulldurchgang.
+
+## Bewertung
+
+Die Befunde ergeben zusammen ein Bild, das über eine Messeigenart hinausgeht:
+
+1. Der gemeinsame Anteil tritt **nur bei head02** auf. Bei head03 und head04 korrelieren die
+   Knoten nur innerhalb desselben luftgefüllten Bohrlochs, nicht über die Ketten hinweg.
+2. Er ist eine **Verstärkungsänderung** von rund 0,1 % Amplitude, also 200 ppm je Kelvin —
+   für eine Präzisionsmessung, deren Sensoren nach seinem Abzug 0,1 mK erreichen, sehr viel.
+3. Er folgt der **Lufttemperatur** streng linear (R² = 0,999), obwohl der Kopf 8–10 m tief
+   liegt. Der einzige Messpfad, der die Luft sieht, ist das 7-adrige Kabel zum 2-m-Knoten;
+   der Anteil von 5 % am verstärkungsbestimmenden Widerstand deutet dort auf eine
+   Kontaktstelle, nicht auf normale Aderwiderstände.
+4. Zwei Wochen später fiel genau dieser gemeinsame Pfad **vollständig** aus — digital und
+   analog gleichzeitig, mit einem achtstündigen Vorboten am 19.01.
+   (siehe `head02_ausfall.qmd`).
+
+Punkt 4 passt zu einer Kontaktstelle, die zunächst nur temperaturabhängig ihren Widerstand
+ändert und später ganz öffnet. Aus der Telemetrie allein ist das nicht zu beweisen — dafür
+braucht es die Prüfung des Geräts oder die SD-Karte. Als Arbeitsdiagnose ist ein **Fehler in
+der gemeinsamen Verdrahtung dieses Kopfes** aber die Erklärung, die alle vier Punkte trägt.
+
+Was das für die Daten heißt: die Temperaturen bleiben brauchbar, sobald der gemeinsame Anteil
+abgezogen wird — er lässt sich hier sogar über die Lufttemperatur modellieren. Für künftige
+Systeme ist die Lehre ein **mitgemessener Referenzwiderstand** im selben Messpfad; er hätte
+0,1 % Verstärkungsänderung unmittelbar sichtbar gemacht, statt sie erst über die
+Korrelationsstruktur von 24 Knoten aufzudecken.
+
+## Wozu die Reihe trotzdem taugt
+
+Nach Abzug des gemeinsamen Anteils liegt das Restrauschen bei 0,05–0,09 mK je Knoten in der
+Tiefe. Damit trägt head02 den bislang besten Nachweis der **Druck-Temperatur-Kopplung im
+Firn** bei: über 13–62 m folgt sie der Vorhersage `φ/(ρ c)` mit einer Steigung von
+0,71 ± 0,18 und einer Korrelation von 0,93. Die Auswertung steht in
+`../Greenland2026/druck_temperatur.qmd`.
+
+Für künftige Systeme folgt daraus: die vierstündliche Abtastung und die Tiefenstaffelung bis
+62 m waren richtig, es fehlte nur der Referenzkanal.

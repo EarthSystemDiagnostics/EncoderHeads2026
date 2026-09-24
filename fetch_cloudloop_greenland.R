@@ -19,7 +19,7 @@ suppressMessages({library(httr2); library(jsonlite); library(base64enc)})
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 FROM <- "2026-07-01T00:00:00"      # widen if backfilling; dedup makes overlap safe
-TO   <- "2026-09-01T00:00:00"      # open upper bound (API caps at latest)
+TO   <- format(Sys.time() + 86400, "%Y-%m-%dT%H:%M:%S", tz = "UTC")  # mitlaufend: immer bis morgen
 
 size2imei <- c("225" = "300434065508020",   # SnowMelt GRIP
                "226" = "301434062008160",   # SnowMelt Dye3

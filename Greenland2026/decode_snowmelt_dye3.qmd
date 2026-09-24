@@ -496,6 +496,21 @@ ratio_d <- amp_d |> left_join(ref_d, by = "day") |>
 day_v  <- max(ratio_d$day)       # jüngster verwertbarer Tag
 prof_v <- ratio_d |> filter(day == day_v) |> mutate(gedaempft = ratio < 0.35)
 
+# Oberflächenlage aus dem Übergang überhöht -> gedämpft (siehe GRIP-Dokument,
+# Abschnitt "Was das Amplitudenprofil wirklich zeigt"): der Sensor unmittelbar
+# über der Fläche zeigt einen überhöhten Tagesgang, der erste darunter einen
+# gedämpften. Auflösung = Knotenabstand, ohne Dämpfungstiefe und Extrapolation.
+h_uebergang <- function(h, r, h_max = h_ref) {
+  ue <- h[r > 1.05 & h < h_max]
+  if (!length(ue)) return(list(h_gd = NA_real_, h_ue = NA_real_, h_surf = NA_real_,
+                               n_gd = NA_integer_))
+  h_ue <- min(ue); gd <- h[r < 0.95 & h < h_ue]
+  h_gd <- if (length(gd)) max(gd) else NA_real_
+  list(h_gd = h_gd, h_ue = h_ue, h_surf = (h_gd + h_ue)/2,
+       n_gd = sum(r < 0.95 & h < h_ue))
+}
+tr_v <- h_uebergang(prof_v$hoehe_cm, prof_v$ratio)
+
 max_h <- n_nodes * 3L * s
 p_hov <- ggplot(ratio_d, aes(day, hoehe_cm, fill = pmin(ratio, 1.5))) +
   geom_tile() +
@@ -504,19 +519,24 @@ p_hov <- ggplot(ratio_d, aes(day, hoehe_cm, fill = pmin(ratio, 1.5))) +
                      breaks = seq(0, max_h, 24), expand = c(0, 0)) +
   scale_x_date(NULL, expand = c(0, 0)) +
   labs(title    = sprintf("Tagesgang-Dämpfung relativ zur Atmosphäre — %s", cfg$label),
-       subtitle = "Verhältnis zur Referenz (oberste 25 % der Höhen, selber Tag); eingeschneit ⇒ Band < 0.35") +
+       subtitle = "Verhältnis zur Referenz (oberste 25 % der Höhen, selber Tag); Oberfläche = Übergang von > 1 (überhöht) zu < 1 (gedämpft)") +
   theme_bw(base_size = 12) + theme(panel.grid = element_blank())
 
 p_prof <- ggplot(prof_v, aes(ratio, hoehe_cm)) +
   geom_vline(xintercept = 1, colour = "grey70") +
-  geom_vline(xintercept = 0.35, linetype = "dashed", colour = "firebrick") +
+  geom_vline(xintercept = 0.35, linetype = "dotted", colour = "grey60") +
+  { if (is.finite(tr_v$h_surf)) geom_hline(yintercept = tr_v$h_surf,
+        linetype = "dashed", colour = "firebrick") } +
   geom_path(colour = "grey70", linewidth = 0.4) +
   geom_point(aes(colour = gedaempft), size = 1.8, show.legend = FALSE) +
   scale_colour_manual(values = c(`FALSE` = "#2980b9", `TRUE` = "firebrick")) +
   scale_y_continuous(NULL, limits = c(0, max_h), breaks = seq(0, max_h, 24),
                      expand = c(0, 0)) +
   scale_x_continuous("Amplitude / Atmosphäre", limits = c(0, NA)) +
-  labs(title = format(day_v, "%d.%m.%Y"), subtitle = "gestrichelt: Dämpfungsschwelle 0.35") +
+  labs(title = format(day_v, "%d.%m.%Y"),
+       subtitle = if (is.finite(tr_v$h_surf))
+         sprintf("rot: Oberfläche %.0f cm (Übergang überhöht → gedämpft)", tr_v$h_surf)
+       else "punktiert: alte Dämpfungsschwelle 0.35") +
   theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 
 p_hov + p_prof + plot_layout(widths = c(3.2, 1))
@@ -525,30 +545,35 @@ p_hov + p_prof + plot_layout(widths = c(3.2, 1))
 ```{r einschnei-verdict, eval=multi, results='asis'}
 bot <- prof_v |> slice_min(hoehe_cm, n = 1)
 stand <- format(day_v, "%d.%m.%Y")
-n_teil <- sum(prof_v$ratio < 0.7)          # teilgedämpft, aber über der Schwelle
-h_teil <- if (n_teil) max(prof_v$hoehe_cm[prof_v$ratio < 0.7]) else NA_integer_
 
-if (!any(prof_v$gedaempft) && bot$ratio >= 0.7) {
+if (is.finite(tr_v$h_surf)) {
   cat(sprintf(
-    "**Kein Sensor eingeschneit** (Tages-Check %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude) — keine Dämpfung. Das Urteil braucht nur diesen einen vollen Messtag, weil sich die Wetterlage im Verhältnis herauskürzt. Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
-    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100 * bot$ratio, bot$amp, bot$ref))
-} else if (!any(prof_v$gedaempft)) {
+    "**Schneeoberfläche bei %.0f ± %.0f cm** auf der Kettenachse (Tages-Check %s). %d cm ist gedämpft (%.0f %% der Atmosphären-Referenz), %d cm überhöht (%.0f %%) — der Sensor unmittelbar über der Fläche sieht deren Tagesgang verstärkt, der erste darunter bereits gedämpft. Gedämpft sind **%d von %d** Sensorhöhen darunter, also **%.0f cm Überdeckung** über dem untersten Sensor (%d cm). Bei ~40 cm Montagehöhe entspricht das ≳ %.0f cm Netto-Akkumulation seit Installation.\n",
+    tr_v$h_surf, s/2, stand, tr_v$h_gd, 100*prof_v$ratio[prof_v$hoehe_cm == tr_v$h_gd],
+    tr_v$h_ue, 100*prof_v$ratio[prof_v$hoehe_cm == tr_v$h_ue],
+    tr_v$n_gd, sum(prof_v$hoehe_cm < tr_v$h_ue),
+    tr_v$h_surf - bot$hoehe_cm, bot$hoehe_cm, 40 + tr_v$h_surf - bot$hoehe_cm))
+} else if (bot$ratio >= 0.7) {
   cat(sprintf(
-    "**Grenzfall — unterster Sensor deutlich gedämpft, Schwelle knapp nicht unterschritten** (Tages-Check %s). Der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K); Schwelle 35 %%. Teilgedämpft (< 70 %%) sind %d von %d Sensorhöhen. Bei ~40 cm Montagehöhe wäre eine Überdeckung überraschend — eher gedämpfte oberflächennahe Luft oder ein ruhiger Referenztag.\n",
-    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100 * bot$ratio, bot$amp, bot$ref,
-    n_teil, nrow(prof_v)))
+    "**Kein Sensor eingeschneit** (Tages-Check %s). Im Profil gibt es keinen Übergang überhöht → gedämpft; der unterste Sensor (%d cm, physisch ~%d cm über der Oberfläche bei Installation) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K). Bei ~40 cm Montagehöhe ist das erwartungsgemäß.\n",
+    stand, bot$hoehe_cm, bot$hoehe_cm + 40L, 100*bot$ratio, bot$amp, bot$ref))
 } else {
+  cat(sprintf(
+    "**Grenzfall — kein Übergang im Profil** (Tages-Check %s). Im Profil gibt es keinen Übergang überhöht → gedämpft; der unterste Sensor (%d cm) erreicht **%.0f %%** der Referenz (%.1f von %.1f K). Entweder steht die Oberfläche unterhalb des Kettenendes, oder der Tag ist zu bedeckt für ein Urteil (ohne direkte Einstrahlung fehlt die Überhöhung).\n",
+    stand, bot$hoehe_cm, 100*bot$ratio, bot$amp, bot$ref))
+}
+
+if (any(prof_v$gedaempft)) {
   h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(
-    "**Eingeschneit bis ca. %d cm** (Tages-Check %s): %d von %d Sensorhöhen liegen unter 35 %% der Atmosphären-Referenz. Unterster Sensor: **%.0f %%** (%.1f von %.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse — d. h. seit Installation sind ≳ %d cm Netto-Akkumulation aufgelaufen (40 cm Freihang + Überdeckung).\n",
-    h_snow, stand, sum(prof_v$gedaempft), nrow(prof_v), 100 * bot$ratio, bot$amp,
-    bot$ref, h_snow, min(prof_v$hoehe_cm[!prof_v$gedaempft]), 40L + h_snow))
+    "\nZum Vergleich die frühere Schwellenregel: %d von %d Sensorhöhen liegen unter 35 %% der Referenz, die oberste davon bei %d cm. Diese Höhe liegt rund eine Dämpfungstiefe **unter** der Oberfläche und ist deshalb kein Oberflächenmaß.\n",
+    sum(prof_v$gedaempft), nrow(prof_v), h_snow))
 }
 
 # Frühwarnung: fallendes Verhältnis am untersten Sensor über die letzten
 # verwertbaren Tage = einsetzendes Einschneien, bevor die 35 %-Schwelle fällt.
 r_bot <- ratio_d |> filter(hoehe_cm == min(hoehe_cm)) |> arrange(day) |> tail(5)
-if (!any(prof_v$gedaempft) && nrow(r_bot) >= 3 &&
+if (!is.finite(tr_v$h_surf) && nrow(r_bot) >= 3 &&
     tail(r_bot$ratio, 1) < 0.7 && tail(r_bot$ratio, 1) < head(r_bot$ratio, 1)) {
   cat(sprintf(
     "\n**Hinweis — beginnende Dämpfung:** das Verhältnis des untersten Sensors fällt über die letzten %d verwertbaren Tage (%s): %s. Das ist das erwartete Muster bei einsetzendem Einschneien; die 35 %%-Schwelle ist noch nicht unterschritten.\n",

@@ -489,6 +489,22 @@ ratio_d <- amp_d |> left_join(ref_d, by = "day") |>
 day_v  <- max(ratio_d$day)       # jüngster verwertbarer Tag
 prof_v <- ratio_d |> filter(day == day_v) |> mutate(gedaempft = ratio < 0.35)
 
+# Oberflächenlage aus dem Übergang überhöht -> gedämpft. Der Sensor unmittelbar
+# über der Schneefläche zeigt einen ÜBERHÖHTEN Tagesgang (die Fläche ist die
+# strahlende Oberfläche), der erste darunter einen gedämpften. Der Wechsel
+# lokalisiert die Oberfläche auf den Knotenabstand genau, ohne Dämpfungstiefe
+# und ohne Extrapolation.
+h_uebergang <- function(h, r, h_max = h_ref) {
+  ue <- h[r > 1.05 & h < h_max]
+  if (!length(ue)) return(list(h_gd = NA_real_, h_ue = NA_real_, h_surf = NA_real_,
+                               n_gd = NA_integer_))
+  h_ue <- min(ue); gd <- h[r < 0.95 & h < h_ue]
+  h_gd <- if (length(gd)) max(gd) else NA_real_
+  list(h_gd = h_gd, h_ue = h_ue, h_surf = (h_gd + h_ue)/2,
+       n_gd = sum(r < 0.95 & h < h_ue))
+}
+tr_v <- h_uebergang(prof_v$hoehe_cm, prof_v$ratio)
+
 max_h <- n_nodes * 3L * s
 p_hov <- ggplot(ratio_d, aes(day, hoehe_cm, fill = pmin(ratio, 1.5))) +
   geom_tile() +
@@ -497,19 +513,24 @@ p_hov <- ggplot(ratio_d, aes(day, hoehe_cm, fill = pmin(ratio, 1.5))) +
                      breaks = seq(0, max_h, 24), expand = c(0, 0)) +
   scale_x_date(NULL, expand = c(0, 0)) +
   labs(title    = sprintf("Tagesgang-Dämpfung relativ zur Atmosphäre — %s", cfg$label),
-       subtitle = "Verhältnis zur Referenz (oberste 25 % der Höhen, selber Tag); eingeschneit ⇒ Band < 0.35") +
+       subtitle = "Verhältnis zur Referenz (oberste 25 % der Höhen, selber Tag); Oberfläche = Übergang von > 1 (überhöht) zu < 1 (gedämpft)") +
   theme_bw(base_size = 12) + theme(panel.grid = element_blank())
 
 p_prof <- ggplot(prof_v, aes(ratio, hoehe_cm)) +
   geom_vline(xintercept = 1, colour = "grey70") +
-  geom_vline(xintercept = 0.35, linetype = "dashed", colour = "firebrick") +
+  geom_vline(xintercept = 0.35, linetype = "dotted", colour = "grey60") +
+  { if (is.finite(tr_v$h_surf)) geom_hline(yintercept = tr_v$h_surf,
+        linetype = "dashed", colour = "firebrick") } +
   geom_path(colour = "grey70", linewidth = 0.4) +
   geom_point(aes(colour = gedaempft), size = 1.8, show.legend = FALSE) +
   scale_colour_manual(values = c(`FALSE` = "#2980b9", `TRUE` = "firebrick")) +
   scale_y_continuous(NULL, limits = c(0, max_h), breaks = seq(0, max_h, 24),
                      expand = c(0, 0)) +
   scale_x_continuous("Amplitude / Atmosphäre", limits = c(0, NA)) +
-  labs(title = format(day_v, "%d.%m.%Y"), subtitle = "gestrichelt: Dämpfungsschwelle 0.35") +
+  labs(title = format(day_v, "%d.%m.%Y"),
+       subtitle = if (is.finite(tr_v$h_surf))
+         sprintf("rot: Oberfläche %.0f cm (Übergang überhöht → gedämpft)", tr_v$h_surf)
+       else "punktiert: alte Dämpfungsschwelle 0.35") +
   theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 
 # --- Oberflächenlage aus dem Amplituden- und Phasenprofil ------------------
@@ -529,6 +550,7 @@ fitA <- series_diag |>
   select(-cf) |> arrange(hoehe_cm)
 A_air <- median(fitA$A[fitA$hoehe_cm >= h_ref]); phi_air <- median(fitA$phi[fitA$hoehe_cm >= h_ref])
 fitA <- fitA |> mutate(rA = A/A_air, lag_h = ((phi_air - phi) %% (2*pi))/om/3600)
+tr7  <- h_uebergang(fitA$hoehe_cm, fitA$rA)
 sub  <- fitA |> filter(rA < 0.75)
 d_damp <- NA_real_; h_surf <- NA_real_
 if (nrow(sub) >= 2) {
@@ -554,25 +576,27 @@ if (!is.null(aws_raw) && "z_surf_combined" %in% names(aws_raw)) {
     filter(day >= min(ratio_d$day), day <= max(ratio_d$day), is.finite(z_surf_combined)) |>
     group_by(day) |> summarise(z = 100*mean(z_surf_combined), .groups = "drop")
   if (nrow(aw)) {
-    anchor <- if (is.finite(h_surf)) h_surf else min(fitA$hoehe_cm)
+    anchor <- if (is.finite(tr7$h_surf)) tr7$h_surf else
+              if (is.finite(h_surf)) h_surf else min(fitA$hoehe_cm)
     z0 <- aw$z[which.min(abs(as.numeric(aw$day - day_v)))]
     aw <- aw |> mutate(h_chain = z - z0 + anchor)
     p_aws <- ggplot(aw, aes(day, h_chain)) +
       geom_line(colour = "#2166ac", linewidth = 0.7) +
       geom_point(colour = "#2166ac", size = 1) +
-      { if (is.finite(h_surf)) geom_hline(yintercept = h_surf, linetype = "dashed",
+      { if (is.finite(anchor)) geom_hline(yintercept = anchor, linetype = "dashed",
                                           colour = "firebrick") } +
       scale_x_date(NULL, expand = c(0, 0),
                    limits = c(min(ratio_d$day), max(ratio_d$day))) +
       scale_y_continuous("Höhe (cm)", limits = c(0, 60), breaks = seq(0, 60, 12)) +
       labs(subtitle = sprintf("Summit-AWS (~30 km): Schneeoberfläche, auf dieselbe Höhenachse gelegt (Anker %.0f cm am %s); Ausschnitt 0–60 cm",
-                              if (is.finite(h_surf)) h_surf else 0, format(day_v, "%d.%m."))) +
+                              anchor, format(day_v, "%d.%m."))) +
       theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
   }
 }
 
-if (is.finite(h_surf))
-  p_hov <- p_hov + geom_hline(yintercept = h_surf, linetype = "dashed", colour = "firebrick")
+if (is.finite(tr7$h_surf))
+  p_hov <- p_hov + geom_hline(yintercept = tr7$h_surf, linetype = "dashed",
+                              colour = "firebrick")
 
 if (is.null(p_aws)) {
   p_hov + p_prof + plot_layout(widths = c(3.2, 1))
@@ -587,42 +611,59 @@ if (is.null(p_aws)) {
 ```{r einschnei-verdict, eval=multi, results='asis'}
 bot <- prof_v |> slice_min(hoehe_cm, n = 1)
 stand <- format(day_v, "%d.%m.%Y")
-n_teil <- sum(prof_v$ratio < 0.7)          # teilgedämpft, aber über der Schwelle
-h_teil <- if (n_teil) max(prof_v$hoehe_cm[prof_v$ratio < 0.7]) else NA_integer_
 
-if (!any(prof_v$gedaempft) && bot$ratio >= 0.7) {
+if (is.finite(tr_v$h_surf)) {
+  # Regelfall: der Übergang liegt innerhalb der Kette.
   cat(sprintf(
-    "**Kein Sensor eingeschneit** (Tages-Check %s). Der unterste Sensor (%d cm) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude) — keine Dämpfung, kein vertikaler Gradient. Das Urteil braucht nur diesen einen vollen Messtag, weil sich die Wetterlage im Verhältnis herauskürzt. Eine Überdeckung von wenigen cm (≲ 5 cm) wäre nicht sicher erkennbar.\n",
-    stand, bot$hoehe_cm, 100 * bot$ratio, bot$amp, bot$ref))
-} else if (!any(prof_v$gedaempft)) {
+    "**Schneeoberfläche bei %.0f ± %.0f cm** auf der Kettenachse (Tages-Check %s). %d cm ist gedämpft (%.0f %% der Atmosphären-Referenz), %d cm überhöht (%.0f %%) — der Sensor unmittelbar über der Fläche sieht deren Tagesgang verstärkt, der erste darunter bereits gedämpft. Der Wechsel lokalisiert die Oberfläche auf den Knotenabstand genau; es geht weder eine Dämpfungstiefe noch eine Extrapolation ein. Gedämpft sind **%d von %d** Sensorhöhen darunter, das entspricht **%.0f cm Überdeckung** über dem untersten Sensor (%d cm).\n",
+    tr_v$h_surf, s/2, stand, tr_v$h_gd, 100*prof_v$ratio[prof_v$hoehe_cm == tr_v$h_gd],
+    tr_v$h_ue, 100*prof_v$ratio[prof_v$hoehe_cm == tr_v$h_ue],
+    tr_v$n_gd, sum(prof_v$hoehe_cm < tr_v$h_ue),
+    tr_v$h_surf - bot$hoehe_cm, bot$hoehe_cm))
+} else if (bot$ratio >= 0.7) {
   cat(sprintf(
-    "**Grenzfall — unterster Sensor deutlich gedämpft, Schwelle knapp nicht unterschritten** (Tages-Check %s). Der unterste Sensor (%d cm) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K Tagesamplitude); die Dämpfungsschwelle liegt bei 35 %%. Teilgedämpft (< 70 %%) sind %d von %d Sensorhöhen, bis %s hinauf — die Schneeoberfläche steht damit unmittelbar am unteren Kettenende. Ob die untersten Sensoren bereits von wenigen cm Schnee überdeckt sind oder noch in oberflächennaher, gedämpfter Luft hängen, lässt sich mit dieser Methode nicht sicher trennen.\n",
-    stand, bot$hoehe_cm, 100 * bot$ratio, bot$amp, bot$ref, n_teil, nrow(prof_v),
-    if (is.na(h_teil)) "—" else sprintf("%d cm", h_teil)))
+    "**Kein Sensor eingeschneit** (Tages-Check %s). Im Profil gibt es keinen Übergang überhöht → gedämpft; der unterste Sensor (%d cm) erreicht **%.0f %%** der Atmosphären-Referenz (%.1f von %.1f K) — keine Dämpfung, kein vertikaler Gradient. Eine Überdeckung von wenigen cm (≲ 5 cm) wäre nicht sicher erkennbar.\n",
+    stand, bot$hoehe_cm, 100*bot$ratio, bot$amp, bot$ref))
 } else {
-  h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(
-    "**Eingeschneit bis ca. %d cm** (Tages-Check %s): %d von %d Sensorhöhen liegen unter 35 %% der Atmosphären-Referenz. Unterster Sensor: **%.0f %%** (%.1f von %.1f K). Die Schneeoberfläche liegt demnach zwischen %d und %d cm auf der Kettenachse.\n",
-    h_snow, stand, sum(prof_v$gedaempft), nrow(prof_v), 100 * bot$ratio, bot$amp,
-    bot$ref, h_snow, min(prof_v$hoehe_cm[!prof_v$gedaempft])))
+    "**Grenzfall — kein Übergang im Profil** (Tages-Check %s). Im Profil gibt es keinen Übergang überhöht → gedämpft; der unterste Sensor (%d cm) erreicht **%.0f %%** der Referenz (%.1f von %.1f K). Entweder steht die Oberfläche unterhalb des Kettenendes, oder der Tag ist zu bedeckt für ein Urteil (ohne direkte Einstrahlung fehlt die Überhöhung).\n",
+    stand, bot$hoehe_cm, 100*bot$ratio, bot$amp, bot$ref))
 }
 
-# Tiefenabschätzung aus Dämpfung + Phase (siehe Fit oben)
-if (is.finite(h_surf) && is.finite(d_damp)) {
-  bot_h  <- min(fitA$hoehe_cm)
-  z_amp  <- h_surf - bot_h
-  z_ph   <- fitA$lag_h[fitA$hoehe_cm == bot_h] * 3600 * om * d_damp
-  kappa  <- (d_damp/100)^2 * om/2
+# Gegenprobe mit der alten Schwellenregel. Die 35-%-Schwelle markiert nicht die
+# Oberfläche, sondern eine Höhe rund eine Dämpfungstiefe darunter — sie setzt
+# die Oberfläche deshalb systematisch zu tief und steht nur noch als Kontrolle.
+if (any(prof_v$gedaempft)) {
+  h_snow <- max(prof_v$hoehe_cm[prof_v$gedaempft])
   cat(sprintf(
-    "\n**Tiefenabschätzung (Diffusionsmodell):** Dämpfungstiefe **d = %.1f cm** (Steigung von ln A über die Kettenhöhe) ⇒ κ ≈ %.1e m²/s (lockerer Neuschnee). Die Gerade erreicht die Luftamplitude bei **h = %.0f cm** — das ist die Schneeoberfläche auf der Kettenachse. Der unterste Sensor (%d cm) liegt damit **%.0f cm tief**; unabhängige Gegenprobe über den Phasenverzug (%.1f h): **%.0f cm**.\n",
-    d_damp, kappa, h_surf, bot_h, z_amp,
-    fitA$lag_h[fitA$hoehe_cm == bot_h], z_ph))
+    "\nZum Vergleich die frühere Schwellenregel: %d von %d Sensorhöhen liegen unter 35 %% der Referenz, die oberste davon bei %d cm. Diese Höhe liegt rund eine Dämpfungstiefe **unter** der Oberfläche und ist deshalb kein Oberflächenmaß.\n",
+    sum(prof_v$gedaempft), nrow(prof_v), h_snow))
+}
+
+# Gegenprobe über das 7-Tage-Profil: Amplitude und Phase, jeweils mit ihrer
+# EIGENEN Längenskala. Beide dürfen nicht dieselbe Dämpfungstiefe benutzen; die
+# Amplitude fällt schneller, als der Verzug wächst. Die Ursache ist offen —
+# eindringende Strahlung wurde geprüft und erklärt es nicht (siehe Abschnitt
+# "Amplitude gegen Phase").
+if (is.finite(h_surf) && is.finite(d_damp)) {
+  bot_h <- min(fitA$hoehe_cm)
+  lagb  <- fitA$lag_h[fitA$hoehe_cm == bot_h]
+  subP  <- fitA |> filter(rA < 0.95, hoehe_cm < h_ref)
+  d_ph  <- if (nrow(subP) >= 2) {
+    cp <- coef(lm(lag_h*3600 ~ hoehe_cm, data = subP))[2]
+    if (cp < 0) -1/(cp*om) else NA_real_ } else NA_real_
+  cat(sprintf(
+    "\n**Gegenprobe über das 7-Tage-Profil.** Aus der Amplitude: Abklinglänge **%.1f cm**, extrapoliert auf die Referenzamplitude ergibt **h = %.0f cm**. Aus dem Phasenverzug (%.1f h am untersten Sensor) mit der zugehörigen Längenskala %s: **%.0f cm Überdeckung**%s.\n",
+    d_damp, h_surf, lagb,
+    if (is.finite(d_ph)) sprintf("%.1f cm", d_ph) else "—",
+    if (is.finite(d_ph)) lagb*3600*om*d_ph else NA_real_,
+    if (is.finite(tr7$h_surf)) sprintf("; der Übergangsschätzer über dieselben 7 Tage setzt die Oberfläche auf %.0f cm", tr7$h_surf) else ""))
 }
 
 # Frühwarnung: fallendes Verhältnis am untersten Sensor über die letzten
 # verwertbaren Tage = einsetzendes Einschneien, bevor die 35 %-Schwelle fällt.
 r_bot <- ratio_d |> filter(hoehe_cm == min(hoehe_cm)) |> arrange(day) |> tail(5)
-if (!any(prof_v$gedaempft) && nrow(r_bot) >= 3 &&
+if (!is.finite(tr_v$h_surf) && nrow(r_bot) >= 3 &&
     tail(r_bot$ratio, 1) < 0.7 && tail(r_bot$ratio, 1) < head(r_bot$ratio, 1)) {
   cat(sprintf(
     "\n**Hinweis — beginnende Dämpfung:** das Verhältnis des untersten Sensors fällt über die letzten %d verwertbaren Tage (%s): %s. Das ist das erwartete Muster bei einsetzendem Einschneien; die 35 %%-Schwelle ist noch nicht unterschritten.\n",
@@ -631,7 +672,195 @@ if (!any(prof_v$gedaempft) && nrow(r_bot) >= 3 &&
 }
 ```
 
-### Einschneitiefe über die Zeit — zwei unabhängige Schätzer vs. AWS
+### Was das Amplitudenprofil wirklich zeigt
+
+Das Profil der Tagesamplitude ist **nicht monoton**. Über den letzten sieben Tagen (GRIP):
+
+| Höhe | 4 cm | 8 | 12 | 16 | 20 | **24** | 28 | 36 | ≥ 60 |
+|---|---|---|---|---|---|---|---|---|---|
+| Amplitude (K) | 0,12 | 0,40 | 0,66 | 1,08 | 1,99 | **3,27** | 3,14 | 2,68 | 2,34 |
+| A/A_Referenz | 0,05 | 0,17 | 0,28 | 0,46 | 0,85 | **1,40** | 1,34 | 1,15 | 1,00 |
+| Phasenverzug (h) | 3,3 | 2,6 | 2,4 | 1,6 | 0,7 | 0,3 | 0,1 | 0,1 | 0,0 |
+
+Der Sensor unmittelbar über der Oberfläche zeigt den **größten** Tagesgang, 40 % über der
+freien Luft, und erst darunter fällt die Amplitude. Die Schneeoberfläche ist die strahlende
+Fläche mit dem stärksten Tagesgang; ein Sensor dicht darüber koppelt an sie an. Daraus folgt
+ein Schätzer, der ohne jedes Modell auskommt.
+
+**Der Übergang überhöht → gedämpft.** Die Oberfläche liegt zwischen dem untersten Sensor mit
+A/A_Referenz > 1 und dem obersten darunter mit A/A_Referenz < 1. Die Auflösung ist der
+Knotenabstand, 4 cm; es geht weder eine Dämpfungstiefe noch eine Extrapolation ein.
+
+```{r uebergang, eval=multi, echo=FALSE, results='asis'}
+if (is.finite(tr7$h_surf)) cat(sprintf(
+  "Über die letzten sieben Tage: **Oberfläche bei %.0f ± %.0f cm** auf der Kettenachse. %d cm ist gedämpft (%.0f %% der Referenz), %d cm überhöht (%.0f %%); **%d von %d** Sensorhöhen darunter sind gedämpft, also %.0f cm Überdeckung über dem untersten Sensor (%d cm).\n",
+  tr7$h_surf, s/2, tr7$h_gd, 100*fitA$rA[fitA$hoehe_cm == tr7$h_gd],
+  tr7$h_ue, 100*fitA$rA[fitA$hoehe_cm == tr7$h_ue],
+  tr7$n_gd, sum(fitA$hoehe_cm < tr7$h_ue),
+  tr7$h_surf - min(fitA$hoehe_cm), min(fitA$hoehe_cm)))
+```
+
+**Gegenprobe mit dem Detektor von Sledd et al. (2026).** Sie bestimmen die Oberfläche an einer
+2-cm-Thermistorkette in der Perkolationszone Südwestgrönlands aus dem **Maximum der 24-Stunden-
+Varianz des Vertikalgradienten** ΔT/Δz (Profil je Zeitschritt vertikal normiert), weil die
+thermischen Eigenschaften von Luft und Schnee sich unterscheiden. Der Detektor braucht keine
+Überhöhung, sondern nur einen Tagesgang im Gradienten, und arbeitet damit auch an bedeckten
+Tagen. Auf unsere Daten angewendet:
+
+```{r sledd-detektor, eval=multi, echo=FALSE, results='asis'}
+wd <- series_diag |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s, ts = as.numeric(time)) |>
+  filter(time > max(time) - 21*86400, hoehe_cm <= 120, is.finite(temp_C))
+gr <- seq(min(wd$ts), max(wd$ts), by = 1800)
+hs <- sort(unique(wd$hoehe_cm))
+M  <- sapply(hs, function(h) { x <- wd |> filter(hoehe_cm == h) |> arrange(ts)
+  if (nrow(x) < 10) rep(NA_real_, length(gr)) else approx(x$ts, x$temp_C, gr, rule = 2)$y })
+dTz <- t(apply(M, 1, function(r) c(NA, diff(r, lag = 2)/(hs[3]-hs[1]), NA)))
+nw  <- 48L
+va  <- sapply(seq_len(ncol(dTz)), function(j) {
+  v <- rep(NA_real_, nrow(dTz))
+  for (i in seq(nw/2+1, nrow(dTz)-nw/2)) v[i] <- var(dTz[(i-nw/2):(i+nw/2), j], na.rm = TRUE)
+  v })
+h_sl <- apply(va, 1, function(r) if (all(is.na(r))) NA_real_ else hs[which.max(r)])
+sl <- tibble(day = as.Date(as.POSIXct(gr, origin = "1970-01-01", tz = "UTC")), h = h_sl) |>
+  filter(is.finite(h)) |> group_by(day) |> summarise(h = median(h), .groups = "drop") |> tail(7)
+cat(sprintf("Tagesmedian der letzten sieben Tage: **%s cm**. Sledd et al. brauchen zusätzlich einen empirisch bestimmten Versatz von +4 cm, den sie gegen eine Handmessung beim Abbau kalibriert haben; mit diesem Versatz ergäbe sich %s cm. Der Übergangsschätzer kommt ohne Kalibrierung auf denselben Wert.\n",
+  paste(range(sl$h), collapse = "–"), paste(range(sl$h) + 4, collapse = "–")))
+```
+
+### Amplitude gegen Phase
+
+`A ∝ e^{−z/d}` und `Verzug = z/(dω)` enthalten für eine rein diffusive Welle dieselbe
+Dämpfungstiefe. Gemessen fällt die Amplitude schneller, als der Verzug wächst. Der Betrag hängt
+allerdings vom gewählten Fenster ab:
+
+```{r ampl-phase-fenster, eval=multi, echo=FALSE}
+sd_ts <- series_diag |>
+  mutate(hoehe_cm = (node - 1L) * 3L * s + rank_map[sensor] * s, ts = as.numeric(time))
+cc_i  <- function(T) 152.5 + 7.122*(T + 273.15)
+kC    <- function(r) 2.5e-6*r^2 - 1.23e-4*r + 0.024
+pass  <- function(t_end, nd) {
+  w  <- sd_ts |> filter(time > t_end - nd*86400, time <= t_end)
+  fa <- w |> group_by(hoehe_cm) |>
+    summarise(cf = list(coef(lm(temp_C ~ sin(om*ts) + cos(om*ts)))), .groups = "drop") |>
+    mutate(A = sapply(cf, function(c) sqrt(c[2]^2 + c[3]^2)),
+           phi = sapply(cf, function(c) atan2(c[3], c[2]))) |> select(-cf) |> arrange(hoehe_cm)
+  Aa <- median(fa$A[fa$hoehe_cm >= h_ref]); pr <- median(fa$phi[fa$hoehe_cm >= h_ref])
+  o  <- fa |> mutate(rA = A/Aa, lag = (((pr - phi + pi) %% (2*pi)) - pi)/om) |>
+    filter(rA < 0.95, hoehe_cm < h_ref)
+  if (nrow(o) < 3) return(NULL)
+  dA <- 1/coef(lm(log(A) ~ hoehe_cm, o))[2]; dP <- -1/(coef(lm(lag ~ hoehe_cm, o))[2]*om)
+  Tm <- mean(w$temp_C[w$hoehe_cm <= 20], na.rm = TRUE)
+  rho <- function(dd) tryCatch(uniroot(function(r) kC(r)/(r*cc_i(Tm)) - (dd/100)^2*om/2,
+                                       c(80, 917))$root, error = function(e) NA_real_)
+  data.frame(Fenster = sprintf("%d d bis %s", nd, format(as.Date(t_end), "%d.%m.")),
+             n = nrow(o), d_A = round(dA, 1), d_P = round(dP, 1),
+             Verhältnis = round(dP/dA, 2), rho_A = round(rho(dA)), rho_P = round(rho(dP)))
+}
+te <- max(sd_ts$time)
+knitr::kable(do.call(rbind, c(lapply(c(5, 7, 10, 14, 21), function(n) pass(te, n)),
+  lapply(c(4, 8, 12, 16), function(k) pass(te - k*86400, 7)))),
+  row.names = FALSE,
+  col.names = c("Fenster", "n", "d aus A (cm)", "d aus Phase (cm)", "Verhältnis",
+                "ρ aus A", "ρ aus Phase"))
+```
+
+Die Amplitude liefert durchweg eine Abklinglänge um 10 cm und damit über
+`κ = k(ρ)/(ρ·c)` (Calonne et al. 2011) eine Dichte im Bereich von Grönland-Oberflächenschnee.
+Die Phase liefert eine 1,35- bis 1,9-mal größere Längenskala und damit eine Dichte, die für die
+obersten Dezimeter zu hoch ist. Der Verzug ist also kleiner, als die Dämpfung erwarten lässt.
+Die beiden kürzesten Fenster bis zum 11.09. fallen mit Verhältnissen von 2,3 und 4,0 heraus;
+sie stützen sich auf vier bzw. fünf Sensoren, von denen der unterste bei 5 % der Referenz
+liegt. Ein Einzelfenster trägt diese Auswertung nicht.
+
+**Der Betrag ist nicht insolationsgetrieben.** Über die letzten drei Wochen — in denen sich die
+Einschneitiefe kaum ändert — nach der Einstrahlung an der Summit-AWS geteilt, ergibt die
+sonnige Hälfte d_A = 9,8 cm gegen d_P = 12,4 cm (Verhältnis 1,3), die bedeckte Hälfte
+9,5 gegen 11,0 cm (1,2). Eindringende Strahlung würde an sonnigen Tagen einen verzugsfreien
+Anteil beitragen und das Verhältnis dort vergrößern; das ist nicht der Fall.
+
+Sledd et al. korrigieren an ihrer Kette eine **Eigenerwärmung**: sie misst unter der Oberfläche
+Temperaturen über 0 °C, absorbiert also mehr Strahlung als der umgebende Firn. Ihre Korrektur
+folgt Beer mit κ = 19 m⁻¹ (Abklinglänge 5,3 cm) und einem NIR-Anteil von 0,5 direkt unter der
+Oberfläche. Unsere Geometrie ist eine andere: die NTCs sitzen auf Auslegern quer zur Achse, die
+Schneedecke über dem Sensor ist ungestört, und es gibt kein 5 cm dickes Tragrohr im Strahlengang.
+Der Insolationstest ist damit vereinbar — die Eigenerwärmung, die ihre Auswertung dominiert,
+ist in unseren Daten nicht nachweisbar.
+
+**Konsequenz für das Urteil.** Die 35-%-Schwelle markiert nicht die Oberfläche, sondern eine
+Höhe rund eine Dämpfungstiefe darunter; sie setzt die Oberfläche deshalb systematisch zu tief
+(hier 12–16 statt 22 cm). Die Amplitudenextrapolation auf das Profilmaximum und der
+Übergangsschätzer stimmen überein. Der Phasenverzug ist nur mit seiner eigenen Dämpfungstiefe
+auswertbar, nicht mit der aus der Amplitude — mit d = 24,4 cm liefert er 20,3 cm und passt
+dann ebenfalls. Im Folgenden sind alle drei Schätzer gezeigt.
+
+### Woher die Diskrepanz nicht kommt
+
+Der Abstand zwischen der Abklinglänge aus der Amplitude und der aus dem Verzug ist über acht
+Fenster mit Faktor 1,3 bis 1,9 stabil. Fünf Erklärungen sind geprüft und ausgeschlossen.
+
+**Mehrtägiges Wetter.** Das Residuum nach Abzug der Tageswelle ist kein Rauschen — das
+Instrument liegt unter 1 mK — sondern durchgelassenes synoptisches Signal. Ein 24-Stunden-Mittel
+über sechs gleichabständige Messungen entfernt die Tageswelle und alle Oberwellen exakt, lässt
+aber mehrtägige Variabilität passieren: 36 % bei 2 Tagen Periode, 17 % bei 3, 6 % bei 5. Mit
+einer Oberflächenamplitude von 5 K und einer Dämpfungstiefe von 15,7 cm für die 3-Tage-Welle
+ergibt das in 21 cm Tiefe 228 mK gegen 227 mK gemessen. Eine Simulation mit rotem Rauschen
+dieser Stärke zeigt: beide Schätzer bleiben erwartungstreu (10,0 bis 10,7 cm bei einer Wahrheit
+von 10), nur ihre Streuung wächst — ±24,5 cm bei einem 4-Tage-Fenster, ±0,9 cm bei 21 Tagen.
+Die Ausreißer der Fenstertabelle oben sind damit Streuung, kein Befund.
+
+**Der Sensorrang.** Die Ränge NTC1, NTC2 und TestSB wechseln sich über die Tiefe ab, und NTC2
+hat einen Tiefenversatz von 0,64 cm. Ohne NTC2 wird das Verhältnis größer (1,37 statt 1,25),
+mit korrigiertem NTC2 bleibt es bei 1,27.
+
+**Eindringende Strahlung.** Nach Einstrahlung geteilt: sonnige Hälfte 1,3, bedeckte 1,2.
+
+**Ein glatter κ-Gradient.** Die WKB-Lösung bindet Amplitude und Phase über dasselbe Integral
+aneinander; übrig bleibt der Vorfaktor κ^(−1/4). Selbst bei einem Dichteanstieg von 150 auf
+400 kg/m³ über 20 cm gibt der nur ein Verhältnis von 1,10.
+
+**Eine oberflächennahe Mischungsschicht** (Windpumpen). Sie läge oben; dort ist das Verhältnis
+aber 0,86.
+
+### Wo sie herkommt
+
+Die Diskrepanz ist nicht über die Tiefe verteilt, sondern sitzt in einem Intervall. Lokales d
+aus benachbarten Sensorpaaren, 21-Tage-Fenster:
+
+| Paar | d aus Amplitude | d aus Phase | Verhältnis |
+|---|---|---|---|
+| 4–8 cm | 8,3 cm | 7,1 cm | 0,86 |
+| 8–12 cm | 11,3 | 10,8 | 0,96 |
+| **12–16 cm** | **7,2** | **28,8** | **4,01** |
+| 16–20 cm | 8,3 | 7,5 | 0,90 |
+
+Drei von vier Paaren stimmen auf 4 bis 14 % überein. Im Intervall 12–16 cm nimmt der Verzug um
+0,53 h zu statt der aus der Amplitude erwarteten 1,9 h.
+
+**Eine Dichteschicht erzeugt genau diese Art lokaler Entkopplung**, und nur sie: an einem
+Sprung der Effusivität e = √(kρc) wird ein Teil der Welle reflektiert, und die Interferenz
+verschiebt Amplitude und Phase unterschiedlich. Mit k ∝ ρ^1,98 folgt e ∝ ρ^1,49 und
+R = (e₁−e₂)/(e₁+e₂):
+
+| ρ₁ → ρ₂ | Kontrast | R | Phasenstörung |
+|---|---|---|---|
+| 330 → 350 | 6 % | 0,044 | 0,17 h |
+| 300 → 400 | 29 % | 0,211 | 0,81 h |
+| 300 → 450 | 40 % | 0,294 | 1,12 h |
+| 280 → 500 | 56 % | 0,408 | 1,56 h |
+
+Das beobachtete Defizit von 1,4 h verlangt |R| = 0,37, gegen 340 kg/m³ also eine Schicht von
+567 kg/m³. Das liegt über dem bei Kohnen beobachteten Bereich von 250 bis 550 kg/m³
+(Laepple et al. 2016, doi 10.1002/2016JF003919, vertikale Streuung 20,7 kg/m³, Schichtdicken
+15–25 cm). Die Richtung stimmt, die Größenordnung nur unter der günstigsten Annahme — eine
+Schicht endlicher Dicke mit zwei Grenzflächen kann bei passender Dicke mehr erzeugen als ein
+einzelner Sprung, und Grönland hat stärkere Variationen als Kohnen.
+
+**Der Test läuft von selbst.** Wandert die Störung mit der Oberfläche mit, ist sie ein
+Sensoreffekt; bleibt sie an fester Kettenhöhe, ist sie eine Schicht im Firn. Bei rund 68 cm
+Einschneien im Jahr ist das in wenigen Wochen zu unterscheiden.
+
+### Einschneitiefe über die Zeit — drei Schätzer vs. AWS
 
 Aus der Tageswelle folgt die Tiefe des untersten Sensors auf zwei voneinander
 unabhängigen Wegen: **Amplitudendämpfung** z = d·ln(A_Luft/A_unten) und
@@ -669,13 +898,34 @@ perday <- function(dy, win = 3) {
   # Der Phasenverzug ist nur aussagekräftig, wenn der Sensor überhaupt gedämpft
   # ist — bei freiem Sensor ist die Phasendifferenz Rauschen.
   zp <- if (b$A/Aa < 0.8) lag*om*d_fix else NA_real_
-  tibble(day = as.Date(dy), z_amp = d_fix*log(Aa/b$A), z_phase = zp, A_air = Aa)
+  # Dritter, unabhängiger Schätzer: Regression über das ganze Übergangsprofil.
+  # ln(A/A_Luft) fällt linear mit der Höhe; die Höhe mit ln = 0 ist die
+  # Schneeoberfläche. Nutzt alle teilgedämpften Sensoren (4 cm Abstand) statt
+  # nur des untersten und braucht kein vorgegebenes d.
+  tr <- fa |> mutate(rA = A/Aa) |> filter(rA > 0.12, rA < 0.9, hoehe_cm < 60)
+  zpr <- NA_real_; dpr <- NA_real_
+  if (nrow(tr) >= 3) {
+    lf2 <- lm(log(rA) ~ hoehe_cm, data = tr)
+    if (coef(lf2)[2] > 0) { dpr <- 1/coef(lf2)[2]
+      zpr <- (-coef(lf2)[1]/coef(lf2)[2]) - h_bot }
+  }
+  # Vierter Schätzer, ohne Modell: der Übergang vom überhöhten Sensor (über der
+  # Fläche) zum ersten gedämpften darunter. Auflösung = Knotenabstand, 4 cm.
+  ueb <- fa |> mutate(rA = A/Aa) |> filter(rA > 1.05, hoehe_cm < h_ref)
+  hue <- if (nrow(ueb)) min(ueb$hoehe_cm) else NA_real_
+  gde <- fa |> mutate(rA = A/Aa) |> filter(rA < 0.95, hoehe_cm < hue)
+  hgd <- if (nrow(gde)) max(gde$hoehe_cm) else NA_real_
+  tibble(day = as.Date(dy), z_amp = d_fix*log(Aa/b$A), z_phase = zp,
+         z_prof = zpr, n_prof = nrow(tr), d_prof = dpr,
+         z_ueb = (hgd + hue)/2 - h_bot, A_air = Aa)
 }
 dseq <- seq(as.Date(min(ser_dat$time)) + 2, as.Date(max(ser_dat$time)) - 2, by = "1 day")
 res  <- bind_rows(lapply(dseq, perday)) |> filter(A_air >= 2)
 
 cols_s <- c(`Sensor: Amplitudendämpfung` = "#b2182b",
             `Sensor: Phasenverzug`       = "#2166ac",
+            `Sensor: Profilanpassung`    = "#7b3294",
+            `Sensor: Übergang (4 cm)`    = "#e08214",
             `Summit AWS (unabhängig)`    = "#1a9850")
 
 # Die Sensor-Schätzer sind physikalisch nullreferenziert (Tiefe 0 = freier
@@ -698,12 +948,15 @@ p_abs <- ggplot(res) + geom_hline(yintercept = 0, colour = "grey60") +
       colour = "Summit AWS (unabhängig)"), size = 1.1) } +
   geom_line(aes(day, z_amp,   colour = "Sensor: Amplitudendämpfung"), linewidth = 0.7) +
   geom_point(aes(day, z_amp,  colour = "Sensor: Amplitudendämpfung"), size = 1.2) +
+  geom_line(aes(day, z_prof,  colour = "Sensor: Profilanpassung"), linewidth = 0.7) +
+  geom_point(aes(day, z_prof, colour = "Sensor: Profilanpassung"), size = 1.2) +
   geom_line(aes(day, z_phase, colour = "Sensor: Phasenverzug"), linewidth = 0.7) +
   geom_point(aes(day, z_phase, colour = "Sensor: Phasenverzug"), size = 1.2) +
+  geom_step(aes(day, z_ueb, colour = "Sensor: Übergang (4 cm)"), linewidth = 0.9) +
   scale_colour_manual(NULL, values = cols_s) + scale_x_date(NULL) +
   scale_y_continuous("Tiefe unterster Sensor bzw. Akkumulation (cm)") +
   labs(title = sprintf("Einschneitiefe des untersten Sensors (h = %d cm) — %s", h_bot, cfg$label),
-       subtitle = sprintf("zwei unabhängige Schätzer aus der Tageswelle (3-Tage-Fenster, d = %.1f cm); AWS unabhängig, nur gleicher Startzeitraum. > 0 = unter Schnee", d_fix)) +
+       subtitle = sprintf("vier Schätzer aus der Tageswelle (3-Tage-Fenster, d = %.1f cm); AWS unabhängig, nur gleicher Startzeitraum. > 0 = unter Schnee", d_fix)) +
   theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
 
 p_abs
@@ -712,11 +965,157 @@ p_abs
 ```{r einschnei-serie-text, eval=multi, results='asis'}
 if (nrow(res) >= 5) {
   la <- tail(res, 1)
-  cat(sprintf("Aktuell (%s): **%.1f cm** (Amplitude) bzw. **%.1f cm** (Phase). Die beiden unabhängigen Methoden stimmen über den Gesamtzeitraum auf **%.1f cm** (Median der Beträge der Differenz) überein — das ist die realistische Genauigkeit dieser Tiefenbestimmung.\n",
-              format(la$day, "%d.%m.%Y"), la$z_amp, la$z_phase,
-              median(abs(res$z_amp - res$z_phase), na.rm = TRUE)))
+  cat(sprintf("Aktuell (%s): **%.1f cm** (Übergang, 4-cm-Raster), %.1f cm (Amplitude), %.1f cm (Profilanpassung), %.1f cm (Phase). Der Übergangsschätzer ist der einzige ohne Modellannahme; Amplitude und Profilanpassung weichen im Mittel um **%.1f** bzw. **%.1f cm** von ihm ab. Der Phasenverzug ist mit der aus der Amplitude bestimmten Dämpfungstiefe gerechnet und deshalb systematisch zu klein — siehe den Abschnitt zum Amplitudenprofil.\n",
+              format(la$day, "%d.%m.%Y"), la$z_ueb, la$z_amp, la$z_prof, la$z_phase,
+              median(abs(res$z_amp  - res$z_ueb), na.rm = TRUE),
+              median(abs(res$z_prof - res$z_ueb), na.rm = TRUE)))
 }
 ```
+
+### Zoom: der eingeschneite Bereich
+
+Seit dem Einschneien der untersten Knoten lässt sich das Profil unter der Oberfläche direkt
+betrachten. Alle folgenden Darstellungen laufen in **Tiefe unter der Schneeoberfläche**, nicht in
+Kettenhöhe: die Oberfläche wandert im Betrachtungszeitraum um rund 20 cm, und jede Messung
+bekommt die Tiefe, die zu ihrem Tag gehört (Oberflächenlage aus dem Übergangsschätzer).
+
+```{r zoom-hov, eval=multi, fig.height=8.5, fig.width=10.5}
+# Oberflächenlage: der Übergangsschätzer liefert 2-cm-Stufen und nicht an jedem
+# Tag einen Wert. Für die Tiefenkoordinate wird er auf jeden Tag interpoliert
+# und geglättet, sonst fallen ganze Tage aus dem Hovmöller heraus.
+sfc <- res |> transmute(day, h_surf = h_bot + z_ueb) |> filter(is.finite(h_surf))
+alltage <- seq(min(sfc$day), max(sfc$day), by = "1 day")
+hsi <- approx(as.numeric(sfc$day), sfc$h_surf, as.numeric(alltage), rule = 2)$y
+if (length(alltage) >= 12)
+  hsi <- as.numeric(predict(loess(hsi ~ as.numeric(alltage), span = 0.35)))
+surf <- tibble(day = alltage, h_surf = hsi)
+
+# Anomalie je Sensor gegen sein zentriertes 24-h-Mittel; damit tritt die
+# Tageswelle hervor statt des saisonalen Gangs.
+an <- ser_dat |> filter(hoehe_cm <= 80, time > max(time) - 12*86400) |>
+  group_by(hoehe_cm) |> arrange(ts, .by_group = TRUE) |>
+  mutate(anom = temp_C - sapply(ts, function(t0) mean(temp_C[abs(ts - t0) <= 43200]))) |>
+  ungroup() |> mutate(day = as.Date(time)) |> inner_join(surf, by = "day") |>
+  mutate(z = h_surf - hoehe_cm)
+
+# Auf ein reguläres Gitter bringen: die Sensoren stehen 4 cm auseinander, die
+# Oberfläche wandert, und die Telemetrie hat 4- und 8-Stunden-Abstände. Ohne
+# Interpolation bleibt jede zweite Tiefenzeile und mancher Zeitschritt leer.
+zg <- seq(-8, 26, by = 1)
+gr1 <- an |> group_by(time) |> group_modify(function(x, k) {
+  x <- x |> arrange(z); if (nrow(x) < 4) return(tibble())
+  inb <- zg >= min(x$z) & zg <= max(x$z)
+  tibble(z = zg[inb], anom = approx(x$z, x$anom, zg[inb])$y) }) |> ungroup() |>
+  filter(is.finite(anom))
+tt  <- sort(unique(as.numeric(gr1$time))); tg <- seq(min(tt), max(tt), by = 7200)
+hovg <- gr1 |> group_by(z) |> group_modify(function(x, k) {
+  x <- x |> arrange(time); u <- as.numeric(x$time)
+  keep <- tg >= min(u) & tg <= max(u)
+  tibble(ts = tg[keep], anom = approx(u, x$anom, tg[keep])$y) }) |> ungroup() |>
+  mutate(time = as.POSIXct(ts, origin = "1970-01-01", tz = "UTC"))
+
+p_h <- ggplot(hovg, aes(time, z, fill = pmax(pmin(anom, 4), -4))) +
+  geom_tile(width = 7200, height = 1) +
+  scale_fill_gradient2(name = "Abweichung vom\n24-h-Mittel (K)",
+                       low = "#2166ac", mid = "white", high = "#b2182b",
+                       limits = c(-4, 4)) +
+  geom_hline(yintercept = 0, linewidth = 0.7) +
+  scale_y_reverse("Tiefe unter der Oberfläche (cm)", breaks = seq(-8, 24, 4),
+                  expand = c(0, 0)) +
+  scale_x_datetime(NULL, expand = c(0, 0)) +
+  labs(subtitle = "Linie = Oberfläche, grau = unterhalb des tiefsten Sensors; die Tageswelle kippt mit der Tiefe nach rechts") +
+  theme_bw(base_size = 12) +
+  theme(panel.grid = element_blank(),
+        panel.background = element_rect(fill = "grey88", colour = NA))
+
+# Für die Profile darunter wird der ganze Zeitraum genutzt, nicht nur die
+# zwölf Tage des Hovmöllers.
+dz <- ser_dat |> mutate(day = as.Date(time)) |> inner_join(surf, by = "day") |>
+  mutate(z = h_surf - hoehe_cm) |> filter(z > -8, z < 26)
+
+# (b) Amplitude und Verzug gegen die Tiefe, gebündelt über den ganzen Zeitraum.
+# Der Fehler folgt aus der Kovarianz der beiden Harmonischen; unterhalb SNR 3
+# ist die Phase nicht mehr bestimmt und die Punkte sind offen gezeichnet.
+har <- function(x) { m <- lm(temp_C ~ sin(om*ts) + cos(om*ts), x)
+  cf <- coef(m); V <- vcov(m)[2:3, 2:3]; A <- sqrt(cf[2]^2 + cf[3]^2)
+  g <- c(cf[2], cf[3])/A; gp <- c(-cf[3], cf[2])/A^2
+  tibble(A = A, sA = as.numeric(sqrt(t(g) %*% V %*% g)), phi = atan2(cf[3], cf[2]),
+         sP = as.numeric(sqrt(t(gp) %*% V %*% gp)), Tm = mean(x$temp_C), n = nrow(x)) }
+bins <- dz |> filter(z > 0) |> mutate(zbin = floor(z/2)*2 + 1) |> count(zbin) |>
+  filter(n >= 40) |> pull(zbin)
+pr <- bind_rows(lapply(bins, function(k)
+  har(dz |> filter(z > 0, floor(z/2)*2 + 1 == k)) |> mutate(zbin = k)))
+mr <- har(ser_dat |> filter(hoehe_cm >= h_ref))
+pr <- pr |> mutate(rA = A/mr$A, lag_h = (((mr$phi - phi + pi) %% (2*pi)) - pi)/om/3600,
+                   snr = A/sA, sP_h = sP/om/3600, gut = snr > 3)
+
+fA <- lm(log(A) ~ zbin, pr, weights = snr^2)
+fP <- lm(I(lag_h*3600) ~ zbin, pr, weights = 1/sP^2)
+d_amp <- -1/coef(fA)[2]; d_pha <- 1/(coef(fP)[2]*om)
+
+p_a <- ggplot(pr, aes(rA, zbin)) +
+  geom_line(data = tibble(zbin = seq(0, max(pr$zbin), 0.5)) |>
+              mutate(rA = exp(coef(fA)[1] + coef(fA)[2]*zbin)/mr$A),
+            colour = "firebrick", linewidth = 0.6) +
+  geom_errorbarh(aes(xmin = pmax(rA - sA/mr$A, 0), xmax = rA + sA/mr$A), height = 0.6,
+                 colour = "grey55") +
+  geom_point(aes(shape = gut), size = 2.4, fill = "white") +
+  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 21), guide = "none") +
+  scale_y_reverse("Tiefe unter der Oberfläche (cm)", breaks = seq(0, 24, 4)) +
+  scale_x_continuous("Tagesamplitude / freie Luft", limits = c(0, NA)) +
+  labs(subtitle = sprintf("Abklinglänge %.1f cm", d_amp)) +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+p_p <- ggplot(pr, aes(lag_h, zbin)) +
+  geom_line(data = tibble(zbin = seq(0, max(pr$zbin), 0.5)) |>
+              mutate(lag_h = (coef(fP)[1] + coef(fP)[2]*zbin)/3600),
+            colour = "firebrick", linewidth = 0.6) +
+  geom_errorbarh(aes(xmin = lag_h - sP_h, xmax = lag_h + sP_h), height = 0.6,
+                 colour = "grey55") +
+  geom_point(aes(shape = gut), size = 2.4, fill = "white") +
+  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 21), guide = "none") +
+  scale_y_reverse(NULL, breaks = seq(0, 24, 4)) +
+  scale_x_continuous("Verzug gegen die freie Luft (h)") +
+  labs(subtitle = sprintf("entspricht %.1f cm", d_pha)) +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+# Das Mitteltemperaturprofil darf NICHT aus den Tiefenklassen kommen: eine
+# Tiefenklasse mischt verschiedene Wochen (ein Sensor lag erst spät tief), ihr
+# Gradient wäre der Jahresgang, nicht das Profil. Deshalb eine Momentaufnahme
+# der letzten Tage bei festen Kettenhöhen, umgerechnet mit der Oberfläche von
+# heute.
+h_now <- tail(sfc$h_surf, 1)
+snap  <- ser_dat |> filter(time > max(time) - 5*86400) |>
+  group_by(hoehe_cm) |> summarise(Tm = mean(temp_C), .groups = "drop") |>
+  mutate(z = h_now - hoehe_cm) |> filter(z > 0, z < 26)
+g_snap <- if (nrow(snap) >= 3) as.numeric(coef(lm(Tm ~ z, snap))[2]) else NA_real_
+p_t <- ggplot(snap, aes(Tm, z)) +
+  geom_path(colour = "grey70", linewidth = 0.4) + geom_point(size = 2.4) +
+  scale_y_reverse(NULL, breaks = seq(0, 24, 4),
+                  limits = c(max(c(pr$zbin, snap$z)), 0)) +
+  scale_x_continuous("Mitteltemperatur (°C)") +
+  labs(subtitle = "Momentaufnahme, letzte 5 Tage") +
+  theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+p_h / (p_a + p_p + p_t) + plot_layout(heights = c(1.5, 1))
+```
+
+```{r zoom-text, eval=multi, echo=FALSE, results='asis'}
+kC <- function(r) 2.5e-6*r^2 - 1.23e-4*r + 0.024
+ci <- function(T) 152.5 + 7.122*(T + 273.15)
+rho_of <- function(dd, Tm) tryCatch(uniroot(function(r) kC(r)/(r*ci(Tm)) - (dd/100)^2*om/2,
+                                            c(80, 917))$root, error = function(e) NA_real_)
+Tm <- mean(pr$Tm)
+cat(sprintf("Über den ganzen Zeitraum tiefenmitgeführt: Abklinglänge **%.1f cm** aus der Amplitude, **%.1f cm** aus dem Verzug (Verhältnis %.2f). Mit κ = k(ρ)/(ρ·c) und c = %.0f J/(kg·K) bei %.1f °C entspricht das ρ = %s bzw. %s kg/m³. Belastbar (SNR > 3) sind die Klassen bis %.0f cm Tiefe; darunter ist die Tagesamplitude kleiner als die Wetterstreuung, und die offenen Symbole zeigen Punkte, deren Phase nicht mehr bestimmt ist.\n\n",
+  d_amp, d_pha, d_pha/d_amp, ci(Tm), Tm,
+  ifelse(is.na(rho_of(d_amp, Tm)), "—", sprintf("%.0f", rho_of(d_amp, Tm))),
+  ifelse(is.na(rho_of(d_pha, Tm)), "—", sprintf("%.0f", rho_of(d_pha, Tm))),
+  ifelse(any(pr$gut), max(pr$zbin[pr$gut]), NA)))
+if (is.finite(g_snap)) cat(sprintf("Das Mitteltemperaturprofil der letzten fünf Tage zeigt **%+.3f K/cm** über die obersten %.0f cm: %s. Es stammt aus einer Momentaufnahme bei festen Kettenhöhen, nicht aus den Tiefenklassen — eine Tiefenklasse mischt Messungen aus verschiedenen Wochen, ihr Temperaturgradient wäre der Jahresgang, nicht das Profil.\n",
+  g_snap, max(snap$z),
+  if (g_snap > 0) "nach unten wärmer, die Sommerwärme steht noch im Firn" else "nach unten kälter"))
+```
+
 
 ---
 
@@ -726,6 +1125,98 @@ NTC1 / NTC2 / NTC3 sind je Node quasi am selben Ort, sollten also denselben
 Tagesgang sehen. Hier wird geprüft, ob **NTC2 systematisch einen stärkeren
 Tagesgang** hat als die beiden anderen (beobachtet in frühen Felddaten).
 Das Tape-/Folien-Fenster (Knoten 6–8, 02.–12.07.) ist ausgeschnitten.
+
+### Effektiver Tiefenversatz des NTC2
+
+Der mittlere Sensor trägt R4 und R5 nahe der Spitze und dafür vier Kupferbahnen statt zwei.
+Er liest deshalb einen Punkt, der etwas weiter in Richtung Rohrbasis liegt als bei seinen
+Nachbarn — die Basis sitzt 29 cm **unter** dem NTC, der Versatz geht also nach unten. Im
+eingeschneiten Zustand lässt sich dieser Versatz direkt messen:
+
+$$d_{\text{obs}} = \text{NTC2} - \tfrac{1}{2}(\text{NTC1}+\text{NTC3})
+= \Delta z \cdot G, \qquad G = \tfrac{1}{8\,\text{cm}}(\text{NTC3}-\text{NTC1})$$
+
+Die Steigung **ist** der Tiefenversatz in cm. G kommt nur aus den äußeren Zinken und ist damit
+von NTC2 unabhängig. Aufgeteilt wird der Versatz nicht — wie er sich auf die einzelnen Zinken
+verteilt, hinge an der axialen Leitfähigkeit von Glasfaserrohr, Platine und Silikon und wäre
+reine Modellrechnung. Angegeben ist allein die gemessene Differenz, die sich mit jedem weiteren
+eingeschneiten Knoten verbessert.
+
+```{r ntc2-tiefenversatz, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), fig.height=4.2, fig.width=10.5}
+sfc2 <- res |> transmute(day, h_surf = h_bot + z_ueb) |> filter(is.finite(h_surf))
+tri <- series_diag |> select(time, node, sensor, temp_C) |>
+  tidyr::pivot_wider(names_from = sensor, values_from = temp_C) |>
+  filter(is.finite(ntc1_C), is.finite(ntc2_C), is.finite(testSB_C)) |>
+  mutate(h2 = (node - 1L)*3L*s + 2L*s, day = as.Date(time)) |>
+  inner_join(sfc2, by = "day") |>
+  mutate(z = h_surf - h2,
+         d_obs = (ntc2_C - (ntc1_C + testSB_C)/2) * 1000,      # mK
+         G     = (testSB_C - ntc1_C)/(2*s),                     # K/cm
+         lage  = cut(z, c(-Inf, -4, 2, 6, Inf),
+                     labels = c("Luft", "Grenzschicht", "Schnee 2–6 cm", "Schnee > 6 cm"))) |>
+  filter(is.finite(G), is.finite(d_obs))
+
+dunkel <- tri |> filter(z > 6)
+fit_dz <- if (nrow(dunkel) >= 30) lm(d_obs ~ G, dunkel) else NULL
+
+# (a) Streudiagramm: die Steigung im dunklen Schnee ist der Tiefenversatz
+p_sc <- ggplot(tri, aes(G, d_obs, colour = lage)) +
+  geom_hline(yintercept = 0, colour = "grey80") + geom_vline(xintercept = 0, colour = "grey80") +
+  geom_point(size = 0.7, alpha = 0.5) +
+  { if (!is.null(fit_dz)) geom_abline(intercept = coef(fit_dz)[1], slope = coef(fit_dz)[2],
+                                      colour = "black", linewidth = 0.8) } +
+  scale_colour_manual(NULL, values = c(Luft = "#bdbdbd", Grenzschicht = "#fdae61",
+                                       `Schnee 2–6 cm` = "#74add1", `Schnee > 6 cm` = "#313695"),
+                      drop = FALSE) +
+  scale_x_continuous("Vertikalgradient aus NTC1/NTC3 (K/cm)") +
+  scale_y_continuous("NTC2 − Mittel der Nachbarn (mK)") +
+  # Einzelne Ausreißer reichen bis ±8 K und würden die Achse so strecken, dass
+  # die Punktwolke unsichtbar wird.
+  coord_cartesian(ylim = unname(quantile(tri$d_obs, c(0.01, 0.99)))) +
+  labs(subtitle = if (is.null(fit_dz)) "zu wenige eingeschneite Knoten" else
+       "Gerade: dunkler Schnee (> 6 cm)") +
+  theme_bw(base_size = 12) + theme(legend.position = "bottom",
+                                   panel.grid.minor = element_blank())
+
+# (b) Laufende Schätzung: wie sich der Wert mit wachsender Datenmenge einpendelt
+lauf <- NULL
+if (nrow(dunkel) >= 40) {
+  dunkel <- dunkel |> arrange(time)
+  idx <- seq(30, nrow(dunkel), by = max(1, floor(nrow(dunkel)/60)))
+  lauf <- bind_rows(lapply(idx, function(k) { f <- lm(d_obs ~ G, dunkel[1:k, ])
+    sm <- summary(f)$coefficients
+    tibble(time = dunkel$time[k], n = k, dz = -coef(f)[2]/1000,
+           se = sm[2,2]/1000) }))
+}
+p_run <- if (is.null(lauf)) NULL else
+  ggplot(lauf, aes(time, dz)) +
+    geom_ribbon(aes(ymin = dz - se, ymax = dz + se), fill = "#313695", alpha = 0.2) +
+    geom_line(colour = "#313695", linewidth = 0.8) +
+    scale_x_datetime(NULL) +
+    scale_y_continuous("Tiefenversatz NTC2 gegen die Nachbarn (cm)") +
+    labs(subtitle = "laufend, Band = ±1 SE") +
+    theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+if (is.null(p_run)) p_sc else p_sc + p_run + plot_layout(widths = c(1.2, 1))
+```
+
+```{r ntc2-tiefenversatz-text, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields)), echo=FALSE, results='asis'}
+if (!is.null(fit_dz)) {
+  sm <- summary(fit_dz)$coefficients
+  cat(sprintf("**Gemessener Tiefenversatz: %.2f ± %.2f cm** (n = %d Messungen aus %d Knoten im dunklen Schnee, t = %.1f, R² = %.2f). Der Achsenabschnitt beträgt %+.0f ± %.0f mK und ist mit null %s.\n\n",
+    -coef(fit_dz)[2]/1000, sm[2,2]/1000, nrow(dunkel), n_distinct(dunkel$node),
+    abs(sm[2,3]), summary(fit_dz)$r.squared, coef(fit_dz)[1], sm[1,2],
+    if (abs(coef(fit_dz)[1]) < 2*sm[1,2]) "verträglich" else
+      sprintf("nicht verträglich — bei %d Knoten im Bereich ist das dessen eigener Kalibrierversatz und nicht von einem systematischen zu trennen", n_distinct(dunkel$node))))
+  reg <- tri |> group_by(lage) |> filter(n() >= 40) |>
+    summarise(n = n(), b = -coef(lm(d_obs ~ G))[2]/1000, .groups = "drop")
+  cat("Zum Vergleich dieselbe Steigung in den anderen Tiefenbereichen — über dem Schnee mischt sich die differentielle Strahlungsaufheizung darunter und kehrt das Vorzeichen um, sie ist unterhalb von 6 cm verschwunden:\n\n")
+  cat("| Lage | n | Steigung (cm) |\n|---|---|---|\n")
+  for (i in seq_len(nrow(reg)))
+    cat(sprintf("| %s | %d | %+.2f |\n", reg$lage[i], reg$n[i], reg$b[i]))
+  cat(sprintf("\nDer Wert gilt für die Differenz zwischen NTC2 und seinen Nachbarn. Wie groß der Versatz jeder einzelnen Zinke ist, folgt daraus nicht — das hinge an der axialen Leitfähigkeit von Rohr, Platine und Silikon.\n"))
+} else cat("Noch zu wenige Messungen mit einem NTC2 tiefer als 6 cm unter der Oberfläche.\n")
+```
 
 ```{r ntc2-diag, eval=(multi && all(c("ntc1","ntc2","testSB") %in% fields))}
 safe_amp <- function(x) { x <- x[is.finite(x)]; if (length(x) < 2L) NA_real_ else diff(range(x)) }

@@ -51,3 +51,51 @@ Datenquelle Route: `sharedAI/AWS_Wetterstation_Entwicklung/daten/accum_stats.csv
 
 Farbpalette CVD-geprüft (Blau #2a78d6, Orange #eb6834, Rot #e34948 für die divergierende
 Skala); Tiefenachsen logarithmisch, wo der Wertebereich mehrere Größenordnungen umfasst.
+
+## fig3_druck_temperatur.png — „Firntemperatur folgt dem Luftdruck"
+
+Drei Ketten an zwei Standorten gegen eine Vorhersage ohne freien Parameter. Steigt der
+Luftdruck um Δp, wird die Porenluft komprimiert; die Kompressionswärme `φ·Δp` nimmt die
+Matrix mit `ρ·c` auf, woraus `b = ΔT/Δp = φ/(ρ c)` folgt. **(A)** Gemessene Kopplung gegen die
+Tiefe, dazu die Vorhersage mit Herron-Langway-Dichte für beide Standorte (durchgezogen GRIP,
+gestrichelt Kohnen). Gefüllte Punkte: direkt gemessen. Offene Punkte (head02): nach Abzug
+eines gemeinsamen Anteils, der einen freien additiven Versatz zurücklässt — dort ist nur die
+**Form** prüfbar. **(B)** 1:1-Vergleich der direkt gemessenen Knoten: **Faktor 0,953 ± 0,015
+über 10 Knoten**, zwei Standorte, Tiefen von 7 bis 30 m. **(C)** Die Rohdaten, aus denen die
+Steigungen in (A) und (B) stammen: Temperatur- gegen Druckabweichung im synoptischen Band,
+je Tiefe eine Regressionsgerade. Links GRIP (täglich, 10/21/30 m, ±0,5 mK auf ±5 hPa), rechts
+Kohnen B50 (zweimal täglich, 8/9/10 m, ±1 mK auf ±15 hPa).
+
+Datengrundlage: Kohnen B50 (head03, Jan–Jul 2026, 2 Messungen täglich, 41 hPa Druckhub,
+verfüllte 10-m-Kette), GRIP-Doppelkette (Jul–Sep 2026, täglich, 21 hPa, verfülltes Bohrloch),
+Kohnen B46 (head02, 18.01.–02.02.2026, 4-stündlich, 16 hPa, beide Ketten in Schnee).
+Erzeugt mit `Rscript make_fig3_druck_temperatur.R`; die Eingangstabellen liegen als
+`fig3_*_b.csv` in den jeweiligen `data/`-Ordnern.
+
+## slides_druck_temperatur.pptx — zwei englische Folien
+
+Erzeugt mit `python3 make_slides_pressure.py` (16:9, python-pptx). Folie 1 zeigt die
+Beobachtung: links die Rohdaten (Panel C aus fig3), rechts die Kopplung gegen die Tiefe mit
+der parameterfreien Vorhersage (Panel A). Folie 2 skizziert, wie sich daraus offene Porosität
+und Close-off ableiten ließen, mit den erreichbaren Genauigkeiten und den Anforderungen. Die
+Einzelpanels liegen als `fig3a_kopplung_tiefe.png` und `fig3c_rohdaten.png` daneben.
+
+## Beschriftungsvarianten
+
+Jede Abbildung liegt in drei Fassungen vor, damit sie sich direkt in Vorträge übernehmen lässt:
+
+| Datei | Beschriftung |
+|---|---|
+| `figX.png` | mit Panelbuchstaben, z. B. „A · Coupling vs. depth …" |
+| `figX_nolabel.png` | ohne Buchstaben, beschreibender Untertitel bleibt |
+| `figX_bare.png` | ohne jede Überschrift — Titel setzt der Vortragende |
+
+Dazu die Einzelpanels ohne Überschrift: `fig1a_atmosphere_bare.png`, `fig1b_pit_bare.png`,
+`fig1c_annualwave_bare.png`, `fig3a_kopplung_tiefe_bare.png`, `fig3b_elf_bare.png`,
+`fig3c_rohdaten_bare.png`.
+
+## Sprache
+
+Die **Abbildungen** sind seit 09.09.2026 englisch beschriftet (fig1, fig2, fig3 und die
+Einzelpanels), weil sie in Vorträgen und der pptx verwendet werden. Diese README und die
+Bildunterschriften hier bleiben deutsch.

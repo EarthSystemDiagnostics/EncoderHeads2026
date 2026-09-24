@@ -1,0 +1,2109 @@
+---
+title: "Luftdruck und Firntemperatur"
+subtitle: "Doppelkette GRIP (IMEI 301434062008130) — Messung, Theorie und die Unruhe im offenen Bohrloch"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 6
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Die Doppelkette misst in zwei Bohrlöchern 10 m voneinander: **Kette 1 im offenen,
+luftgefüllten Loch, Kette 2 im mit Schnee verfüllten**, beide mit Knoten bei
+1/3/5/8/10/13/16/21/26/30 m und je einem Druck- und zwei NTC-Kanälen. Ein Profil pro Tag.
+Der Bohrloch-Vergleich steht in `decode_chain.qmd`; hier geht es um den Zusammenhang von
+Luftdruck und Temperatur.
+
+```{r setup}
+source("decode_core.R")
+library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
+
+BIN <- setdiff(Sys.glob("../testdata/301434062008130-*.bin"),
+               "../testdata/301434062008130-138.bin")
+FIELDS <- c("ntc1", "ntc2", "gnd", "pressure"); N_NODES <- 20L
+lab_cal <- load_lab_cal(NA_character_, N_NODES)
+
+depth_map <- rbind(
+  data.frame(position = 1:10,  chain = "Kette 1 — Luft",   depth_m = c(1,3,5,8,10,13,16,21,26,30)),
+  data.frame(position = 11:20, chain = "Kette 2 — Schnee", depth_m = c(1,3,5,8,10,13,16,21,26,30)))
+
+series <- bind_rows(lapply(BIN, function(f) {
+  b  <- read_snowchain_bin(f, FIELDS, N_NODES)
+  nd <- bin_to_nodes(b, FIELDS, lab_cal); nd$position <- nd$node
+  merge(nd, depth_map, by = "position") |> mutate(time = unix2utc(b$time_unix)) })) |>
+  mutate(ntc_C = rowMeans(cbind(ntc1_C, ntc2_C), na.rm = TRUE)) |>
+  filter(time > as.POSIXct("2026-07-10", tz = "UTC"))   # nach dem Einbau
+
+WINDOW <- 45                                            # Auswertefenster in Tagen
+t_end  <- max(series$time)
+win    <- series |> filter(time >= t_end - WINDOW * 86400, !is.na(ntc_C))
+
+# Barometrisches Signal = Mittel aller 20 Drucksensoren
+bar <- win |> group_by(time) |> summarise(p_bar = mean(pressure_hPa, na.rm = TRUE), .groups = "drop")
+win <- win |> left_join(bar, by = "time")
+
+chain_cols <- c("Kette 1 — Luft" = "#e67e22", "Kette 2 — Schnee" = "#2980b9")
+```
+
+Ausgewertet werden die letzten `r WINDOW` Tage (`r format(min(win$time), "%d.%m.")` bis
+`r format(t_end, "%d.%m.%Y")`, `r length(unique(win$time))` Profile).
+
+## Das Drucksignal
+
+```{r p-aws, fig.height=4.5, fig.width=10}
+aws <- tryCatch({ options(timeout = 60)
+  suppressWarnings(readr::read_csv(
+    "https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/day/SUM_day.csv",
+    show_col_types = FALSE)) |> mutate(day = as.Date(time)) |> select(day, p_aws = p_u) },
+  error = function(e) NULL)
+
+pc <- bar |> mutate(day = as.Date(time))
+if (!is.null(aws)) pc <- pc |> left_join(aws, by = "day") |> filter(is.finite(p_aws))
+
+if (!is.null(aws)) {
+  fit_p <- lm(p_bar ~ p_aws, pc)
+  ggplot(pc, aes(day)) +
+    geom_line(aes(y = p_bar,  colour = "Kette (Mittel 20 Knoten)"), linewidth = 0.6) +
+    geom_line(aes(y = p_aws,  colour = "Summit-AWS"), linewidth = 0.6) +
+    scale_colour_manual(values = c("Kette (Mittel 20 Knoten)" = "#2a78d6",
+                                   "Summit-AWS" = "#eb6834"), name = NULL) +
+    labs(title = "Der Druck der Kette ist das synoptische Signal", x = NULL, y = "Druck (hPa)",
+         subtitle = sprintf("r = %.3f, Steigung %.3f, sd(Residuum) %.2f hPa auf %.0f hPa Spannweite",
+                            cor(pc$p_bar, pc$p_aws), coef(fit_p)[2], sd(resid(fit_p)),
+                            diff(range(pc$p_aws)))) +
+    theme_bw(base_size = 13) + theme(legend.position = "bottom")
+}
+```
+
+Das Barometer der Summit-AWS liegt rund 30 km entfernt und hat eigene Elektronik. Dass die
+Kette ihm über den vollen Bereich folgt, macht es zur unabhängigen Referenz für alles
+Folgende.
+
+## Die Temperatur folgt dem Druck — im verfüllten Loch
+
+```{r scatter, fig.height=4.8, fig.width=10}
+dif <- win |> arrange(chain, depth_m, time) |> group_by(chain, depth_m) |>
+  mutate(dT = (ntc_C - lag(ntc_C)) * 1000, dp = p_bar - lag(p_bar),
+         drep = (ntc1_C - ntc2_C - lag(ntc1_C - ntc2_C)) * 1000) |>
+  ungroup() |> filter(!is.na(dT), !is.na(dp))
+
+dif |> filter(chain == "Kette 2 — Schnee", depth_m >= 8) |>
+  mutate(band = factor(ifelse(depth_m <= 10, "8–10 m (Saisonsignal dominiert)", "16–30 m"),
+                       c("8–10 m (Saisonsignal dominiert)", "16–30 m")),
+         tiefe = factor(depth_m)) |>
+  ggplot(aes(dp, dT, colour = tiefe)) +
+  geom_hline(yintercept = 0, colour = "grey80") + geom_vline(xintercept = 0, colour = "grey80") +
+  geom_point(size = 1.7) + geom_smooth(method = "lm", se = FALSE, linewidth = 0.6) +
+  scale_colour_viridis_d(name = "Tiefe (m)", option = "D", end = 0.9) +
+  facet_wrap(~ band, scales = "free_y") +
+  labs(title = "Verfülltes Loch: Tagesänderung der Temperatur gegen die des Luftdrucks",
+       x = "Δp (hPa/Tag)", y = "ΔT (mK/Tag)") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+```
+
+Bei 8 und 10 m trägt das eindringende Saisonsignal die Tagesänderung und überdeckt den
+Druckanteil. Ab 16 m dreht das Verhältnis.
+
+Werden **beide** Reihen gleich gefiltert (loess-Residuum von T und p), ergibt sich das
+synoptische Band mit Steigung, erklärter Varianz und Lag-Struktur.
+
+```{r band}
+band <- bind_rows(lapply(split(win |> filter(depth_m >= 8), ~ chain + depth_m, drop = TRUE),
+  function(x) {
+    x <- x[order(x$time), ]; if (nrow(x) < 20) return(NULL)
+    td <- as.numeric(difftime(x$time, min(x$time), units = "days"))
+    rT <- resid(loess(x$ntc_C ~ td, span = 0.5)) * 1000
+    rP <- resid(loess(x$p_bar ~ td, span = 0.5))
+    f  <- summary(lm(rT ~ rP))
+    lg <- sapply(-2:2, function(L) { n <- length(rT); i <- max(1, 1 - L):min(n, n - L)
+                                     cor(rT[i], rP[i + L]) })
+    r1   <- acf(rP, plot = FALSE, lag.max = 1)$acf[2]
+    neff <- length(rP) * (1 - r1) / (1 + r1)          # effektive Freiheitsgrade
+    data.frame(chain = x$chain[1], depth_m = x$depth_m[1], sd_T = sd(rT),
+               b = f$coefficients[2, 1], se = f$coefficients[2, 2],
+               se_ac = f$coefficients[2, 2] * sqrt(length(rP) / neff), n_eff = neff,
+               t = f$coefficients[2, 3], r2 = f$r.squared,
+               lag_m1 = lg[2], lag_0 = lg[3], lag_p1 = lg[4]) }))
+
+knitr::kable(band |> transmute(Kette = chain, `Tiefe (m)` = depth_m,
+    `b (mK/hPa)` = round(b, 3), `t` = round(t, 1), `R²` = round(r2, 2),
+    `r −1 Tag` = round(lag_m1, 2), `r 0` = round(lag_0, 2), `r +1 Tag` = round(lag_p1, 2)),
+  caption = "Gleich gefilterte Reihen. Im verfüllten Loch phasengleich und hochsignifikant, im offenen Loch nicht nachweisbar.")
+```
+
+Im verfüllten Loch erklärt der Luftdruck **`r sprintf("%.0f–%.0f %%", 100*min(band$r2[band$chain=="Kette 2 — Schnee"]), 100*max(band$r2[band$chain=="Kette 2 — Schnee"]))`** der
+synoptischen Temperaturvarianz, phasengleich (Maximum bei Lag 0) und ohne freien Parameter
+erklärbar. Zwei Kontrollen schließen Elektronik aus:
+
+```{r controls}
+ctrl <- dif |> filter(depth_m >= 16) |> group_by(chain, depth_m) |>
+  summarise(`r(NTC1−NTC2, Δp)` = round(cor(drep, dp), 2), .groups = "drop")
+
+aws_ctrl <- if (!is.null(aws)) {
+  dif |> mutate(day = as.Date(time)) |> left_join(aws, by = "day") |>
+    arrange(chain, depth_m, time) |> group_by(chain, depth_m) |>
+    mutate(dp_aws = p_aws - lag(p_aws)) |> filter(depth_m >= 16, !is.na(dp_aws)) |>
+    summarise(`b mit AWS-Barometer (mK/hPa)` = round(coef(lm(dT ~ dp_aws))[2], 3),
+              `t (AWS)` = round(summary(lm(dT ~ dp_aws))$coefficients[2, 3], 1), .groups = "drop")
+} else NULL
+
+knitr::kable(if (is.null(aws_ctrl)) ctrl else left_join(ctrl, aws_ctrl, by = c("chain", "depth_m")) |>
+               rename(Kette = chain, `Tiefe (m)` = depth_m),
+  caption = "Kontrollen: Replikat-Differenz gegen Δp (kanalspezifischer Effekt) und Regression gegen ein fremdes Barometer (Temperaturkompensation der eigenen Drucksensoren).")
+```
+
+Die Replikat-Differenz NTC1−NTC2 desselben Knotens folgt dem Druck nicht — beide Kanäle
+bewegen sich gemeinsam. Und mit dem Barometer der Summit-AWS kommen dieselben Steigungen
+heraus; ein Kompensationsfehler der eigenen Drucksensoren kann sich dort nicht abbilden.
+
+## Das Modell
+
+### Schritt 1 in Worten
+
+Firn besteht aus Eis und Luft. Eis lässt sich nicht komprimieren, Luft schon — auf eine
+Druckänderung reagiert also nur die Luft in den Poren.
+
+Die Pore ist dabei **nicht** abgeschlossen: sie hängt über die durchlässige Firnsäule an der
+Atmosphäre. Das Bild ist deshalb nicht die Luftpumpe, sondern das **Befüllen einer starren
+Flasche**. Steigt der Außendruck, drückt die Atmosphäre zusätzliche Luft in ein Volumen, das
+sich nicht ändert — und eine Druckluftflasche wird beim Befüllen warm, obwohl niemand einen
+Kolben bewegt.
+
+Woher die Wärme kommt: um Luft in die Pore zu schieben, muss die Atmosphäre sie gegen den
+herrschenden Druck verdrängen. Diese **Verdrängungsarbeit** kommt mit der einströmenden Luft
+mit. Gespeichert wird davon nur der Teil, der der inneren Energie des zusätzlichen Gases
+entspricht; der Rest wird frei. Bei einem idealen Gas ist die Differenz gerade `R_s·T` je
+Kilogramm — und über `ρ_L R_s T = p` wird daraus **Wärme = Porenvolumen × Druckanstieg**.
+
+In Zahlen: ein Kubikmeter Firn mit 50 % Porenanteil, Druckanstieg 10 hPa = 1000 Pa →
+0,5 m³ · 1000 Pa = **500 Joule**. (Pascal mal Kubikmeter ist Joule; die Formel ist am Ende
+diese Einheitenrechnung.)
+
+**Wo die Wärme bleibt.** Nicht in der Luft — die Poren sind mikroskopisch klein, die Oberfläche
+riesig, die Luft gibt ihre Wärme in Millisekunden ans Eis ab und bleibt auf Eistemperatur. Ein
+Kubikmeter Firn wiegt 450 kg, Eis braucht 1780 J je Kilogramm und Kelvin, macht 800 000 J/K.
+Die 500 Joule heben die Temperatur also um 500/800 000 = **0,62 mK**.
+
+Dieselbe Zahl von der anderen Seite: bliebe die Wärme in der Luft, würde diese sich bei 10 hPa
+um rund **1 K** erwärmen. Sie teilt sie aber mit dem Eis, dessen Wärmekapazität je Volumen
+1640-mal größer ist. Von 1 K bleiben 1 K/1640 = **0,6 mK**.
+
+Und es gilt in beide Richtungen: fällt der Druck, strömt Luft aus, die Verdrängungsarbeit wird
+zurückgefordert, das Eis kühlt um denselben Betrag ab. Deshalb ist das Signal phasengleich mit
+dem Druck und in beiden Vorzeichen symmetrisch — so, wie es gemessen wird.
+
+Ein Nebenpunkt, der oft die erste Rückfrage ist: die einströmende Luft kommt aus der Schicht
+darüber und bringt deren Temperatur mit. Dieser Advektionsanteil ist vernachlässigbar, weil die
+Wärmekapazität der bewegten Luft nur 5·10⁻⁴ der Matrix beträgt — rechnerisch 0,001 bis
+0,002 mK/hPa gegen die 0,03 bis 0,09 mK/hPa der Kompressionswärme.
+
+### Schritt 1 — die Herleitung
+
+Betrachtet wird ein Einheitsvolumen Firn in der Tiefe z mit **offener** Porosität φ. Das
+Porenvolumen ist starr, die Temperatur konstant (die Matrix hält sie), der Kontrollraum offen
+gegen die Atmosphäre. Steigt der Luftdruck um Δp, strömt Masse nach: die einströmende Masse
+`dm = φ ρ_L Δp/p` bringt die Enthalpie `c_p T dm` mit, die innere Energie des Porengases
+wächst nur um `c_v T dm`. Die Differenz geht als Wärme an die Matrix:
+
+$$\mathrm{d}Q \;=\; (c_p - c_v)\,T\,\mathrm{d}m \;=\; R_s\,T\,\varphi\,\rho_L\,\frac{\Delta p}{p} \;=\; \varphi\,\Delta p .$$
+
+Der letzte Schritt nutzt `ρ_L R_s T = p`. Das Ergebnis hängt weder von der Temperatur noch von
+den Stoffwerten der Luft ab: **pro Volumen wird die Wärme φ·Δp frei.** Bei φ = 0,5 und
+Δp = 10 hPa sind das 500 J/m³.
+
+### Schritt 2 — Wohin die Wärme geht
+
+Aufgenommen wird sie von der Eismatrix. Deren Wärmekapazität je Volumen ist
+`ρ_Firn · c_Eis` ≈ 450 · 1780 = 8·10⁵ J/(m³·K); die Porenluft selbst trägt mit
+`φ ρ_L c_p` ≈ 500 J/(m³·K) nur 0,06 % bei und ist zu vernachlässigen. Damit
+
+$$\boxed{\;b(z) \;=\; \frac{\Delta T}{\Delta p} \;=\; \frac{\varphi(z)}{\rho_{\mathrm{Firn}}(z)\; c_{\mathrm{Eis}}}\;}$$
+
+Für das Beispiel: 500 J/m³ / 8·10⁵ J/(m³K) = 0,62 mK auf 10 hPa, also 0,062 mK/hPa.
+
+### Schritt 3 — Warum die Wärme lokal bleibt
+
+Zwei Bedingungen müssen halten, und beide tun es:
+
+* **Das Drucksignal erreicht alle Tiefen gleichzeitig.** Mit `D_p = k p/(φ μ)` und
+  Permeabilitäten von 10⁻⁸ m² im oberen Firn bis 10⁻¹¹ m² in der Lock-in-Zone liegt die
+  Eindringtiefe für synoptische Perioden bei 200 bis über 1000 m — die Firnsäule ist dagegen
+  dünn. Die Erwärmung ist also über die Tiefe quasi-gleichförmig.
+* **Es gibt keinen Gradienten, an dem Wärme abfließen könnte.** Nur die Tiefenabhängigkeit von
+  φ/ρ erzeugt einen schwachen; über eine synoptische Periode beträgt die Diffusionslänge
+  `√(κt)` ≈ 0,3 m, klein gegen die Meter- bis Zehnermeterskala, auf der sich φ/ρ ändert.
+
+### Schritt 4 — Vom Modell zur Kurve in Panel A
+
+`φ = 1 − ρ/917` macht b zu einer reinen Funktion der Dichte. Das Dichteprofil kommt aus
+**Herron & Langway (1980)**, mit der Jahresmitteltemperatur und der Akkumulation des
+Standorts als einzigen Eingaben:
+
+* Stadium 1 (ρ < 550 kg/m³): `k₀ = 11 exp(−10160/RT)`,
+  `ln(ρ/(ρ_i−ρ)) = ρ_i k₀ z + const`
+* Stadium 2 (ρ > 550): `k₁ = 575 exp(−21400/RT)`, mit der Akkumulation als `1/√A`
+* Wärmekapazität des Eises temperaturabhängig: `c(T) = 152,5 + 7,122·T[K]`, also 1781 J/(kg·K)
+  bei −44,5 °C und 1876 bei −31 °C
+
+Daraus die beiden Kurven in Panel A: durchgezogen GRIP (−31 °C, 230 kg/m²/a), gestrichelt
+Kohnen (−44,5 °C, 64 kg/m²/a). Kein Parameter wird an die Messung angepasst.
+
+### Ist das Porenvolumen aus der Dichte exakt?
+
+`φ = 1 − ρ/ρ_Eis` liefert die **Gesamt**porosität. Der Effekt sieht aber nur die **offene**,
+also die mit der Atmosphäre verbundene. Zwei Korrekturen trennen die beiden, und beide sind
+oben klein und unten groß.
+
+```{r poros-offen}
+Tk5 <- 228.6; TC5 <- Tk5 - 273.15
+rho_ice_T <- 917 * (1 + 1.53e-4 * (-TC5))                 # thermische Ausdehnung des Eises
+rco  <- 1/(1/0.917 + 6.95e-4*Tk5 - 0.043) * 1000          # Close-off-Dichte, Martinerie et al. 1992
+phico <- 1 - rco/rho_ice_T
+dK5 <- local({ k0 <- 11*exp(-10160/(8.314*Tk5)); k1 <- 575*exp(-21400/(8.314*Tk5))
+  z55 <- (log(.55/(.917-.55)) - log(.34/(.917-.34)))/(.917*k0)
+  function(z) vapply(z, function(q) { Z <- if (q <= z55) exp(.917*k0*q + log(.34/(.917-.34)))
+    else exp(.917*k1*(q - z55)/sqrt(0.064) + log(.55/(.917-.55))); .917*Z/(1+Z) }, 0) })
+
+po <- bind_rows(lapply(c(5, 10, 30, 50, 70, 80, 84), function(z) {
+  r <- dK5(z)*1000; p917 <- 1 - r/917; pT <- 1 - r/rho_ice_T
+  fcl <- if (pT > phico) min(1, 0.37*(pT/phico)^(-7.6)) else 1
+  data.frame(`Tiefe (m)` = z, `ρ (kg/m³)` = round(r),
+             `φ mit 917` = round(p917, 4), `φ mit ρ_Eis(T)` = round(pT, 4),
+             `geschlossen (%)` = round(100*fcl, 1), `φ_offen` = round(pT*(1-fcl), 4),
+             `φ_offen / φ(917)` = round(pT*(1-fcl)/p917, 3), check.names = FALSE) }))
+knitr::kable(po, row.names = FALSE,
+  caption = sprintf("Kohnen: Eisdichte %.0f kg/m³ statt 917 (thermische Ausdehnung bei %.1f °C), Close-off bei %.0f kg/m³ (φ_co = %.3f), geschlossener Anteil nach Goujon et al. (2003).",
+                    rho_ice_T, TC5, rco, phico))
+```
+
+* **Die Eisdichte selbst ist temperaturabhängig.** Bei −44,5 °C sind es 923 statt 917 kg/m³.
+  Das hebt φ um 0,5 % im oberen Firn und um 5 % nahe dem Close-off — kleine Korrektur, aber
+  sie geht direkt in b ein.
+* **Geschlossene Poren zählen nicht mit.** Nach der üblichen Parametrisierung bleibt der
+  geschlossene Anteil oberhalb von 750 kg/m³ unter 0,5 %, erreicht bei 783 kg/m³ knapp 2 %,
+  bei 811 kg/m³ 10 % und am Close-off (829 kg/m³) rund 19 %.
+
+Praktisch heißt das: **bis rund 700 kg/m³, also über die oberen 40 bis 50 m, ist die aus der
+Dichte gerechnete Porosität die offene** — beide Zahlen unterscheiden sich um weniger als
+0,5 %. Erst in der Lock-in-Zone laufen sie auseinander, und genau dort wird der Unterschied
+zur Messgröße: die Differenz zwischen der aus der Dichte erwarteten Gesamtporosität und der
+aus b gemessenen offenen Porosität **ist** die geschlossene Porosität. Für unsere Knoten
+(alle über 62 m, ρ < 760 kg/m³) spielt die Unterscheidung noch keine Rolle.
+
+### Kürzt sich γ heraus? Ja, exakt
+
+Die Herleitung über den offenen Kontrollraum und die anschauliche über „adiabatische
+Erwärmung, dann mit der Matrix geteilt" führen nicht nur ungefähr, sondern **identisch** zum
+selben Ergebnis. Der zweite Weg:
+
+$$\Delta T_{\mathrm{Luft}} = \frac{R_s}{c_p}\,T\,\frac{\Delta p}{p},
+\qquad
+\Delta T = \Delta T_{\mathrm{Luft}}\cdot\frac{\varphi\rho_L c_p}{\rho_f c_i}
+= \frac{\varphi\,\rho_L R_s T}{p}\cdot\frac{\Delta p}{\rho_f c_i}
+= \frac{\varphi\,\Delta p}{\rho_f c_i}.$$
+
+Im vorletzten Schritt kürzt sich `c_p` heraus, im letzten `ρ_L R_s T = p`. Es bleibt **kein**
+Faktor γ oder `c_p/c_v` übrig — die Wärmekapazität und die Adiabatenexponenten der Luft fallen
+vollständig heraus. Zahlenprobe: mit φ = 0,564, ρ_f = 400 kg/m³, c_i = 1900 J/(kg·K) geben
+beide Wege 564 J/m³ und damit `b = 7,42·10⁻⁷ K/Pa = 0,074 mK/hPa`, also 0,74 mK auf 10 hPa.
+Frühere Überschlagswerte um 0,5 mK/10 hPa unterscheiden sich nur durch andere φ, ρ und c, nicht
+durch den Weg.
+
+### Was Messung und Theorie trennt: die Ausbreitung der Druckstörung
+
+`b = φ/(ρ c)` ist der **thermodynamische** Koeffizient. Gemessen wird die Steigung gegen den
+Druck **an der Oberfläche**, und dazwischen liegt die Firnsäule. Die Störung breitet sich
+diffusiv aus, `D_p = k p/(φ μ)`, mit der Eindringtiefe `δ = √(2 D_p/ω)`; gemessen wird
+deshalb
+
+$$b_{\mathrm{gemessen}}(z) = \frac{\varphi(z)}{\rho(z) c}\cdot e^{-z/\delta},
+\qquad \text{mit Phasenverzug } \frac{z}{\delta\,\omega}.$$
+
+```{r ausbreitung}
+mu <- 1.7e-5; p_s <- 65000; Tper <- 3 * 86400; om_p <- 2*pi/Tper
+ausb <- bind_rows(lapply(c(1e-8, 1e-9, 1e-10, 1e-11), function(k) {
+  phi_l <- 0.3; Dp <- k * p_s/(phi_l * mu); del <- sqrt(2*Dp/om_p)
+  data.frame(`Permeabilität (m²)` = sprintf("%.0e", k),
+             `D_p (m²/s)` = signif(Dp, 3), `Eindringtiefe (m)` = round(del),
+             `Amplitude 30 m` = sprintf("%.0f %%", 100*exp(-30/del)),
+             `Verzug 30 m` = sprintf("%.0f min", (30/del)/om_p/60),
+             `Amplitude 80 m` = sprintf("%.0f %%", 100*exp(-80/del)),
+             `Verzug 80 m` = sprintf("%.0f min", (80/del)/om_p/60), check.names = FALSE) }))
+knitr::kable(ausb, row.names = FALSE,
+  caption = "Ausbreitung einer synoptischen Druckstörung (3-Tage-Periode) im Firn.")
+```
+
+Für den **oberen Firn** ist der Effekt klein: bei Permeabilitäten von 10⁻⁸ bis 10⁻⁹ m² bleiben
+in 30 m Tiefe 96 bis 99 % der Amplitude, der Verzug beträgt 9 bis 28 Minuten. Das liegt
+innerhalb unserer Fehlerbalken — und erklärt einen Teil des gemessenen Defizits: der Faktor
+0,95 ± 0,02 wird nach Korrektur um rund 2 % Dämpfung zu 0,97, der Rest liegt in der
+Unsicherheit von `c_Eis` und des Dichteprofils.
+
+In der **Lock-in-Zone** kehrt sich das um. Fällt die Permeabilität auf 10⁻¹⁰ bis 10⁻¹¹ m²,
+bleiben in 80 m nur noch 71 bis 34 % der Amplitude, und der Verzug wächst auf 4 bis 12 Stunden.
+Dort ist `b_gemessen` also deutlich kleiner als `φ_offen/(ρc)`, und ohne Korrektur würde die
+Porosität unterschätzt — ausgerechnet in der Tiefe, in der die Messung interessant wäre.
+
+**Das ist lösbar, weil zwei Observablen zur Verfügung stehen.** Dämpfung und Phasenverzug
+stammen aus derselben Größe `δ`: die Phase bestimmt `D_p` und damit die Permeabilität, die
+Amplitude nach Korrektur die Porosität. Bei 80 m und 10⁻¹¹ m² beträgt der Verzug 12 Stunden —
+mit stündlicher Abtastung gut messbar, mit unseren ein bis zwei Messungen am Tag nicht.
+Für die Porositätsmessung nahe dem Close-off gehört die stündliche Abtastung deshalb zu den
+Anforderungen, nicht nur zur Kür.
+
+Solange man im oberen Firn bleibt, gilt `b ≈ φ/(ρc)` mit wenigen Prozent Abschlag; die
+Gleichsetzung ohne Korrektur ist erst dort zulässig, wo die Permeabilität hoch ist.
+
+### Schritt 5 — Der Schätzer
+
+Je Knoten werden Temperatur- und Druckreihe **gleich** hochpassgefiltert (loess-Residuum), so
+dass nur das synoptische Band übrig bleibt; dann
+
+$$\hat b = \frac{\mathrm{cov}(r_T, r_p)}{\mathrm{var}(r_p)} , \qquad
+\mathrm{SE}(\hat b) = \frac{\sigma_T}{\sigma_p \sqrt{N_{\mathrm{eff}}}} , \qquad
+N_{\mathrm{eff}} = N\,\frac{1-r_1}{1+r_1} .$$
+
+Die Autokorrelationskorrektur ist nötig, weil der Luftdruck erst nach etwa vier Tagen
+dekorreliert.
+
+### Was das Modell voraussetzt
+
+| Annahme | Folge, wenn sie verletzt ist |
+|---|---|
+| Porosität ist **offen** | Unterhalb ~700 kg/m³ wächst die geschlossene Porosität; b misst dann φ_offen, nicht die Gesamtporosität — für die Close-off-Messung der Zweck, für eine Gesamtporosität ein Modellfehler. |
+| Kompression **isotherm** für die Luft | Bei Perioden unter Sekunden nicht mehr gültig; im synoptischen Band um Größenordnungen erfüllt. |
+| Keine vertikale Wärmeabfuhr | Verletzt nur, wenn φ/ρ auf Zentimeterskala springt (dünne Eislagen). |
+| Advektion vernachlässigbar | Die bewegte Luft trägt `ρ_L c_p/(ρ c)` ≈ 5·10⁻⁴ der Wärmekapazität; Beitrag 0,001–0,002 mK/hPa. |
+| `c_Eis` bekannt | Geht linear ein; die Formel ist auf ~1 % genau. Ein zu hoher Wert war der Grund, warum der Faktor zunächst bei 1,01 statt 0,95 lag. |
+
+```{r theory, fig.height=5.5, fig.width=9}
+Rg <- 8.314; T_site <- 242; acc <- 0.23; rho_i <- 0.917; rho_0 <- 0.34
+c_ice <- 152.5 + 7.122 * T_site       # Alexiades & Solomon: c_Eis(T)
+k0 <- 11 * exp(-10160 / (Rg * T_site)); k1 <- 575 * exp(-21400 / (Rg * T_site))
+z550 <- (log(0.55 / (rho_i - 0.55)) - log(rho_0 / (rho_i - rho_0))) / (rho_i * k0)
+dens <- function(z) vapply(z, function(zz) {
+  Z <- if (zz <= z550) exp(rho_i * k0 * zz + log(rho_0 / (rho_i - rho_0)))
+       else exp(rho_i * k1 * (zz - z550) / sqrt(acc) + log(0.55 / (rho_i - 0.55)))
+  rho_i * Z / (1 + Z) }, 0)
+b_theor <- function(z) { r <- dens(z) * 1000; (1 - r / 917) / (r * c_ice) * 1e5 }
+z_co  <- uniroot(function(z) dens(z) - 0.83, c(1, 200))$root
+b_ice <- 1.5e-4 * T_site / (917 * c_ice) * 1e5
+
+# Drei Schätzer derselben Größe: gleich gefiltertes Band, Tagesdifferenzen gegen den
+# Kettendruck und gegen das AWS-Barometer. Fehlerbalken autokorrelations-korrigiert.
+est_band <- band |> filter(chain == "Kette 2 — Schnee") |>
+  transmute(z = depth_m, b, se = se_ac, quelle = "Band (loess-Residuen)")
+
+est_diff <- dif |> filter(chain == "Kette 2 — Schnee", depth_m >= 8) |>
+  group_by(depth_m) |> summarise(b = coef(lm(dT ~ dp))[2],
+    se = summary(lm(dT ~ dp))$coefficients[2, 2], .groups = "drop") |>
+  transmute(z = depth_m, b, se, quelle = "Tagesdifferenzen (Kette)")
+
+est_aws <- if (!is.null(aws)) {
+  dif |> mutate(day = as.Date(time)) |> left_join(aws, by = "day") |>
+    arrange(chain, depth_m, time) |> group_by(chain, depth_m) |>
+    mutate(dp_aws = p_aws - lag(p_aws)) |> ungroup() |>
+    filter(chain == "Kette 2 — Schnee", depth_m >= 8, !is.na(dp_aws)) |>
+    group_by(depth_m) |> summarise(b = coef(lm(dT ~ dp_aws))[2],
+      se = summary(lm(dT ~ dp_aws))$coefficients[2, 2], .groups = "drop") |>
+    transmute(z = depth_m, b, se, quelle = "Tagesdifferenzen (AWS-Barometer)")
+} else NULL
+
+est <- bind_rows(est_band, est_diff, est_aws) |>
+  mutate(z_off = z + c("Band (loess-Residuen)" = -0.8, "Tagesdifferenzen (Kette)" = 0,
+                       "Tagesdifferenzen (AWS-Barometer)" = 0.8)[quelle])
+
+# Theorieband: ±5 % Unsicherheit im modellierten Dichteprofil
+theo <- data.frame(z = seq(1, 110, 0.5)) |>
+  mutate(b = b_theor(z),
+         lo = (1 - dens(z) * 1050 / 917) / (dens(z) * 1050 * c_ice) * 1e5,
+         hi = (1 - dens(z) *  950 / 917) / (dens(z) *  950 * c_ice) * 1e5)
+
+ggplot(theo, aes(b, z)) +
+  geom_ribbon(aes(xmin = lo, xmax = hi, y = z), fill = "grey70", alpha = 0.35, inherit.aes = FALSE) +
+  geom_line(linewidth = 0.7, colour = "grey30") +
+  geom_vline(xintercept = b_ice, linetype = "dotted", colour = "grey50") +
+  geom_hline(yintercept = z_co, linetype = "dashed", colour = "#eb6834") +
+  geom_errorbarh(data = est, aes(y = z_off, xmin = b - se, xmax = b + se, colour = quelle),
+                 height = 0.9, linewidth = 0.5, inherit.aes = FALSE) +
+  geom_point(data = est, aes(b, z_off, colour = quelle), size = 2.4, inherit.aes = FALSE) +
+  annotate("text", x = b_ice, y = 106, label = " thermoelastisch (Eis)", hjust = 0,
+           size = 3.3, colour = "grey40") +
+  annotate("text", x = 0.05, y = z_co - 3, label = sprintf("Close-off %.0f m", z_co),
+           hjust = 0, size = 3.3, colour = "#eb6834") +
+  scale_colour_manual(values = c("Band (loess-Residuen)" = "#2980b9",
+                                 "Tagesdifferenzen (Kette)" = "#1baf7a",
+                                 "Tagesdifferenzen (AWS-Barometer)" = "#eb6834"), name = NULL) +
+  scale_y_reverse(name = "Tiefe (m)", breaks = seq(0, 110, 10)) +
+  scale_x_continuous(name = "b = ΔT/Δp (mK/hPa)") +
+  labs(title = "Druck-Temperatur-Kopplung gegen die Tiefe",
+       subtitle = "Linie: φ/(ρ c) mit Herron-Langway-Dichte, Band = ±5 % Dichte; Punkte: drei Schätzer mit 1σ (autokorrelations-korrigiert)") +
+  theme_bw(base_size = 13) + theme(legend.position = "bottom")
+
+obs <- est_band |> select(z, b)
+```
+
+```{r theory-tab}
+knitr::kable(bind_rows(
+  obs |> transmute(`Tiefe (m)` = z, `b gemessen (mK/hPa)` = round(b, 4),
+                   `ρ (kg/m³)` = round(dens(z) * 1000, 0),
+                   `φ` = round(1 - dens(z) * 1000 / 917, 3),
+                   `b = φ/(ρc)` = round(b_theor(z), 4),
+                   `Verhältnis` = round(b / b_theor(z), 2)),
+  data.frame(`Tiefe (m)` = c(50, 70, round(z_co)), `b gemessen (mK/hPa)` = NA,
+             `ρ (kg/m³)` = round(dens(c(50, 70, z_co)) * 1000, 0),
+             `φ` = round(1 - dens(c(50, 70, z_co)) * 1000 / 917, 3),
+             `b = φ/(ρc)` = round(b_theor(c(50, 70, z_co)), 4),
+             `Verhältnis` = NA, check.names = FALSE)),
+  caption = sprintf("Messung gegen Vorhersage. Unterhalb des Close-off (%.0f m) bleibt die thermoelastische Antwort des Eises, %.4f mK/hPa.", z_co, b_ice))
+```
+
+```{r est-tab}
+knitr::kable(
+  est |> select(-z_off) |> mutate(b = round(b, 4), se = round(se, 4)) |>
+    tidyr::pivot_wider(names_from = quelle, values_from = c(b, se)) |> arrange(z) |>
+    rename(`Tiefe (m)` = z),
+  caption = "Drei Schätzer derselben Größe mit Standardfehler. Die effektive Stichprobe ist wegen der ~4-tägigen Dekorrelation des Luftdrucks nur rund ein Viertel der Tage.")
+```
+
+**Wie genau ist die Übereinstimmung wirklich?** Der formale Standardfehler des Bandschätzers
+liegt bei 6–9 %, aber die Tagesprofile sind nicht unabhängig: der Luftdruck dekorreliert erst
+nach etwa vier Tagen, aus 45 Tagen werden rund
+`r sprintf("%.0f", mean(band$n_eff[band$chain=="Kette 2 — Schnee"]))` effektive
+Freiheitsgrade. Damit steigt die Unsicherheit auf 13–21 %. Die Theoriekurve ist ähnlich
+unsicher: `d ln b / d ln ρ = −1/φ`, ein 5-%-Fehler im modellierten Dichteprofil verschiebt b
+um 13–16 % — das graue Band. Dazu kommt, dass die drei Schätzer bei 16 und 26 m um 50–70 %
+auseinanderliegen, mehr als ihre formalen Fehler.
+
+```{r trend-test}
+trend <- bind_rows(lapply(split(est, est$quelle), function(g)
+  data.frame(Schätzer = g$quelle[1],
+             steigung = coef(lm(b ~ z, data = g, weights = 1 / g$se^2))[2],
+             se = summary(lm(b ~ z, data = g, weights = 1 / g$se^2))$coefficients[2, 2])))
+theo_tr <- coef(lm(b_theor(c(16, 21, 26, 30)) ~ c(16, 21, 26, 30)))[2]
+
+wmean <- est |> group_by(z) |> summarise(
+  b = sum(b / se^2) / sum(1 / se^2), se = sqrt(1 / sum(1 / se^2)), .groups = "drop") |>
+  mutate(theorie = b_theor(z), sigma = (b - theorie) / se)
+
+knitr::kable(bind_rows(
+  trend |> transmute(Zeile = Schätzer, `Wert` = sprintf("%+.5f ± %.5f mK/hPa je m", steigung, se),
+                     `Signifikanz` = sprintf("%.1f σ", abs(steigung / se))),
+  data.frame(Zeile = "Theorie φ/(ρc)", Wert = sprintf("%+.5f mK/hPa je m", theo_tr),
+             Signifikanz = "—")), row.names = FALSE,
+  caption = "Tiefentrend von b über 16–30 m, je Schätzer gewichtet gefittet.")
+
+knitr::kable(wmean |> transmute(`Tiefe (m)` = z, `b gewichtet (mK/hPa)` = round(b, 4),
+    `± (mK/hPa)` = round(se, 4), `Theorie` = round(theorie, 4),
+    `Abweichung (σ)` = round(sigma, 1)),
+  caption = "Gewichtetes Mittel der drei Schätzer gegen die Vorhersage.")
+```
+
+**Test gegen einen Common Mode.** Eine Störung, die alle Kanäle des Kopfes
+gleich trifft — Referenz, Versorgung, ADC —, sähe genauso aus wie ein tiefenunabhängiger
+Druckeffekt. Sie fällt aber in der **Differenz zweier Tiefen** exakt heraus, während der
+physikalische Effekt sie überlebt, weil `φ/(ρc)` mit der Tiefe abnimmt.
+
+```{r cm-test}
+tms  <- sort(unique(win$time))
+td_w <- as.numeric(difftime(tms, min(tms), units = "days"))
+rP_w <- resid(loess(as.numeric(tapply(win$pressure_hPa, win$time, mean)[as.character(tms)]) ~ td_w,
+                    span = 0.5))
+Rz <- sapply(c(5, 8, 10, 16, 21, 26, 30), function(dp) {
+  z <- win |> filter(chain == "Kette 2 — Schnee", depth_m == dp) |> arrange(time)
+  resid(loess(z$ntc_C ~ td_w, span = 0.5)) * 1000 })
+colnames(Rz) <- c(5, 8, 10, 16, 21, 26, 30)
+
+diff_test <- bind_rows(lapply(list(c(8, 30), c(10, 30), c(16, 30), c(5, 30)), function(pr) {
+  d <- Rz[, as.character(pr[1])] - Rz[, as.character(pr[2])]
+  f <- summary(lm(d ~ rP_w))$coefficients
+  data.frame(paar = sprintf("%d m - %d m", pr[1], pr[2]),
+             b = f[2, 1], se = f[2, 2], t = f[2, 3],
+             theorie = b_theor(pr[1]) - b_theor(pr[2])) }))
+
+knitr::kable(diff_test |> transmute(`Tiefenpaar` = paar,
+    `b Differenz (mK/hPa)` = round(b, 4), `±` = round(se, 4), `t` = round(t, 1),
+    `Theorie φ/(ρc)` = round(theorie, 4)), row.names = FALSE,
+  caption = "Kopplung der Tiefendifferenz. Ein Common Mode des Kopfes ergäbe hier exakt null.")
+```
+
+Die Differenzen bleiben mit t = 3,4–3,7 signifikant und treffen die vorhergesagten Werte.
+Ein gemeinsamer Störer des Kopfes ist damit ausgeschlossen, und die **Tiefenabhängigkeit ist
+nachgewiesen** — über 16–30 m allein war der Hebel zu klein, mit den Knoten bei 8 und 10 m
+reicht er.
+
+Damit ist zu trennen, was die Daten zeigen und was nicht:
+
+* **Der Absolutwert ist bestätigt.** Das gewichtete Mittel der drei Schätzer liegt bei
+  0,028–0,034 mK/hPa gegen vorhergesagte 0,025–0,036; die Abweichungen betragen 0,2 bis
+  1,7 σ. Das ist eine Bestätigung auf etwa ±15 %, nicht besser.
+* **Über 16–30 m allein ist die Tiefenabhängigkeit nicht auflösbar.** Vorhergesagt sind dort
+  nur −30 %; ein Schätzer findet den Abfall mit 2,9 σ, die beiden anderen sind mit null
+  verträglich. Dass die Punkte im Bild in diesem Bereich so genau auf der Kurve liegen, ist
+  kein Präzisionstest, sondern das Zusammentreffen zweier Größen mit je rund 15 %
+  Unsicherheit.
+* **Mit den Knoten bei 8 und 10 m wird sie nachweisbar**: b fällt von 0,053 (8 m) über 0,040
+  (16 m) auf 0,025 mK/hPa (30 m), und der Differenztest bestätigt das Gefälle unabhängig von
+  jedem Common Mode.
+* Um die Dämpfung mit der Tiefe zu prüfen, braucht es den größeren Hebel: die flachen Knoten
+  nach Abzug des Saisonsignals, Sensoren unterhalb 30 m, oder eine längere Reihe.
+
+**Über die Firnsäule** fällt die**Über die Firnsäule** fällt die
+Kopplung von rund 0,07 mK/hPa bei 5 m auf 0,006 mK/hPa am Close-off, also gut eine
+Größenordnung; darunter bleibt der thermoelastische Boden des Eises von etwa
+`r sprintf("%.3f", b_ice)` mK/hPa, tiefenunabhängig. Zwei Einschränkungen: nahe dem Close-off
+zählt nur die **offene** Porosität, die schneller abnimmt als die Gesamtporosität, und in der
+Lock-in-Zone dämpfen die geringen Permeabilitäten zusätzlich das Drucksignal.
+
+**Größenordnung im Klimakontext**: der Tagesdruck der Summit-AWS hat über 1996–2026 eine
+Standardabweichung von 11,8 hPa und eine Spannweite von 79 hPa. Bei 0,03 mK/hPa sind das
+**0,35 mK je Standardabweichung** und bis 2,4 mK über die volle Spanne — dieselbe
+Größenordnung wie die Präzision, mit der Paläo-Inversionen aus Firntemperaturen arbeiten.
+
+## Die Unruhe im offenen Bohrloch
+
+Im luftgefüllten Loch ist der Druckzusammenhang nicht nachweisbar, dafür liegt dort eine
+Tag-zu-Tag-Unruhe von 5–21 mK, die im verfüllten Loch fehlt (0,1 mK). Sie ist physikalisch —
+beide NTC-Kanäle eines Knotens bewegen sich gemeinsam — und weiß in der Zeit.
+
+Ein Sensor im offenen Loch misst die **Luft**, nicht den Firn. Wird die Luftsäule vertikal
+verschoben, trägt sie die Temperatur ihres Herkunftsorts mit: die Störung ist
+`Versatz × lokaler Gradient`. Aus der gemessenen Unruhe folgt damit der implizierte Versatz.
+
+```{r displacement}
+prof <- win |> group_by(chain, depth_m) |> summarise(t_mean = mean(ntc_C), .groups = "drop")
+gradient <- function(ch, dp) {
+  p <- prof |> filter(chain == ch) |> arrange(depth_m)
+  i <- which(p$depth_m == dp); if (i == 1 || i == nrow(p)) return(NA_real_)
+  abs((p$t_mean[i + 1] - p$t_mean[i - 1]) / (p$depth_m[i + 1] - p$depth_m[i - 1])) }
+
+unrest <- bind_rows(lapply(split(win |> filter(chain == "Kette 1 — Luft", depth_m >= 5),
+                                 ~ depth_m, drop = TRUE), function(x) {
+  x <- x[order(x$time), ]; if (nrow(x) < 20) return(NULL)
+  td <- as.numeric(difftime(x$time, min(x$time), units = "days"))
+  data.frame(depth_m = x$depth_m[1], sd_mK = sd(resid(loess(x$ntc_C ~ td, span = 0.5))) * 1000) })) |>
+  rowwise() |> mutate(grad = gradient("Kette 1 — Luft", depth_m),
+                      versatz = sd_mK / 1000 / grad,
+                      pump_10hPa = depth_m * 10 / 675) |> ungroup()
+
+knitr::kable(unrest |> transmute(`Tiefe (m)` = depth_m, `Unruhe (mK)` = round(sd_mK, 1),
+    `|dT/dz| (K/m)` = round(grad, 4), `implizierter Versatz (m)` = round(versatz, 2),
+    `z·Δp/p bei 10 hPa (m)` = round(pump_10hPa, 2)),
+  caption = "Offenes Loch: aus Unruhe und lokalem Gradienten folgt ein Versatz von rund 0,3 m — genau die Größe, die eine synoptische Druckänderung der Luftsäule aufzwingt.")
+```
+
+Der implizierte Versatz liegt bei 16–26 m bei 0,28–0,37 m und **wächst mit der Tiefe**, wie
+es die Kompression der darüberliegenden Luftsäule verlangt: `δ(z) = z·Δp/p` ergibt bei 10 hPa
+0,24 m bei 16 m und 0,39 m bei 26 m. Der zweite Beleg steht bei **10 m**: dort hat das Profil
+seinen Wendepunkt, der Gradient ist praktisch null — und die Unruhe fällt auf 2,8 mK. Wo
+nichts zu advehieren ist, ist auch keine Unruhe.
+
+**Warum die Unruhe trotzdem nicht mit dem gemessenen Druck korreliert.** Die verschobene Luft
+gleicht sich der Bohrlochwand in Minuten an (`τ ≈ a²/κ_Luft ≈ 100 s` bei 5 cm Radius). Was
+der Sensor sieht, ist deshalb nicht der Druckstand, sondern die **momentane Strömung**, also
+`dp/dt` im Moment der Messung. Ein Profil pro Tag tastet diese Größe an zufälliger Phase ab —
+das Ergebnis ist weißes Rauschen der richtigen Amplitude ohne Zusammenhang mit dem
+gleichzeitig gemessenen Druck. Mit hoch aufgelösten Druckdaten wäre der Zusammenhang
+sichtbar; mit Tages-Punktmessungen ist er ausgetastet.
+
+Im verfüllten Loch wird dieselbe Luft um dieselben 0,3 m verschoben, aber dort steckt der
+Sensor im Firn: die Wärmekapazität der bewegten Luft ist gegen die Eismatrix vernachlässigbar
+(`ρ_L c_L / (ρ_i c_i) ≈ 5·10⁻⁴`), die Advektion trägt rechnerisch 0,001–0,002 mK/hPa bei und
+verschwindet neben der Kompressionswärme. Genau deshalb ist der verfüllte Sensor ein
+Thermometer für den Firn und der Sensor im offenen Loch eines für die Bohrlochluft.
+
+## Gegenprobe: Kohnen head02 (60-m-Kette in Schnee, 4-stündlich)
+
+An B46 stand mit **head02** eine Konfiguration, die für diese Frage besser gebaut ist: eine
+60-m-Kette und eine 10-m-Kette, beide **in Schnee verfüllt**, dazu ein Atmosphärensensor,
+mit NTC1, GND und Druck je Knoten — und vor allem **alle 4 Stunden** statt einmal am Tag.
+Der Kopf ist am 02.02.2026 ausgefallen ([[head02_ausfall.qmd]]), die brauchbare Reihe ist
+deshalb kurz.
+
+```{r head02}
+h02 <- tryCatch(readr::read_csv("../KohnenRecords_Analyse/data/messages-1781290180297_old.csv",
+                                show_col_types = FALSE), error = function(e) NULL)
+
+if (!is.null(h02)) {
+  s_int <- function(h) { v <- strtoi(h, 16L); n <- nchar(h)/2
+                         ifelse(v >= 2^(8*n-1), v - 2^(8*n), v) }
+  raw02 <- h02 |> filter(grepl("231708", Device)) |>
+    transmute(recv = lubridate::dmy_hms(`Date Time (UTC)`, tz = "UTC"),
+              nb = `Length (Bytes)`, hex = tolower(Payload)) |>
+    filter(nb == 209, recv < as.POSIXct("2026-02-02 17:13", tz = "UTC"),
+           !grepl("6f6f", hex)) |> arrange(recv)          # gestörte Telegramme raus
+
+  nodes02 <- bind_rows(lapply(seq_len(nrow(raw02)), function(i) {
+    h <- raw02$hex[i]
+    data.frame(recv = raw02$recv[i], node = 1:25,
+      ntc = s_int(substring(h, seq(15, by = 16, length.out = 25),
+                               seq(20, by = 16, length.out = 25))),
+      p   = strtoi(substring(h, seq(25, by = 16, length.out = 25),
+                                seq(30, by = 16, length.out = 25)), 16L) / 1000) })) |>
+    mutate(T = NTC_mean(ntc))
+
+  bar02 <- nodes02 |> group_by(recv) |> summarise(p_bar = mean(p), .groups = "drop")
+
+  deep <- c(2:12, 19:25)
+  res02 <- sapply(deep, function(nd) {
+    z <- nodes02 |> filter(node == nd) |> arrange(recv)
+    td <- as.numeric(difftime(z$recv, min(z$recv), units = "days"))
+    resid(loess(z$T ~ td, span = 0.4)) * 1000 })
+  cm <- rowMeans(res02)
+  td02 <- as.numeric(difftime(bar02$recv, min(bar02$recv), units = "days"))
+  rP02 <- resid(loess(bar02$p_bar ~ td02, span = 0.4))
+  f02  <- summary(lm(cm ~ rP02))
+
+  knitr::kable(data.frame(
+    Größe = c("Profile / Abstand", "Zeitraum", "Druckhub (sd)",
+              "Streuung je Knoten", "davon Common Mode", "je Knoten nach CM-Abzug",
+              "mittlere Korrelation der Knoten-Residuen",
+              "Common Mode gegen Druck", "erwartetes Signal (0,03 mK/hPa)"),
+    Wert = c(sprintf("%d / %.1f h", nrow(raw02),
+                     median(as.numeric(diff(raw02$recv), units = "hours"))),
+             sprintf("%s – %s", format(min(raw02$recv), "%d.%m."), format(max(raw02$recv), "%d.%m.%Y")),
+             sprintf("%.1f hPa (sd %.1f)", diff(range(bar02$p_bar)), sd(bar02$p_bar)),
+             sprintf("%.1f mK", mean(apply(res02, 2, sd))),
+             sprintf("%.1f mK", sd(cm)),
+             sprintf("%.1f mK", mean(apply(res02 - cm, 2, sd))),
+             sprintf("%.2f", mean(cor(res02)[upper.tri(cor(res02))])),
+             sprintf("%+.2f mK/hPa (t = %.1f, R² = %.2f)", f02$coefficients[2,1],
+                     f02$coefficients[2,3], f02$r.squared),
+             sprintf("%.2f mK über den Hub", 0.03 * diff(range(bar02$p_bar))))),
+    caption = "head02, Kohnen B46: was die Reihe hergibt.")
+}
+```
+
+Das Ergebnis ist negativ, und zwar aus einem klaren Grund: die Residuen **aller** Knoten sind
+zu 1,00 korreliert. Die 26 mK Streuung sind ein einziger Anteil, der alle Kanäle gleichzeitig
+und gleich stark trifft; nach seinem Abzug bleibt je Knoten unter 1 mK. Das ist kein
+Rauschen der Sensoren, sondern etwas, das im Kopf entsteht — Referenz, Versorgung oder ADC.
+
+**Was dieser Anteil ist: ein Tagesgang.** head02 sendete alle vier Stunden und tastet ihn
+deshalb ab. Kohnen liegt auf 0° Länge, UTC ist dort Sonnenzeit.
+
+```{r cm-diurnal, fig.height=4.2, fig.width=9}
+if (!is.null(h02)) {
+  cm_df <- data.frame(recv = bar02$recv, cm = cm, hr = as.integer(format(bar02$recv, "%H")))
+  hfit  <- lm(cm ~ cos(2 * pi * hr / 24) + sin(2 * pi * hr / 24), data = cm_df)
+  amp   <- sqrt(sum(coef(hfit)[2:3]^2))
+  phase <- (atan2(coef(hfit)[3], coef(hfit)[2]) * 12 / pi) %% 24
+
+  ggplot(cm_df, aes(hr, cm)) +
+    geom_hline(yintercept = 0, colour = "grey70") +
+    geom_point(size = 1.8, colour = "#2a78d6", alpha = 0.7) +
+    stat_summary(fun = mean, geom = "line", colour = "#eb6834", linewidth = 0.9) +
+    stat_summary(fun = mean, geom = "point", colour = "#eb6834", size = 3) +
+    scale_x_continuous(breaks = seq(0, 21, 3), name = "Stunde UTC (= Sonnenzeit an Kohnen)") +
+    labs(title = "head02: der gemeinsame Anteil aller Knoten ist ein Tagesgang",
+         subtitle = sprintf("Amplitude %.1f mK, Maximum %.1f UTC, erklärt %.0f %% der Varianz; Rest danach %.1f mK",
+                            amp, phase, 100 * summary(hfit)$r.squared, sd(resid(hfit))),
+         y = "gemeinsamer Anteil (mK)") +
+    theme_bw(base_size = 13)
+}
+```
+
+Das Maximum liegt in der lokalen Nacht, das Minimum am frühen Nachmittag; der Tagesgang
+erklärt 75 % der Varianz und ist über beide Hälften der Reihe stabil (30,9 mK Amplitude mit
+Maximum 2,7 UTC gegen 26,0 mK mit 1,8 UTC).
+
+**Die naheliegende Erklärung — Einstrahlung über die Elektronik — scheidet aus.** Der Kopf
+liegt 8–10 m tief im Firn, dort gibt es keinen Tagesgang, und genau das zeigen die
+Hauskanäle:
+
+```{r cm-quelle}
+if (!is.null(h02)) {
+  head_ch <- h02 |> filter(grepl("231708", Device)) |>
+    transmute(recv = lubridate::dmy_hms(`Date Time (UTC)`, tz = "UTC"),
+              nb = `Length (Bytes)`, hex = tolower(Payload)) |>
+    filter(nb == 209, !grepl("6f6f", hex),
+           recv > as.POSIXct("2026-01-20", tz = "UTC"),
+           recv < as.POSIXct("2026-02-02 17:13", tz = "UTC")) |>
+    mutate(adc_C = 6.101e-5 * strtoi(substr(hex, 9, 14), 16L) - 256.6,
+           batt  = strtoi(substr(hex, nchar(hex) - 3, nchar(hex)), 16L),
+           hr    = as.integer(format(recv, "%H"))) |>
+    filter(adc_C > -50, adc_C < -35) |> arrange(recv)
+
+  cm_ok <- cm_df |> filter(recv %in% head_ch$recv)
+  gnd_cm <- nodes02 |> filter(node %in% c(2:12, 19:25), recv %in% head_ch$recv) |>
+    group_by(recv) |> summarise(g = mean(gnd_dummy <- 0), .groups = "drop")   # Platzhalter
+
+  diu <- function(v, hr) { f <- lm(v ~ cos(2*pi*hr/24) + sin(2*pi*hr/24))
+    c(amp = unname(sqrt(sum(coef(f)[2:3]^2))),
+      max = unname((atan2(coef(f)[3], coef(f)[2]) * 12/pi) %% 24),
+      r2  = summary(f)$r.squared) }
+  td_h <- as.numeric(difftime(head_ch$recv, min(head_ch$recv), units = "days"))
+  d_adc  <- diu(resid(loess(head_ch$adc_C ~ td_h, span = 0.4)) * 1000, head_ch$hr)
+  d_batt <- diu(resid(loess(head_ch$batt  ~ td_h, span = 0.4)),        head_ch$hr)
+  d_cm   <- diu(cm_ok$cm, cm_ok$hr)
+
+  knitr::kable(data.frame(
+    Kanal = c("NTC1, gemeinsamer Anteil", "Platinentemperatur", "Batteriespannung"),
+    `Tagesgang-Amplitude` = c(sprintf("%.1f mK", d_cm["amp"]), sprintf("%.0f mK", d_adc["amp"]),
+                              sprintf("%.1f mV", d_batt["amp"])),
+    `Maximum (UTC)` = round(c(d_cm["max"], d_adc["max"], d_batt["max"]), 1),
+    `R²` = round(c(d_cm["r2"], d_adc["r2"], d_batt["r2"]), 2),
+    `r mit dem gemeinsamen Anteil` = c("1.00",
+      sprintf("%+.2f", cor(cm_ok$cm, head_ch$adc_C)), sprintf("%+.2f", cor(cm_ok$cm, head_ch$batt))),
+    check.names = FALSE), row.names = FALSE,
+    caption = "Nur die Knotenkanäle zeigen den Tagesgang; Platine und Batterie nicht.")
+}
+```
+
+Die Platinentemperatur liegt nach dem 20.01. konstant bei −41,2 °C mit einer Streuung von
+0,1 K, ihr Tagesgang ist mit R² = 0,03 nicht nachweisbar und mit dem gemeinsamen Anteil nicht
+korreliert (r = +0,07); die Batteriespannung ebenso wenig (Amplitude 5,7 mV, R² = 0,02,
+r = −0,04). Der Einwand, dass die Elektronik in 8–10 m Tiefe keinen Tagesgang spüren kann,
+trifft also zu — die Wärme ist es nicht.
+
+**Was der gemeinsame Anteil stattdessen ist: eine Verstärkungsänderung.** Ein additiver
+Nullpunktfehler und eine relative Verstärkungsänderung sehen in der Temperatur gleich aus,
+in den **Rohcounts** aber nicht: additiv verschiebt alle Knoten um denselben Betrag,
+multiplikativ proportional zum Messwert.
+
+```{r cm-gain}
+if (!is.null(h02)) {
+  deep_n <- c(2:12, 19:25)
+  rC <- sapply(deep_n, function(nd) {
+    z <- nodes02 |> filter(node == nd, recv %in% head_ch$recv) |> arrange(recv)
+    td <- as.numeric(difftime(z$recv, min(z$recv), units = "days"))
+    resid(loess(z$ntc ~ td, span = 0.4)) })
+  lvl <- vapply(deep_n, function(nd) median(nodes02$ntc[nodes02$node == nd]), 0)
+  slope_counts <- vapply(seq_along(deep_n), function(i) coef(lm(rC[, i] ~ cm_ok$cm))[2], 0)
+
+  knitr::kable(data.frame(Knoten = deep_n, `Counts (Mio)` = round(lvl / 1e6, 2),
+    `Counts je mK` = round(slope_counts, 1),
+    `bei reiner Verstärkung erwartet` = round(lvl / mean(lvl) * mean(slope_counts), 1),
+    check.names = FALSE) |> head(6), row.names = FALSE,
+    caption = sprintf("Antwort der Rohcounts, erste sechs Knoten. Relative Verstärkungsänderung: %.1e je mK, bei 28 mK Amplitude %.1e — also rund 0,1 %%.",
+                      abs(mean(slope_counts) / mean(lvl)), abs(28 * mean(slope_counts) / mean(lvl))))
+}
+```
+
+Die Antwort der Rohcounts folgt dem Pegel jedes Knotens und trifft die Erwartung für eine
+reine Verstärkungsänderung auf 1–5 %. Der gemeinsame Anteil ist damit eine **relative
+Änderung von rund 10⁻³** in der Messkette — Referenz, Teilerverhältnis oder ADC-Skala —, kein
+Nullpunktfehler. Das passt auch zum GND-Kanal: bei −780 Counts müsste eine
+0,1-%-Verstärkungsänderung dort 0,8 Counts ausmachen, gemessen sind 0,77 Counts mit
+Maximum um 16 UTC (erwartet 14 UTC) — die richtige Größe, aber bei 4 Counts Streuung nicht
+signifikant.
+
+Damit bleibt die **Ursache offen**. Gegen einen Temperatur- oder Versorgungseffekt sprechen
+die Hauskanäle. Und weil head02 zu sechs **festen** Uhrzeiten sendet, lassen sich ein echter
+24-Stunden-Zyklus und ein von der Sendeslot-Nummer abhängiger Messzustand nicht trennen: eine
+Aufwärmzeit, eine Hauskeeping-Routine oder ein anderer Ablauf in bestimmten Slots sähe
+identisch aus.
+
+**Ist das ein Defekt von head02?** Der Vergleich mit den anderen Kohnen-Köpfen führt nur mit
+der Bohrlochfüllung zum Ziel: **head03** (B50) hat eine luftgefüllte 60-m-Kette neben einer
+schneeverfüllten 10-m-Kette, **head04** (B40) eine 200-m-Kette im offenen Bohrloch neben einer
+flachen Kette in Schnee. In luftgefüllten Löchern korrelieren die Sensoren ohnehin — das ist
+die Advektion der Bohrlochluft aus dem vorigen Kapitel, nicht die Messkette.
+
+Die Auswertung steht in `../KohnenRecords_Analyse/head02_profile.qmd`; das Ergebnis trennt
+beides sauber: bei **head03** korrelieren die Knoten innerhalb der Luft-Kette mit r = 0,99
+(4,8 mK) und innerhalb der Schnee-Kette mit r = 0,87 (0,8 mK), **zwischen den Ketten aber nur
+mit r = 0,10**; bei **head04** innerhalb des Bohrlochs r = 0,94 (6,7 mK), zur Kette in Schnee
+r = 0,01. Ein Störer der Messkette müsste beide Ketten gleich treffen — er tut es nicht.
+head03 und head04 haben also **keinen** gemeinsamen Anteil der Elektronik.
+
+Bei **head02** liegen dagegen beide Ketten in Schnee, in zwei getrennten Bohrlöchern, und die
+Korrelation von 1,00 läuft über 0,2 bis 62 m hinweg. Bohrlochluft scheidet damit aus;
+zusammen mit dem Verstärkungscharakter und dem Tagesgang bleibt die Messkette.
+
+### Mit der Tiefentabelle: die Tiefenabhängigkeit bei Kohnen
+
+Der gemeinsame Anteil ist die Hürde — 26 mK gegen ein erwartetes Drucksignal von 0,5 mK, und
+bei einer Knoten-Korrelation von 1,00 mittelt er sich nicht weg. **Herausrechnen lässt er
+sich aber**, und dann trägt head02 mehr bei als die Grönland-Kette, weil die Tiefen von 0,2
+bis 62 m reichen. Abfragereihenfolge und Tiefen stehen in
+`KohnenRecords_Analyse/data/head02_depths.csv`: Position 1 ist der Lufttemperatursensor in
+2 m Höhe, Positionen 2–12 die **60-m-Kette** (5, 8, 10, 13, 16, 21, 26, 32, 40, 50, 62 m),
+Positionen 13–25 die **10-m-Kette** (0,2 bis 10 m). Beide sind in Schnee verfüllt.
+
+```{r h02-depth}
+if (!is.null(h02)) {
+  dmap <- readr::read_csv("../KohnenRecords_Analyse/data/head02_depths.csv", show_col_types = FALSE)
+  n02  <- nodes02 |> filter(recv %in% head_ch$recv) |>
+    left_join(dmap, by = c("node" = "position")) |> arrange(node, recv)
+
+  td02b <- as.numeric(difftime(sort(unique(n02$recv)), min(n02$recv), units = "days"))
+  rP02  <- resid(loess(as.numeric(tapply(n02$p, n02$recv, mean)) ~ td02b, span = 0.4))
+  Rn <- sapply(sort(unique(n02$node)), function(nd) {
+    z <- n02 |> filter(node == nd) |> arrange(recv)
+    resid(loess(z$T ~ td02b, span = 0.4)) * 1000 })
+  info <- dmap[match(sort(unique(n02$node)), dmap$position), ]
+  CMn  <- rowMeans(Rn[, info$depth_m >= 13 & info$chain == "60m-Kette"])
+
+  # Dichteprofil Kohnen: Herron-Langway mit T = 228.6 K, A = 0.064 m w.e./a
+  Tk <- 228.6; Ak <- 0.064; c_i2 <- 152.5 + 7.122 * Tk
+  k0k <- 11 * exp(-10160/(8.314*Tk)); k1k <- 575 * exp(-21400/(8.314*Tk))
+  z550k <- (log(.55/(.917-.55)) - log(.34/(.917-.34)))/(.917*k0k)
+  densk <- function(z) vapply(z, function(q) {
+    Z <- if (q <= z550k) exp(.917*k0k*q + log(.34/(.917-.34)))
+         else exp(.917*k1k*(q - z550k)/sqrt(Ak) + log(.55/(.917-.55)))
+    .917*Z/(1+Z) }, 0)
+  bthk <- function(z) { r <- densk(z)*1000; (1 - r/917)/(r*c_i2)*1e5 }
+
+  h02b <- bind_rows(lapply(which(info$depth_m >= 4), function(i) {
+    f <- summary(lm(Rn[, i] ~ CMn + rP02))$coefficients
+    data.frame(depth_m = info$depth_m[i], chain = info$chain[i],
+               b = f[3,1], se = f[3,2], t = f[3,3],
+               rest = sd(resid(lm(Rn[, i] ~ CMn))), theorie = bthk(info$depth_m[i])) }))
+
+  tief <- h02b |> filter(chain == "60m-Kette", depth_m >= 13)
+  ff   <- summary(lm(b ~ theorie, data = tief, weights = 1/se^2))
+
+  knitr::kable(h02b |> arrange(chain, depth_m) |>
+      transmute(`Tiefe (m)` = depth_m, Kette = chain,
+      `b (mK/hPa)` = round(b, 4), `t` = round(t, 1),
+      `Theorie φ/(ρc)` = round(theorie, 4), `Restrauschen (mK)` = round(rest, 2)),
+    row.names = FALSE,
+    caption = sprintf("head02 nach Abzug des gemeinsamen Anteils. Formtest über 13–62 m: gemessen = %.2f ± %.2f × Theorie (t = %.1f), Korrelation %.2f.",
+                      ff$coefficients[2,1], ff$coefficients[2,2], ff$coefficients[2,3],
+                      cor(tief$b, tief$theorie)))
+}
+```
+
+Über die **60-m-Kette von 13 bis 62 m** — dort sagt die Theorie einen Abfall um den Faktor
+4,3 voraus — folgt das Gemessene der Vorhersage mit einer Steigung von 0,73 ± 0,18 (t = 4,0)
+bei einer Korrelation von 0,93. Das ist die Tiefenabhängigkeit, die in Grönland über 8–30 m
+nur knapp aufzulösen war, hier an einem zweiten Standort mit anderem Gerät und über den
+vierfachen Tiefenbereich.
+
+Zwei Einschränkungen. Der Abzug des gemeinsamen Anteils lässt einen **freien additiven
+Versatz** zurück, weil er aus den tiefen Knoten selbst geschätzt wird und deren Druckantwort
+dabei mit verschwindet; prüfbar ist deshalb die **Form** von b(z), nicht der Absolutwert. Und
+die flachen Knoten der 10-m-Kette (4–10 m) liefern mit 0,10–0,20 mK/hPa das Zwei- bis
+Dreifache der Vorhersage — dort ist das Restrauschen mit 0,33–0,41 mK vier- bis achtmal
+größer als in der Tiefe (0,05–0,09 mK), das Saisonsignal ist also nicht vollständig entfernt.
+Belastbar ist der Bereich ab 13 m.
+
+Zur Kalibrierung: die Umrechnung läuft über die universelle Mean-S4-Kurve, der gedämpfte
+Bereich kommt damit auf −40,5 °C statt der für Kohnen bekannten −44,5 °C. Für die hier
+ausgewerteten Steigungen ist nur die lokale Empfindlichkeit maßgeblich, der Versatz selbst
+spielt keine Rolle.
+
+**Was daraus für künftige Auslegungen folgt:** Die 4-stündliche Abtastung wäre der richtige
+Weg, und 60 m Verfüllung gäben den Hebel für die Tiefenabhängigkeit. Der begrenzende Faktor
+ist der Common Mode. Ein mitgemessener Referenzwiderstand oder ein Knoten in konstanter
+Umgebung würde ihn abziehbar machen; dann läge das Restrauschen bei 0,9 mK je Knoten und der
+Effekt wäre über die Tiefenstaffelung auflösbar.
+
+## head03 (B50): sechs Monate, 38 hPa Druckhub
+
+head03 misst an B50 mit drei Ketten — einer **luftgefüllten 60-m-Kette** (11 Knoten), einer
+**schneeverfüllten 10-m-Kette** (13 Knoten) und einem **2-m-Schacht in Schnee** (10 Knoten),
+dazu ein Wetterstationsknoten. Alle 35 Knoten messen Druck, zweimal täglich (09 und 21 UTC)
+von Januar bis Juli 2026. Das ist der längste Datensatz und der größte Druckhub.
+
+```{r h03-load}
+h03 <- tryCatch(readr::read_csv("../KohnenRecords_Analyse/data/decoded_head03_231709_combined.csv",
+                                show_col_types = FALSE), error = function(e) NULL)
+d03 <- tryCatch(readr::read_csv("../KohnenRecords_Analyse/data/head03_depths.csv",
+                                show_col_types = FALSE), error = function(e) NULL)
+ok03 <- !is.null(h03) && !is.null(d03)
+
+if (ok03) {
+  h03 <- h03[order(h03$time_utc), ]
+  td3 <- as.numeric(difftime(h03$time_utc, min(h03$time_utc), units = "days"))
+  P3  <- sapply(d03$node, function(n) h03[[sprintf("n%d.pressure_hPa", n)]])
+  bar3 <- rowMeans(P3, na.rm = TRUE)
+  A3   <- P3 - bar3
+}
+```
+
+### Taugen die Drucksensoren?
+
+```{r h03-sensors}
+if (ok03) {
+  mon <- format(h03$time_utc, "%Y-%m")
+  sais <- aggregate(bar3, list(Monat = mon), function(v) c(sd = sd(v), sp = diff(range(v))))
+  knitr::kable(data.frame(Monat = sais$Monat, `sd (hPa)` = round(sais$x[, "sd"], 2),
+                          `Spannweite (hPa)` = round(sais$x[, "sp"], 1), check.names = FALSE),
+    row.names = FALSE, caption = "Variabilität des barometrischen Signals (Mittel aller 35 Sensoren) je Monat.")
+}
+```
+
+Der Winter bringt tatsächlich mehr Bewegung: von 3,6 hPa Standardabweichung im Februar auf
+7,6–7,7 hPa im Mai und Juni, mit 38 hPa Spannweite allein im Juni. Zum Vergleich hatte das
+Grönland-Fenster im Sommer 21 hPa Hub bei 3,8 hPa Streuung. Ein Teil des „Kreuz und quer" ist
+also echtes Wetter.
+
+Der andere Teil ist der Sensor:
+
+```{r h03-drift}
+if (ok03) {
+  sens <- bind_rows(lapply(seq_len(nrow(d03)), function(i) {
+    a <- A3[, i]; tt <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]
+    if (sum(is.finite(a)) < 100) return(NULL)
+    okk <- is.finite(a)
+    r <- resid(loess(a[okk] ~ td3[okk], span = 0.3))
+    da <- diff(a) * 100; dt <- diff(tt); o2 <- is.finite(da) & is.finite(dt)
+    tc <- if (sum(o2) > 50 && diff(range(tt, na.rm = TRUE)) > 10)
+            summary(lm(da[o2] ~ dt[o2]))$coefficients[2, ] else c(NA, NA, NA, NA)
+    data.frame(chain = d03$chain[i], depth_m = d03$depth_m[i],
+               offset = mean(a, na.rm = TRUE), roh = sd(a, na.rm = TRUE) * 100,
+               detr = sd(r) * 100, drift = coef(lm(a[okk] ~ td3[okk]))[2] * 30 * 100,
+               Thub = diff(range(tt, na.rm = TRUE)), tc = tc[1], tc_t = tc[3]) }))
+
+  knitr::kable(sens |> filter(!is.na(depth_m)) |>
+      mutate(grp = ifelse(grepl("Luft", chain), "60 m, Luft",
+                   ifelse(grepl("10 m", chain), "10 m, Schnee", "2 m Schacht"))) |>
+      group_by(Kette = grp) |>
+      summarise(`Offset (hPa)` = sprintf("%.1f … %+.1f", min(offset), max(offset)),
+                `Streuung roh (Pa)` = sprintf("%.0f–%.0f", min(roh), max(roh)),
+                `nach Trendabzug (Pa)` = sprintf("%.0f–%.0f", min(detr), max(detr)),
+                `Drift (Pa/Monat)` = sprintf("%+.0f … %+.0f", min(drift), max(drift)),
+                `T-Koeffizient (Pa/K)` = ifelse(all(is.na(tc)), "—",
+                   sprintf("%+.0f … %+.0f", min(tc, na.rm = TRUE), max(tc, na.rm = TRUE))),
+                .groups = "drop"),
+    caption = "Drucksensoren head03: Offsets, Streuung, Drift und Temperaturkoeffizient (aus Tagesdifferenzen, nur Knoten mit über 10 K Temperaturhub).")
+}
+```
+
+Ein Teil dieser Streuung ist **nicht** Temperaturkoeffizient, sondern ein **Skalenfehler**
+(die geschädigten Sensoren bleiben in der Referenz von hier an außen vor):
+misst ein Sensor den barometrischen Hub um einige Prozent anders als die anderen, erscheint
+das in seiner Anomalie als Rauschen. Beides lässt sich trennen — der Skalenfehler aus der
+Regression der Tagesdifferenzen auf das Netzmittel, der Temperaturkoeffizient daneben:
+
+```{r h03-scale}
+if (ok03) {
+  dbar <- diff(bar3)
+  sc <- bind_rows(lapply(seq_len(nrow(d03)), function(i) {
+    a <- P3[, i]; tt <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]
+    if (sum(is.finite(a)) < 100) return(NULL)
+    da <- diff(a); okk <- is.finite(da) & is.finite(dbar)
+    f <- summary(lm(da[okk] ~ dbar[okk]))
+    dt <- diff(tt); o2 <- okk & is.finite(dt)
+    tc <- if (diff(range(tt, na.rm = TRUE)) > 10)
+            summary(lm(I(da[o2]*100) ~ dt[o2] + I(dbar[o2]*100)))$coefficients[2, 1] else NA
+    data.frame(depth_m = d03$depth_m[i], tmin = min(tt, na.rm = TRUE),
+               scale = f$coefficients[2, 1], resid_Pa = sd(resid(f)) * 100, tc = tc) }))
+
+  sc <- sc |> mutate(grp = cut(tmin, c(-70, -50, -45, 0),
+                               labels = c("kälter als −50 °C", "−50 bis −45 °C", "wärmer als −45 °C")))
+  knitr::kable(sc |> group_by(`kälteste erreichte Temperatur` = grp) |>
+      summarise(`Sensoren` = n(),
+                `Skalenfaktor (Median)` = round(median(scale), 3),
+                `Skalenfaktor (Spanne)` = sprintf("%.2f–%.2f", min(scale), max(scale)),
+                `Reststreuung (Pa)` = sprintf("%.0f (%.0f–%.0f)", median(resid_Pa), min(resid_Pa), max(resid_Pa)),
+                `T-Koeffizient (Pa/K)` = ifelse(all(is.na(tc)), "—",
+                    sprintf("%.0f", median(tc, na.rm = TRUE))), .groups = "drop"),
+    caption = "Die Sensoren verlieren unterhalb von etwa −50 °C an Verstärkung und werden unruhig.")
+}
+```
+
+Die Trennung zeigt: der Temperaturkoeffizient **bleibt** bestehen, wenn man den
+Barometerhub als Kovariable mitführt (bei 0,5 m 237 → 242 Pa/K, t = 13) — er ist also kein
+Artefakt der Wetterkorrelation. Und daneben steht ein **Verstärkungsverlust in der Kälte**:
+Sensoren, die nie unter −45 °C kamen, liegen im Skalenfaktor eng beieinander und haben 34 Pa
+Reststreuung; die zehn Sensoren des 2-m-Schachts, die im Winter −48 bis −58 °C sehen,
+verlieren rund **19 % Verstärkung** und werden dreimal unruhiger.
+
+Drei Befunde, die auseinanderzuhalten sind:
+
+* **Offsets** von −12 bis +10 hPa zwischen den Sensoren. Sie sind konstant und stören eine
+  Auswertung nicht, solange man relativ rechnet — der hydrostatische Gradient von 9 Pa/m
+  verschwindet allerdings darin.
+* **Langsame Drift** von bis zu ±600 Pa/Monat; nach Abzug eines gleitenden Trends bleibt für
+  thermisch stabile Knoten ein Boden von rund **70 Pa**. In Grönland waren es 1–3 Pa — diese
+  Sensorgeneration ist rund 25-mal unruhiger.
+* **Temperaturkoeffizient** von +25 bis +280 Pa/K, sauber nachweisbar (t bis 13) an allen
+  Knoten mit großem Temperaturhub. Die scheinbar wilden Ausschläge der oberflächennahen
+  Sensoren sind zum großen Teil das: 250 Pa/K mal 1,5 K Tagesänderung ergibt 375 Pa.
+
+Für das **Netzmittel** spielt beides keine Rolle: 35 Sensoren mitteln den 70-Pa-Boden auf
+12 Pa herunter, und der barometrische Hub ist mit 38 hPa dreitausendmal größer. Als Barometer
+taugt die Kette also; ein **einzelner** Sensor ist nicht besser als einige 0,1 hPa und driftet
+mit seiner eigenen Temperatur.
+
+### Wie sich der Fehler mit dem Druck ändert
+
+Referenz ist im Folgenden **nicht mehr das Mittel aller 35 Sensoren**, sondern nur das der 18,
+die nie unter −45 °C waren — die geschädigten bleiben außen vor.
+
+```{r h03-scaleplot, fig.height=8, fig.width=10}
+if (ok03) {
+  Tmin3 <- vapply(d03$node, function(n) min(h03[[sprintf("n%d.ntc1_temp_C", n)]], na.rm = TRUE), 0)
+  ref3  <- rowMeans(P3[, Tmin3 > -45], na.rm = TRUE)
+
+  # Skala und Kurzzeit-Treue aus Tagesdifferenzen (ohne die langsame Drift),
+  # Drift getrennt aus den Niveaus.
+  dref <- diff(ref3)
+  sc2 <- bind_rows(lapply(seq_len(nrow(d03)), function(i) {
+    da <- diff(P3[, i]); okk <- is.finite(da) & is.finite(dref)
+    f  <- summary(lm(da[okk] ~ dref[okk]))
+    lv <- summary(lm(P3[, i] ~ ref3))
+    data.frame(i = i, chain = d03$chain[i], depth_m = d03$depth_m[i], tmin = Tmin3[i],
+               scale = f$coefficients[2, 1], resid_Pa = sd(resid(f)) * 100,
+               resid_lv = sd(resid(lv)) * 100) }))
+
+  # drei Beispielsensoren: intakt, mittel, stark geschädigt
+  bsp <- c(sc2$i[which.min(abs(sc2$scale - 1) + (sc2$tmin < -45) * 9)],
+           sc2$i[which.min(abs(sc2$scale - 0.85))],
+           sc2$i[which.min(sc2$scale)])
+  lbl <- sprintf("%.2f m, min %.0f °C, Skala %.2f", d03$depth_m[bsp], Tmin3[bsp], sc2$scale[bsp])
+
+  pA <- bind_rows(lapply(seq_along(bsp), function(k)
+      data.frame(ref = ref3 - mean(ref3), dev = P3[, bsp[k]] - ref3, s = lbl[k]))) |>
+    ggplot(aes(ref, dev - ave(dev, s, FUN = function(v) mean(v, na.rm = TRUE)), colour = s)) +
+    geom_hline(yintercept = 0, colour = "grey80") +
+    geom_point(size = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
+    scale_colour_manual(values = c("#2a78d6", "#1baf7a", "#e34948"), name = NULL) +
+    labs(subtitle = "A · Abweichung vom Referenzdruck gegen den Druckhub — die Steigung ist der Skalenfehler",
+         x = "Referenzdruck − Mittel (hPa)", y = "Sensor − Referenz, zentriert (hPa)") +
+    theme_bw(base_size = 12) + theme(legend.position = "bottom", legend.direction = "vertical")
+
+  pB <- ggplot(sc2, aes(tmin, scale, colour = ifelse(tmin > -45, "über −45 °C", "kälter"))) +
+    geom_hline(yintercept = 1, colour = "grey70") +
+    geom_vline(xintercept = -45, linetype = "dashed", colour = "grey50") +
+    geom_point(size = 2.4) +
+    scale_colour_manual(values = c("über −45 °C" = "#2a78d6", "kälter" = "#e34948"), name = NULL) +
+    labs(subtitle = "B · Skalenfehler gegen die kälteste erreichte Temperatur",
+         x = "kälteste Knotentemperatur (°C)", y = "Skalenfaktor gegen die Referenz") +
+    theme_bw(base_size = 12) + theme(legend.position = "none")
+
+  pC <- ggplot(sc2, aes(tmin, resid_Pa, colour = ifelse(tmin > -45, "über −45 °C", "kälter"))) +
+    geom_vline(xintercept = -45, linetype = "dashed", colour = "grey50") +
+    geom_point(size = 2.4) +
+    scale_y_log10() +
+    scale_colour_manual(values = c("über −45 °C" = "#2a78d6", "kälter" = "#e34948"), name = NULL) +
+    labs(subtitle = "C · Reststreuung nach Skalenkorrektur (log)",
+         x = "kälteste Knotentemperatur (°C)", y = "sd (Pa)") +
+    theme_bw(base_size = 12) + theme(legend.position = "none")
+
+  patchwork::wrap_plots(pA, patchwork::wrap_plots(pB, pC, ncol = 2), ncol = 1, heights = c(1.15, 1))
+}
+```
+
+Panel A zeigt, worin der Fehler besteht: die Abweichung vom Referenzdruck ist **keine
+Konstante, sondern wächst mit dem Druckhub**. Ein intakter Sensor liegt waagerecht, der
+geschädigte folgt dem Barometer nur zu einem Bruchteil — bei 41 hPa Hub summiert sich das auf
+mehrere hPa.
+
+Mit der sauberen Referenz statt dem Mittel aller 35:
+
+* **Über −45 °C** (18 Sensoren): Skalenfaktor im Median 1,03, Kurzzeit-Reststreuung im Median
+  **6 Pa** — das ist genau die relative Genauigkeit von ±6 Pa aus dem Datenblatt. Zwei
+  Einzelgänger fallen heraus (Skala 0,77 bei 32 m und 0,83 bei 8 m), also einzelne schlechte
+  Exemplare, nicht ein Temperatureffekt.
+* **Kälter als −45 °C** (17 Sensoren): Skalenfaktor im Median 0,86, einzelne bis 0,24;
+  Reststreuung im Median 74 Pa, bis 525 Pa.
+
+Panel B und C ordnen das der Temperatur zu. Der Schaden ist dabei **nicht** allein ein
+Skalenfaktor, den man wegrechnen könnte: auch nach der Skalenkorrektur bleibt die Streuung der
+kalten Sensoren zehn- bis hundertfach über der der intakten. Dazu kommt die langsame Drift,
+die in den Niveaus steckt und in dieser Rechnung gar nicht auftaucht.
+
+### Wie kalt darf es werden? Der Knick liegt bei −45 °C
+
+Die oberflächennahen Sensoren durchlaufen im Jahresgang −25 bis −58 °C. Damit lässt sich die
+Kennlinie **innerhalb desselben Sensors** aufnehmen — Bauteilstreuung fällt heraus.
+
+```{r h03-knick, fig.height=4.6, fig.width=10}
+if (ok03) {
+  Tn3 <- sapply(d03$node, function(n) h03[[sprintf("n%d.ntc1_temp_C", n)]])
+  Tmin3b <- apply(Tn3, 2, min, na.rm = TRUE); Tmax3 <- apply(Tn3, 2, max, na.rm = TRUE)
+  ref3b <- rowMeans(P3[, Tmin3b > -45], na.rm = TRUE); dref3 <- diff(ref3b)
+  wide <- which(Tmax3 - Tmin3b > 15)                    # Sensoren mit großem eigenem Hub
+
+  lg <- bind_rows(lapply(wide, function(i) {
+    da <- diff(P3[, i]); tt <- Tn3[-1, i]; okk <- is.finite(da) & is.finite(tt)
+    data.frame(da = da[okk], dref = dref3[okk], temp = tt[okk], node = i) })) |>
+    mutate(bin = cut(temp, seq(-60, -20, 5)))
+
+  knick <- bind_rows(lapply(levels(lg$bin), function(b) {
+    sub <- lg |> filter(bin == b); if (nrow(sub) < 100) return(NULL)
+    per <- bind_rows(lapply(unique(sub$node), function(nd) {
+      z <- sub |> filter(node == nd); if (nrow(z) < 20) return(NULL)
+      data.frame(scale = unname(coef(lm(da ~ dref, z))[2]),
+                 sd_Pa = sd(resid(lm(da ~ dref, z))) * 100) }))
+    data.frame(bin = b, mid = mean(as.numeric(strsplit(gsub("[(\\]]", "", b), ",")[[1]])),
+               scale = median(per$scale), sd_Pa = median(per$sd_Pa), n = nrow(per)) }))
+
+  p1 <- ggplot(knick, aes(mid, scale)) +
+    geom_hline(yintercept = 1, colour = "grey70") +
+    geom_vline(xintercept = -45, linetype = "dashed", colour = "#eb6834") +
+    geom_line(colour = "#2a78d6", linewidth = 0.7) + geom_point(colour = "#2a78d6", size = 2.6) +
+    labs(subtitle = "Skalenfaktor", x = "Sensortemperatur (°C)", y = "Skala gegen die Referenz") +
+    theme_bw(base_size = 12)
+  p2 <- ggplot(knick, aes(mid, sd_Pa)) +
+    geom_vline(xintercept = -45, linetype = "dashed", colour = "#eb6834") +
+    geom_line(colour = "#2a78d6", linewidth = 0.7) + geom_point(colour = "#2a78d6", size = 2.6) +
+    scale_y_log10() +
+    labs(subtitle = "Reststreuung (log)", x = "Sensortemperatur (°C)", y = "sd (Pa)") +
+    theme_bw(base_size = 12)
+  patchwork::wrap_plots(p1, p2, ncol = 2)
+
+}
+```
+
+```{r h03-knicktab}
+if (ok03) knitr::kable(knick |> arrange(mid) |>
+  transmute(`Sensortemperatur` = bin, `Skala (Median)` = round(scale, 3),
+            `Reststreuung (Pa)` = round(sd_Pa, 0), `Sensoren` = n), row.names = FALSE,
+  caption = "Innerhalb derselben Sensoren, aufgenommen über den Jahresgang.")
+```
+
+Oberhalb von −40 °C arbeitet der DPS368 exakt nach Datenblatt: Skala 1,00 ± 0,01,
+Reststreuung 2–5 Pa. Zwischen −40 und −45 °C bleibt die Skala im Median bei 1,02, die
+Streuung **zwischen** den Exemplaren springt aber auf ±0,19. Unter −45 °C bricht es weg: bei
+−45 bis −50 °C Skala 0,82 und rund 100 Pa, bei −50 bis −55 °C Skala 0,67 und rund 130 Pa,
+darunter 0,70 und rund 290 Pa. Der Sensor gibt dann nur noch zwei Drittel der Druckänderung wieder.
+
+Wichtig für die Kalibrierfrage: der Effekt ist **reversibel** — dieselben Sensoren liefern im
+Sommer wieder 2–5 Pa. Es ist kein bleibender Schaden, sondern der Arbeitspunkt.
+
+### Was das für die kälteren Plateau-Standorte bedeutet
+
+Kohnen ist mit −44,5 °C Jahresmittel einer der **wärmsten** Standorte des Plateaus. Die
+Jahresmitteltemperatur entspricht der Firntemperatur ab etwa 10 m Tiefe — also genau dem,
+was ein dort eingebauter Sensor dauerhaft sieht:
+
+| Standort | Jahresmittel ≈ Firntemperatur | DPS368-Regime |
+|---|---|---|
+| Kohnen | −44,5 °C | knapp oberhalb des Knicks; ab 4 m brauchbar |
+| South Pole | −49,5 °C | Skala ≈ 0,82, rund 100 Pa |
+| Dome F | −54,4 °C | Skala ≈ 0,67, rund 130 Pa |
+| Dome C | −54,5 °C | Skala ≈ 0,67, rund 130 Pa |
+| Vostok | −55,3 °C | Skala ≈ 0,70, rund 290 Pa |
+| Dome A | −58,3 °C | jenseits des Gemessenen, ≥ 300 Pa |
+
+Damit fällt die Kohnen-Lösung weg: dort half „erst ab 4 m bestücken", weil es in der Tiefe
+mit −44 °C gerade noch über dem Knick bleibt. An Dome C, Vostok oder Dome A gibt es **keine
+Tiefe**, in der der DPS368 in seinem brauchbaren Bereich liefe — die Firntemperatur selbst
+liegt 5 bis 13 K unter dem Knick, und die oberste Schicht geht im Winter auf −70 bis −80 °C.
+
+Für PlateauInSync folgt daraus:
+
+* Ein Sensor **desselben Typs** liefert an den kalten Standorten dauerhaft 20–35 %
+  Empfindlichkeitsverlust und 100–300 Pa Rauschen. Der Verlust ist systematisch und mittelt
+  sich nicht weg; er verzerrt jede Auswertung, die den Druck als Referenz benutzt.
+* Ein **Typwechsel**: ein Barometer, das bis −60 °C spezifiziert
+  ist. Wenige gute Sensoren schlagen viele schlechte, weil der Skalenfehler nicht durch
+  Mittelung verschwindet.
+* Bleibt es beim DPS368, ist eine **Kammerkalibrierung bis −60 °C** möglich und sinnvoll — der
+  Effekt ist reversibel und damit korrigierbar. Sie behebt aber nur die Skala, nicht das
+  Rauschen: 100–300 Pa bleiben, gegenüber 2–5 Pa im spezifizierten Bereich.
+* Und sie setzt voraus, dass **Rohdruck und Rohtemperatur** mitgeloggt werden; sonst lässt
+  sich die werkseitige Kompensation nicht ersetzen.
+
+### Der Sensor: DPS368, und was das Datenblatt dazu sagt
+
+Verbaut ist der **Infineon DPS368**. Sein Datenblatt erklärt die Befunde:
+
+| Größe | Datenblatt | gemessen Grönland (bis −31 °C) | Kohnen > −45 °C | Kohnen < −50 °C |
+|---|---|---|---|---|
+| Betriebsbereich | −40 … +85 °C | eingehalten | 4 K darunter | 8–18 K darunter |
+| Lagertemperatur (min) | −40 °C | eingehalten | unterschritten | unterschritten |
+| Temperaturkoeffizient | 0,5 Pa/K (bei 25…65 °C) | 1–10 Pa/K | — | 25–280 Pa/K |
+| Präzision | 0,2–1,0 Pa rms | 1–3 Pa | 34 Pa | 95 Pa |
+| relative Genauigkeit | ±6 Pa (bei +20…+60 °C) | — | — | Skalenfehler 19 % |
+
+Zwei Punkte dazu. **Erstens** gelten die Genauigkeitsangaben nur für den warmen
+Teil des Betriebsbereichs — die relative Genauigkeit für +20…+60 °C, der Temperaturkoeffizient
+für 25…+65 °C. Bereits bei −40 °C bewegt man sich in Extrapolation, und der Firn an B50 liegt
+mit −44,5 °C schon darunter. **Zweitens** rechnet der Chip den kompensierten Druck aus
+Rohdruck **und Rohtemperatur** mit werkseitigen Koeffizienten (c00, c10, c20, c30, c01, c11,
+c21). Die Temperatur-Kreuzterme c11 und c21 bestimmen dabei genau die **Empfindlichkeit** —
+werden sie weit außerhalb ihres Fitbereichs ausgewertet, entsteht ein Skalenfehler. Das
+beobachtete Bild (19 % Verstärkungsverlust, stark erhöhter Temperaturkoeffizient, dreifaches
+Rauschen) ist die Signatur dieser Extrapolation, nicht die eines defekten Sensors.
+
+**Kalibrieren lässt sich das, mit drei Bedingungen:**
+
+* **Rohwerte mitloggen.** Nur wenn Rohdruck und Rohtemperatur des DPS368 übertragen werden,
+  lässt sich die Kompensation mit eigenen Koeffizienten nachrechnen — auch rückwirkend. Wird
+  nur der bereits kompensierte Wert übertragen, bleibt lediglich eine additive Korrektur über
+  die Knotentemperatur. Was die Firmware heute sendet, ist zu prüfen.
+* **Kammerkalibrierung bis −60 °C** bei rund 650 hPa, je Sensor Offset, Skala und
+  Temperaturgang. Erreichbar ist damit im besten Fall das Niveau der nicht geschädigten
+  Sensoren, also rund 30 Pa — nicht die 1–3 Pa aus Grönland, denn dort waren die Sensoren im
+  spezifizierten Bereich.
+* **Reversibilität prüfen.** Unterhalb der Lagertemperatur von −40 °C garantiert das
+  Datenblatt nichts mehr. Eine Kalibrierung ist nur brauchbar, wenn der Sensor nach dem
+  Temperaturzyklus wieder denselben Wert liefert; das muss durch Auf- und Abkühlen verifiziert
+  und nach jeder Saison kontrolliert werden.
+
+Für den laufenden Datensatz geht es auch ohne Labor: die **relative** Kalibrierung gegen das
+Netz der intakten Sensoren — Skalenfaktor und Temperaturgang je Sensor — ist aus den Felddaten
+selbst bestimmbar und bringt die geschädigten Sensoren auf das Niveau der übrigen.
+
+**Konsequenz für künftige Ketten.** An B50 bleiben alle Knoten **ab 4 m Tiefe** über −45 °C
+(bei 4 m ist das Wintermittel −44,6 °C); darüber gehen sie auf −47 bis −58 °C. Die Empfehlung
+folgt daraus direkt: Drucksensoren ja, aber **erst ab etwa 4 m Tiefe** bestücken, oder oben
+einen Typ mit Spezifikation bis −60 °C einsetzen. Für die Barometerfunktion genügen wenige
+Sensoren in stabiler Tiefe; jeder Knoten braucht keinen. Und die Sensoren, die den Winter
+oberflächennah verbringen, verderben nicht nur ihre eigene Messung — sie ziehen als Teil des
+Netzmittels auch die Referenz schief, wie der Faktor 1,060 gegen 1,020 zeigt.
+
+### Was head03 zur Druck-Temperatur-Kopplung beiträgt
+
+head03 hat keinen gemeinsamen Anteil der Elektronik (siehe `head02_profile.qmd`), die
+Temperaturresiduen der verfüllten Kette lassen sich also **direkt** gegen den Luftdruck
+regressieren — ohne den Zwischenschritt, der bei head02 den Absolutwert kostet.
+
+```{r h03-coupling}
+if (ok03) {
+  rP3 <- resid(loess(bar3 ~ td3, span = 0.15))
+  Tk <- 228.6; Ak <- 0.064; c_i3 <- 152.5 + 7.122 * Tk
+  k0k <- 11*exp(-10160/(8.314*Tk)); k1k <- 575*exp(-21400/(8.314*Tk))
+  z55 <- (log(.55/(.917-.55)) - log(.34/(.917-.34)))/(.917*k0k)
+  dn3 <- function(z) vapply(z, function(q) { Z <- if (q <= z55) exp(.917*k0k*q + log(.34/(.917-.34)))
+    else exp(.917*k1k*(q - z55)/sqrt(Ak) + log(.55/(.917-.55))); .917*Z/(1+Z) }, 0)
+  bt3 <- function(z) { r <- dn3(z)*1000; (1 - r/917)/(r*c_i3)*1e5 }
+
+  cp3 <- bind_rows(lapply(which(grepl("10 m", d03$chain) & !is.na(d03$depth_m) & d03$depth_m >= 4),
+    function(i) {
+      y <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]; okk <- is.finite(y)
+      r <- resid(loess(y[okk] ~ td3[okk], span = 0.15)) * 1000
+      f <- summary(lm(r ~ rP3[okk]))
+      data.frame(depth_m = d03$depth_m[i], b = f$coefficients[2,1], se = f$coefficients[2,2],
+                 t = f$coefficients[2,3], r2 = f$r.squared, sdT = sd(r),
+                 theorie = bt3(d03$depth_m[i])) }))
+
+  ff3 <- summary(lm(b ~ 0 + theorie, data = cp3 |> filter(depth_m >= 5), weights = 1/se^2))
+  knitr::kable(cp3 |> transmute(`Tiefe (m)` = depth_m, `b (mK/hPa)` = round(b, 4),
+      `t` = round(t, 1), `R²` = round(r2, 2), `Theorie φ/(ρc)` = round(theorie, 4),
+      `Verhältnis` = round(b/theorie, 2), `sd(T-Residuum) (mK)` = round(sdT, 2)),
+    row.names = FALSE,
+    caption = sprintf("Verfüllte 10-m-Kette, ohne jede Korrektur. Gewichteter Faktor über 5–10 m: %.3f ± %.3f.",
+                      ff3$coefficients[1,1], ff3$coefficients[1,2]))
+}
+```
+
+Der Faktor gegen die Vorhersage hängt dabei davon ab, **welche Sensoren die Referenz
+bilden**. Mit allen 35 kommt 1,060 ± 0,004 heraus — die zehn kältegeschädigten Sensoren
+ziehen das Netzmittel um einige Prozent nach unten und den Faktor entsprechend nach oben.
+Nimmt man nur die 18 Sensoren, die nie unter −45 °C waren, bleibt
+
+```{r h03-ref}
+if (ok03) {
+  Tmin3 <- vapply(d03$node, function(n) min(h03[[sprintf("n%d.ntc1_temp_C", n)]], na.rm = TRUE), 0)
+  warm  <- which(Tmin3 > -45)
+  fac <- function(idx) {
+    rr <- resid(loess(rowMeans(P3[, idx, drop = FALSE], na.rm = TRUE) ~ td3, span = 0.15))
+    g <- bind_rows(lapply(which(grepl("10 m", d03$chain) & !is.na(d03$depth_m) & d03$depth_m >= 5),
+      function(i) { y <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]; okk <- is.finite(y)
+        r <- resid(loess(y[okk] ~ td3[okk], span = 0.15)) * 1000
+        f <- summary(lm(r ~ rr[okk]))$coefficients
+        data.frame(b = f[2,1], se = f[2,2], th = bt3(d03$depth_m[i])) }))
+    summary(lm(b ~ 0 + th, data = g, weights = 1/g$se^2))$coefficients[1, 1:2] }
+  a1 <- fac(seq_len(ncol(P3))); a2 <- fac(warm)
+  knitr::kable(data.frame(
+    Referenz = c(sprintf("alle %d Sensoren", ncol(P3)), sprintf("nur die %d über −45 °C", length(warm))),
+    `Faktor gegen φ/(ρc)` = sprintf("%.3f ± %.3f", c(a1[1], a2[1]), c(a1[2], a2[2])),
+    check.names = FALSE), row.names = FALSE,
+    caption = "Der Absolutwert der Kopplung hängt an der Qualität des Referenzbarometers.")
+}
+```
+
+**Damit stimmt die parameterfreie Vorhersage auf 2 %.** Der Tiefentrend stimmt ebenfalls (gemessen
+−0,00346 ± 0,00060 gegen vorhergesagt −0,00336 mK/hPa je Meter). Bei 10 m erklärt der
+Luftdruck **83 % der Varianz** des Temperaturresiduums (t = 42) — dort ist von der
+Firntemperatur nichts anderes mehr übrig.
+
+Nicht verwertbar sind die beiden anderen Ketten: die **luftgefüllte** 60-m-Kette, weil die
+Advektion der Bohrlochluft dort zwei Größenordnungen über dem Effekt liegt, und der
+**2-m-Schacht**, weil dort das echte Firnsignal mit 100–700 mK dominiert. Der nutzbare
+Bereich beginnt bei rund 4 m Tiefe und endet, wo die Kette endet.
+
+### Gibt es Sensoren, die kälter können?
+
+Recherchestand, geordnet nach Bauform:
+
+* **Gleiche Klasse (digitale MEMS-Barometer)** — Bosch BMP390/BMP581, TE MS5611/MS5837,
+  ST LPS22, ScioSense ENS220, Infineon DPS310/DPS368: alle enden bei **−40 °C**. Ein Wechsel
+  innerhalb dieser Familie bringt nichts.
+* **Instrumentenklasse** — Paroscientific Digiquartz MET4/MET4A (Schwingquarz):
+  **−50 … +60 °C**, Genauigkeit 0,08 hPa, Auflösung im µbar-Bereich
+  ([Handbuch](https://paroscientific.com/pdf/8008-001_Manual_for_MET4_and_MET4A_Meteorological_Measurement_Systems.pdf)).
+  Das ist ein vollständiges Gerät, kein Bauteil für einen Knoten — Größe, Leistungsaufnahme
+  und Preis passen nur an die Station, nicht in die Kette. Und −50 °C liegt an Dome C oder
+  Vostok immer noch am Rand.
+* **Militär-/Luftfahrtklasse** — piezoresistive Transducer sind üblich bis −55 °C
+  spezifiziert, aber analog: eigene Speisung, eigener ADC, mehr Bauraum und Strom.
+* **Der Beweis, dass das Prinzip nicht die Grenze ist:** Vaisalas **BAROCAP** ist derselbe
+  Sensortyp wie im DPS368 — ein kapazitiver Einkristall-Silizium-Drucksensor — und fliegt in
+  der Radiosonde RS41 durch das ganze Profil, deren Temperatursensor bis **−95 °C** reicht
+  ([Vaisala](https://www.vaisala.com/en/vaisala-barocapr-technology)). Der Unterschied liegt
+  nicht in der Physik, sondern darin, über welchen Bereich kalibriert wird.
+
+Das deckt sich mit dem Befund oben: der DPS368 **misst** bei −58 °C weiter, nur eben mit
+0,7 statt 1,0 Empfindlichkeit — und im Sommer wieder mit 1,0. Eine eigene Kalibrierung bis
+−60 °C ist deshalb der naheliegende Weg; sie holt die Skala zurück, das erhöhte Rauschen
+bleibt.
+
+**Die billigste Lösung ist aber, den Druck gar nicht in der Kette zu messen.** Gebraucht wird
+für die Kopplungskorrektur das **synoptische** Signal, und das ist ein großräumiges Feld: ein
+Barometer an der Station oder der Bodendruck aus einer Reanalyse leistet dasselbe. An B50
+folgt das Netzmittel dem Barometer über 41 hPa Hub; ob ERA5 dort ebenso gut passt, lässt sich
+mit den vorhandenen Daten prüfen, sobald der Bodendruck heruntergeladen ist (die lokale
+ERA5-Datei enthält nur t2m und Niederschlag).
+
+**Empfehlung für PlateauInSync**, nach Aufwand geordnet:
+
+1. **Referenzdruck von außen** — Stationsbarometer oder Reanalyse. Kostet nichts, ist bei
+   −60 °C nicht betroffen, reicht für die Kopplungskorrektur.
+2. **Wenige DPS368 in der Tiefe**, mit eigener Kalibrierung bis −60 °C und mitgeloggten
+   Rohwerten. Gibt zusätzlich den hydrostatischen Gradienten und damit eine unabhängige
+   Kontrolle der Einbautiefe.
+3. **Ein Instrument der Paroscientific-Klasse an der Station**, falls ein hochwertiger
+   In-situ-Referenzdruck gewünscht ist — nicht je Knoten.
+
+## Windpumpen prüfen — womit das ginge
+
+Windpumpen wird oft behauptet und selten gemessen. Zwei Wege stehen offen, und der
+naheliegende ist der schlechtere.
+
+### Über den Druck: braucht andere Instrumente
+
+Windpumpen entsteht aus dem quasi-statischen Druckfeld, das der Wind über Sastrugi und Dünen
+aufbaut, plus turbulenten Fluktuationen. Beides hat Amplituden von **wenigen Pa** an der
+Oberfläche, und die Eindringtiefe wird von der **horizontalen Wellenlänge** gesetzt: eine
+Störung der Wellenlänge λ klingt mit `exp(−2πz/λ)` ab. Sastrugi mit λ = 1 m wirken also nur
+bis rund 0,16 m, Dünen mit λ = 20 m bis rund 3 m. Zeitlich liegt das im Sekundenbereich.
+
+Daraus folgt die Spezifikation: **0,1–1 Pa Auflösung, 1–10 Hz Abtastung, Sensoren bei 0,05 bis
+1 m Tiefe, dazu eine Windmessung** — und sinnvollerweise **differenziell** gegen einen
+Referenzsensor, weil ein Absolutbarometer 1 Pa auf 650 hPa nur mit perfekt stabilem Offset
+auflöst. Unsere Ketten messen absolut, einmal am Tag, mit 6 Pa im besten und 100–300 Pa im
+kalten Fall. Damit ist Windpumpen weder zu zeigen noch zu widerlegen; das bisherige „kein
+Windbezug gefunden" ist kein Gegenbeweis, sondern eine Aussage über die Abtastung.
+
+**Vaisalas BAROCAP hilft dabei nicht.** Als kaufbare Module — PTB210 und BARO-1 — ist es auf
+**−40 … +60 °C** spezifiziert
+([PTB210](https://docs.vaisala.com/v/u/B210942EN-E/en-US),
+[BARO-1](https://docs.vaisala.com/v/u/B211084EN-D/en-US)), also dieselbe Grenze wie beim
+DPS368. Das bis −95 °C betriebene BAROCAP-Element steckt in der Radiosonde RS41 und wird nicht
+als Bauteil verkauft. Für eine Windpumpen-Messung wäre ohnehin ein **Differenzdrucksensor**
+die richtige Bauform, nicht ein Absolutbarometer.
+
+### Über die Temperatur: dafür ist unsere Kette gebaut
+
+Windpumpen transportiert Luft und damit Wärme. Sein Effekt auf die Temperatur ist eine
+**erhöhte effektive Temperaturleitfähigkeit** in den obersten Dezimetern — in der Literatur
+werden Faktoren 1,5 bis 3 unter starkem Wind genannt. Da die Dämpfungslänge mit `d = √(2κ/ω)`
+skaliert, entspricht das 20 bis 70 % Änderung von d. Bei 0,1 mK Messrauschen im verfüllten
+Loch ist das eine große Zahl.
+
+Der Test hat zwei Teile. Erstens müssen **Amplituden- und Phasendämpfung übereinstimmen** —
+für reine Wärmeleitung sind beide dasselbe d; Advektion bricht die Gleichheit. Zweitens muss
+`κ_eff` **nicht** mit der Windgeschwindigkeit variieren, wenn es Windpumpen nicht gibt.
+
+```{r windpump}
+if (ok03) {
+  sel <- which(grepl("Schacht", d03$chain) |
+               (grepl("10 m", d03$chain) & !is.na(d03$depth_m) & d03$depth_m <= 3))
+  jw <- bind_rows(lapply(sel, function(i) {
+    y <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]; okk <- is.finite(y)
+    if (sum(okk) < 200) return(NULL)
+    f <- lm(y[okk] ~ cos(2*pi*td3[okk]/365.25) + sin(2*pi*td3[okk]/365.25))
+    data.frame(depth_m = d03$depth_m[i], amp = sqrt(sum(coef(f)[2:3]^2)),
+               phase = (atan2(coef(f)[3], coef(f)[2]) * 365.25/(2*pi)) %% 365.25,
+               chain = d03$chain[i]) }))
+  fa <- lm(log(amp) ~ depth_m, jw); fp <- lm(phase ~ depth_m, jw)
+  d_amp <- -1/coef(fa)[2]; d_ph <- (365.25/(2*pi))/abs(coef(fp)[2])
+  om <- 2*pi/(365.25*86400); kap_eff <- d_amp^2 * om / 2
+
+  knitr::kable(data.frame(
+    Größe = c("Dämpfungslänge aus der Amplitude", "Dämpfungslänge aus der Phase",
+              "effektive Temperaturleitfähigkeit", "Wärmeleitfähigkeit dazu (ρ = 340 kg/m³)"),
+    Wert = c(sprintf("%.2f m (R² = %.3f)", d_amp, summary(fa)$r.squared),
+             sprintf("%.2f m (%.1f Tage Verzug je Meter)", d_ph, abs(coef(fp)[2])),
+             sprintf("%.2e m²/s", kap_eff),
+             sprintf("%.2f W/(m·K)", kap_eff * 340 * (152.5 + 7.122 * 228.6)))), row.names = FALSE,
+    caption = "Jahreswelle in den obersten 2,25 m an B50 (Schacht und flache Kette).")
+}
+```
+
+Beide Schätzer liegen bei **1,6 bis 1,7 m** und damit auf 10 % beieinander — das ist das Bild
+reiner Wärmeleitung. Die daraus folgende Leitfähigkeit von rund 0,19 W/(m·K) ist für
+Oberflächenschnee dieser Dichte ein **niedriger**, aber plausibler Wert; eine durch Ventilation
+erhöhte effektive Leitfähigkeit hätte die Dämpfungslänge **vergrößert**, nicht verkleinert. In
+diesem Datensatz gibt es also keinen Hinweis auf verstärkten Transport in den obersten 2 m.
+
+Belastbar ist das noch nicht: der 2-m-Schacht ist **verfüllt**, seine Permeabilität muss nicht
+der des ungestörten Firns entsprechen, die Reihe deckt nur ein halbes Jahr ab, und zwei
+Messungen am Tag lösen die Tageswelle nicht auf.
+
+### Würden wir Windpumpen oder Rektifikation in 2 m Tiefe überhaupt sehen?
+
+Zwei Behauptungen stehen im Raum: Windpumpen bis in etwa 2 m Tiefe, und die **saisonale
+Rektifikation** von [Morgan et al. (2022)](https://tc.copernicus.org/articles/16/2947/2022/) —
+eine langsame Abwärtsbewegung der Firnluft, die im Winter stattfindet und im Sommer nicht, und
+die Gasrekorde um bis zu ±0,008 ‰ in δ¹⁵N_excess (rund ±3 °C im rekonstruierten
+Temperaturgradienten) verschiebt. Als Ursache diskutieren sie unter anderem winterliche
+Rayleigh-Bénard-Konvektion unter der Oberflächeninversion.
+
+**Die Voraussetzungen sind an Kohnen erfüllt.** Der 2-m-Schacht von head03 ist von März bis
+Juli instabil geschichtet — oben 6,4 bis 8,6 K kälter als unten, die Porenluft oben also
+dichter. Die Rayleigh-Darcy-Zahl `Ra = gβkΔTH/(νκ)` liegt bei 90 bis 2750, weit über dem
+kritischen Wert von 4π² ≈ 39,5.
+
+```{r rektifikation}
+if (ok03) {
+  pit <- d03 |> filter(grepl("Schacht", chain)) |> arrange(depth_m)
+  Rp <- sapply(pit$node, function(n) { y <- h03[[sprintf("n%d.ntc1_temp_C", n)]]; o <- is.finite(y)
+    r <- rep(NA_real_, length(y)); r[o] <- resid(loess(y[o] ~ td3[o], span = 0.08)); r })
+  strat_all <- h03[[sprintf("n%d.ntc1_temp_C", pit$node[1])]] -
+               h03[[sprintf("n%d.ntc1_temp_C", pit$node[nrow(pit)])]]
+  brk <- seq(min(td3), max(td3) - 30, by = 30)
+  win <- bind_rows(lapply(brk, function(b) {
+    i <- which(td3 >= b & td3 < b + 30); if (length(i) < 30) return(NULL)
+    sdv <- apply(Rp[i, ], 2, sd, na.rm = TRUE); okk <- is.finite(sdv) & sdv > 0
+    f <- lm(log(sdv[okk]) ~ pit$depth_m[okk])
+    data.frame(ab = format(min(h03$time_utc[i]), "%d.%m."),
+               strat = mean(strat_all[i], na.rm = TRUE),
+               d = unname(-1/coef(f)[2]), r2 = summary(f)$r.squared) }))
+  knitr::kable(win |> transmute(`Fenster ab` = ab,
+      `Schichtung T(0,2 m) − T(2,25 m)` = sprintf("%+.1f K", strat),
+      `Dämpfungslänge (m)` = round(d, 3), `R²` = round(r2, 2)), row.names = FALSE,
+    caption = sprintf("Dämpfung der synoptischen Schwankungen im 2-m-Schacht, 30-Tage-Fenster. Stabil: d = %.3f m; instabil: d = %.3f ± %.3f m.",
+                      mean(win$d[win$strat > 3]), mean(win$d[win$strat < -3]), sd(win$d[win$strat < -3])))
+}
+```
+
+**Gemessen ändert sich nichts.** Die Dämpfungslänge liegt im stabilen Sommer bei 0,381 m und
+in den vier instabilen Wintermonaten bei 0,386 ± 0,020 m — ein Verhältnis von 1,01, in `κ_eff`
+also 1,03. Vier Monate mit 6 bis 8 K instabiler Schichtung und stark überkritischer
+Rayleigh-Zahl hinterlassen im Wärmetransport keine Spur oberhalb von rund 10 %.
+
+**Das schließt die Hypothese aber nicht aus, weil der Test dafür zu unempfindlich ist.** Die
+Porenluft trägt je Volumen nur `ρ_L c_L/(ρ c)` ≈ 5·10⁻⁴ der Wärme des Firns. Damit eine
+Luftbewegung die effektive Leitfähigkeit um 10 % ändert, muss
+
+$$u \;\ge\; 0{,}1\,\frac{k_{\mathrm{Firn}}}{\rho_L c_L H} \;=\; \frac{0{,}1\cdot 0{,}20}{0{,}97\cdot 1005\cdot 2} \;=\; 1{,}0\cdot 10^{-5}\ \mathrm{m/s} \;=\; 0{,}9\ \mathrm{m/Tag}$$
+
+betragen. Unsere Messung schließt also **kräftige Konvektion über etwa 1 m/Tag aus** — die
+langsame, saisonal einseitige Bewegung, die für die Gasfraktionierung genügt, liegt darunter
+und bleibt thermisch unsichtbar. Für den Gastransport zählt jede Geschwindigkeit, für den
+Wärmetransport erst diese.
+
+**Die Hypothese für unsere Messungen lautet damit: kein sichtbares Signal.** Rechnet man die
+beiden Schwellen gegeneinander, wird der Abstand quantitativ:
+
+| Nachweisgrenze im Wärmetransport | nötige Geschwindigkeit |
+|---|---|
+| 10 % Änderung von κ_eff (heute erreicht) | 0,89 m/Tag |
+| 5 % | 0,44 m/Tag |
+| 2 % | 0,18 m/Tag |
+| 1 % | 0,09 m/Tag |
+
+| Relevanz für den Gastransport (Péclet-Zahl über 2 m, D_eff = 2·10⁻⁶ m²/s) | Geschwindigkeit |
+|---|---|
+| Pe = 1 (Advektion so stark wie Diffusion) | 0,086 m/Tag |
+| Pe = 0,3 | 0,026 m/Tag |
+| Pe = 0,1 | 0,009 m/Tag |
+
+Bei der heutigen Auflösung liegen die beiden Skalen einen **Faktor 10** auseinander: eine
+Luftbewegung, die den Gastransport spürbar verändert (rund 0,09 m/Tag), trägt zum
+Wärmetransport nur 1 % bei und bleibt unsichtbar. Umgekehrt entspricht eine Bewegung von
+1 cm/Tag einem Beitrag von 0,1 % — drei Größenordnungen unter dem, was wir sehen könnten.
+
+**Der Abstand ist aber überbrückbar.** Sinkt die Nachweisgrenze von 10 % auf 1 % — durch
+5–10 cm Knotenabstand in den obersten 30 cm, stündliche Abtastung und einen vollen Winter
+statt vier 30-Tage-Fenstern —, fällt die thermische Schwelle auf 0,09 m/Tag und trifft damit
+**genau den Bereich, in dem die Rektifikation wirken müsste**. Der thermische Nachweis ist
+also nicht prinzipiell aussichtslos, sondern eine Frage der Auslegung; mit der jetzigen liefert
+er nur die Obergrenze von 1 m/Tag.
+
+Zwei Einschränkungen bleiben: der Schacht ist **verfüllt**, seine Permeabilität muss nicht der
+des ungestörten Firns entsprechen; und zwei Messungen am Tag lösen nur das synoptische Band
+auf.
+
+### Also doch Drucksensoren? Für das eine ja, für das andere nein
+
+Die beiden Mechanismen stellen völlig verschiedene Anforderungen, und Drucksensoren taugen nur
+für einen davon.
+
+**Windpumpen: ja.** Der Antrieb ist der Staudruck über Sastrugi und Dünen. Bei 10 m/s beträgt
+der Staudruck 50 Pa; mit Druckbeiwerten von 0,1 bis 0,5 sind das **5 bis 25 Pa** an der
+Oberfläche. Die Eindringtiefe folgt der horizontalen Wellenlänge, `exp(−2πz/λ)`: bei λ = 5 m
+bleiben in 0,5 m noch 53 %, in 1 m 29 %, in 2 m 8 %. In 0,5 bis 1 m Tiefe sind also **1 bis
+7 Pa** zu erwarten — gegen eine Datenblatt-Präzision des DPS368 von 0,2 Pa (High Precision,
+105 ms) bzw. 0,35 Pa (Standard, 27,6 ms). Das Signal-Rausch-Verhältnis stimmt, und die
+Messrate von 10 bis 35 Hz reicht für den turbulenten Bereich.
+
+Zwei Bedingungen: **Burst-Betrieb mit Bordauswertung** — übertragen wird nicht die Zeitreihe,
+sondern die Varianz in wenigen Frequenzbändern je Stunde, also ein paar Byte statt Kilobyte;
+und die **Kältefrage**. Genau in den obersten Dezimetern, wo die Sensoren sitzen müssten,
+gehen sie im Winter auf −50 bis −58 °C, und dort haben wir Skalenfehler und ein zehnfach
+erhöhtes Rauschen gemessen. Ob auch das **Kurzzeitrauschen** bei 10 Hz in gleichem Maß
+degradiert, wissen wir nicht — unsere Daten haben eine Messung am Tag. Das ist der eine
+Labortest, der vor einer Beschaffung stehen müsste: einen DPS368 auf −55 °C kühlen und sein
+Rauschen bei 10 Hz messen.
+
+**Rektifikation: nein.** Hier treibt keine Turbulenz, sondern ein langsamer, saisonal
+einseitiger Volumenstrom. Nach Darcy gehört zu einer Geschwindigkeit von 1 cm/Tag bei
+`k = 10⁻⁹ m²` ein Gradient von 2·10⁻³ Pa/m, über 2 m also **4 mPa**. Selbst die
+0,9 m/Tag, die unsere Temperaturmessung gerade noch ausschließt, entsprechen nur 0,35 Pa.
+
+| Geschwindigkeit | Druckdifferenz über 2 m | messbar? |
+|---|---|---|
+| 1 cm/Tag (gasrelevant) | 0,004 Pa | nein |
+| 10 cm/Tag | 0,039 Pa | nein |
+| 90 cm/Tag (unsere Temperaturgrenze) | 0,354 Pa | grenzwertig |
+
+Der Druck ist für die Rektifikation also der **schlechtere** Zugang als die Temperatur — und
+beide reichen nicht. Für diese Frage bleiben die Gasmessungen (δ¹⁵N) das einzige Werkzeug, und
+genau deshalb arbeiten Morgan et al. damit.
+
+**Fazit für die Auslegung:** Drucksensoren im obersten Meter lohnen sich, wenn Windpumpen das
+Ziel ist — mit hoher Rate, Bordstatistik und einem für −60 °C tauglichen Typ. Für die
+Rektifikation lohnen sie sich nicht; dort ist die dichte Temperaturkette mit 1 %
+Nachweisgrenze der aussichtsreichere Weg, weil sie die relevante Geschwindigkeitsskala
+gerade erreicht.
+
+### Welche zeitliche Auflösung dafür nötig ist
+
+Die Tageswelle ist der Hebel, und sie steckt in den obersten Zentimetern: mit
+`κ ≈ 3·10⁻⁷ m²/s` ist die Dämpfungslänge für die 24-Stunden-Periode nur **9 cm**. head02 hat
+mit **sechs Messungen am Tag** über 14 Tage genau zwei brauchbare Tiefen dafür:
+
+| Tiefe | Amplitude der Tageswelle | Phase | R² |
+|---|---|---|---|
+| 0,2 m | 737 ± 106 mK | 20,6 ± 0,8 h | 0,66 |
+| 0,5 m | 87 ± 29 mK | 8,1 ± 1,8 h | 0,88 |
+| 1,0 m | 13 ± 18 mK | nicht bestimmbar | 0,27 |
+
+Daraus folgt eine Dämpfungslänge von **0,36 ± 0,15 m** — 41 % Fehler, und da `κ ∝ d²` ist,
+heißt das einen Faktor 2 Unsicherheit in `κ_eff` — die Größe, die der Test auflösen soll.
+
+Der Fehler stammt nicht aus dem Sensorrauschen. Bei 0,1 mK Auflösung und
+84 Messungen entspricht der Amplitudenfehler von 106 mK einer effektiven Streuung von rund
+700 mK — das ist die **Variabilität der Tageswelle selbst** (Bewölkung, Wind), nicht das
+Instrument. Mehr Messungen pro Tag helfen dagegen nur begrenzt; es braucht mehr
+**Tiefen** im Dämpfungsbereich und längere Fenster.
+
+Daraus die Auslegung:
+
+* **Für die Druckkorrektur allein** genügen zwei bis vier Messungen am Tag. head03 erreicht
+  mit zwei Messungen täglich bei 10 m bereits R² = 0,83 und t = 42; die Kopplung ist
+  phasengleich und synoptisch, also langsam.
+* **Für den Windpumpen-Test** ist die Abtastung nicht der Engpass, die Tiefenstaffelung ist
+  es: **5–6 Knoten in den obersten 30 cm** (etwa 2, 5, 10, 15, 20, 30 cm), damit das
+  Amplitudenprofil überbestimmt ist. Dazu ein Abtastintervall von **1 Stunde oder kürzer** —
+  acht Punkte je Periode sind das Minimum für eine saubere Harmonische, und wer einzelne
+  Sturmepisoden von 6 bis 12 Stunden auflösen will, braucht **10–30 min**.
+* **Fensterlänge**: `κ_eff` je Tag ist von der Wettervariabilität dominiert; sinnvoll sind
+  Fenster von drei bis fünf Tagen, die dann gegen die mittlere Windgeschwindigkeit desselben
+  Fensters gestellt werden.
+
+Das alles läuft auf der SD-Karte; über Iridium muss davon nichts übertragen werden.
+
+**Zusammengefasst braucht der gezielte Test:** eine Kette mit **5–10 cm Knotenabstand in der
+obersten Schicht**, in **ungestörtem** Firn statt in einem Schacht, mit **10–30 min
+Abtastung** — dann ist die Tageswelle sauber aufgelöst und `κ_eff` lässt sich fensterweise
+bestimmen. Der
+Nachweis wäre dann direkt: variiert `κ_eff` systematisch mit der Windgeschwindigkeit, gibt es
+Windpumpen; bleibt es konstant, ist die Behauptung für diesen Standort widerlegt. Das braucht
+keine neuen Drucksensoren, nur die Temperaturkette, die es schon gibt, mit engerem Abstand und
+schnellerer Abtastung.
+
+## Auslegung unter den PlateauInSync-Bedingungen
+
+Drei Randbedingungen ändern die Rechnung: **keine Rückkehr** — alles muss über Iridium, die
+SD-Karte ist unerreichbar; **kaum AWS** in der Nähe; und die **Kette schneit ein**, die Tiefe
+jedes Knotens wächst mit der Zeit.
+
+### Das Frequenzband entscheidet, nicht die Tageswelle
+
+Die Tageswelle wäre der schärfste Hebel, aber sie reicht nur 9 cm tief — und auf dem Plateau
+gibt es sie im Winter gar nicht, wenn die Stürme kommen. Im Polarwinter treibt die Synoptik,
+und die dringt weiter ein:
+
+| Periode | Dämpfungslänge |
+|---|---|
+| 1 Tag | 0,09 m |
+| 2 Tage | 0,13 m |
+| 3 Tage | 0,16 m |
+| 5 Tage | 0,20 m |
+| 10 Tage | 0,29 m |
+
+Für den Windpumpen-Test ist das synoptische Band das passende: es fällt mit den Stürmen
+zusammen und probt 0,15 bis 0,3 m statt 9 cm. Damit sinken die Anforderungen an
+Tiefenstaffelung und Abtastung: 5–10 cm Knotenabstand statt 2 cm, vier bis acht Messungen am
+Tag statt zehn Minuten.
+
+### Telemetrie statt SD-Karte
+
+```{r plateau-budget}
+budget <- data.frame(
+  Variante = c("alle 35 Knoten, 10-min-Abtastung", "alle 35 Knoten, stündlich",
+               "obere 10 Knoten 3-stündlich + 25 tiefe täglich"),
+  `Bytes je Tag` = c(35*144*3, 35*24*3, 10*8*3 + 25*3),
+  check.names = FALSE) |>
+  mutate(`SBD-Nachrichten je Tag` = round(`Bytes je Tag`/340, 1))
+knitr::kable(budget, row.names = FALSE,
+  caption = "Iridium-Budget bei 3 Byte je Messwert und 340 Byte je SBD-Nachricht.")
+```
+
+Nur das obere Array braucht die hohe Rate; die tiefen Knoten genügen mit einer Messung am
+Tag. Das sind rund 315 Byte täglich, also **eine
+SBD-Nachricht** — weniger als head03 heute sendet. Alles roh übertragen scheitert dagegen mit
+44 Nachrichten am Tag.
+
+Wer noch weiter sparen will, lässt den Kopf die Tagesharmonische selbst anpassen und überträgt
+je Knoten nur Amplitude, Phase und Mittel — drei Zahlen statt acht Messwerten. Das kostet
+allerdings die Möglichkeit, später anders auszuwerten, und sollte erst dann eingesetzt werden,
+wenn die Auswertung steht.
+
+### Einschneien: kein Problem für κ, aber eine Uhr
+
+`κ_eff` wird aus dem Amplitudenverhältnis benachbarter Knoten bestimmt, `d = Δz / ln(A₁/A₂)`. Der Abstand Δz ist mechanisch festgelegt und ändert sich beim
+Einschneien **nicht**. Die absolute Tiefe geht gar nicht ein — das Verfahren ist gegen die
+Verschüttung immun, und man braucht dafür weder Sonic Ranger noch bekannte Akkumulation.
+
+Was sich ändert, ist der Tiefenbereich, den das Array abtastet. Bei einer Oberflächendichte
+von 300 kg/m³:
+
+| Standort | Akkumulation | Einschneiden | Knoten von 5 cm auf 50 cm |
+|---|---|---|---|
+| South Pole | 80 kg/m²/a | 0,27 m/a | 1,7 Jahre |
+| Kohnen | 64 kg/m²/a | 0,21 m/a | 2,1 Jahre |
+| Dome F | 27 kg/m²/a | 0,09 m/a | 5,0 Jahre |
+| Dome C | 25 kg/m²/a | 0,08 m/a | 5,4 Jahre |
+| Dome A | 23 kg/m²/a | 0,08 m/a | 5,9 Jahre |
+| Vostok | 22 kg/m²/a | 0,07 m/a | 6,1 Jahre |
+
+Die kalten Standorte, an denen der Drucksensor versagt, haben die geringste Akkumulation: dort bleibt das obere Array fünf bis sechs Jahre im relevanten Tiefenbereich.
+Und das Wandern ist sogar nutzbar — dieselben Sensoren tasten nacheinander verschiedene Tiefen
+ab und liefern ein `κ(z)`-Profil ohne Bauteilstreuung, so wie hier die Schachtknoten über den
+Jahresgang.
+
+### Referenzdruck ohne AWS
+
+Bleibt der Regressor. Ohne Station in der Nähe sind zwei Wege offen:
+
+* **Reanalyse-Bodendruck.** Der synoptische Druck ist ein großräumiges Feld, das
+  Reanalysen über dem Plateau gut treffen. Die Eignung lässt sich an Kohnen prüfen, wo mit
+  head03 sechs Monate Netzmittel vorliegen — das ist der nächste Schritt, sobald ERA5-Bodendruck
+  vorliegt (die lokale ERA5-Datei enthält bisher nur t2m und Niederschlag).
+* **Zwei bis drei DPS368 in der Tiefe**, deren Skalenfehler bei −55 °C bekannt ist und die
+  über eine Saison gegen die Reanalyse kalibriert werden. Sie liefern die exakte Zeitzuordnung,
+  die sich als wichtiger erwiesen hat als die Entfernung.
+
+Beides zusammen ist robust: die Reanalyse setzt die Skala, die eigenen Sensoren die Phase.
+
+## Wie nah muss das Referenzbarometer stehen?
+
+Für den Temperaturweg wird weiterhin ein Druckrecord gebraucht — als Regressor für die
+Korrektur, nicht als Messgröße. Wie genau der sein muss, folgt aus der Fehlerrechnung: ein
+Messfehler im Regressor **schwächt** die Steigung ab, und zwar um `σ_Fehler² / σ_Druck²`.
+
+Der direkte Test steht in den Grönland-Daten: die Doppelkette liegt rund **30 km** von der
+Summit-AWS entfernt.
+
+```{r dist-test}
+if (!is.null(aws)) {
+  p_ch <- bar |> rename(t = time)
+  hrly <- tryCatch({ options(timeout = 120)
+    suppressWarnings(readr::read_csv(
+      "https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/hour/SUM_hour.csv",
+      show_col_types = FALSE)) }, error = function(e) NULL)
+
+  rows <- list()
+  # (a) Tagesmittel der AWS gegen die Momentanmessung der Kette
+  pc <- bar |> mutate(day = as.Date(time)) |> left_join(aws, by = "day") |> filter(is.finite(p_aws))
+  f1 <- lm(p_bar ~ p_aws, pc)
+  rows[[1]] <- data.frame(Referenz = "Summit-AWS, Tagesmittel", n = nrow(pc),
+    r = round(cor(pc$p_bar, pc$p_aws), 4), Steigung = round(coef(f1)[2], 3),
+    `sd Residuum (hPa)` = round(sd(resid(f1)), 2),
+    `Abschwächung` = sprintf("%.1f %%", 100 * var(resid(f1))/var(pc$p_aws)), check.names = FALSE)
+
+  # (b) Stundenwert, zeitlich passend
+  if (!is.null(hrly)) {
+    hrly$t <- as.POSIXct(hrly$time, tz = "UTC")
+    idx <- vapply(bar$time, function(tt) { dd <- abs(as.numeric(difftime(hrly$t, tt, units = "mins")))
+      j <- which.min(dd); if (dd[j] < 90) j else NA_integer_ }, 0L)
+    ph <- hrly$p_u[idx]; okh <- is.finite(ph)
+    f2 <- lm(bar$p_bar[okh] ~ ph[okh])
+    rows[[2]] <- data.frame(Referenz = "Summit-AWS, Stundenwert zeitgleich", n = sum(okh),
+      r = round(cor(bar$p_bar[okh], ph[okh]), 4), Steigung = round(coef(f2)[2], 3),
+      `sd Residuum (hPa)` = round(sd(resid(f2)), 2),
+      `Abschwächung` = sprintf("%.1f %%", 100 * var(resid(f2))/var(ph[okh])), check.names = FALSE)
+  }
+  knitr::kable(bind_rows(rows), row.names = FALSE,
+    caption = "GRIP-Kette gegen die 30 km entfernte Summit-AWS.")
+}
+```
+
+Mit dem Tagesmittel der AWS bleiben
+0,66 hPa Residuum und 1,2 % Abschwächung; mit dem zeitgleichen Stundenwert 0,22 hPa und
+0,1 %. Die Zeitzuordnung trägt in dieser Rechnung also zehnmal so viel bei wie die 30 km
+Distanz. Die Kopplungskoeffizienten mit dem entfernten Barometer liegen bei 8 bis 30 m Tiefe
+um den Faktor 1,01 bis 1,05 über denen mit den Kettensensoren.
+
+Wie schnell die Kohärenz mit der Entfernung abnimmt, lässt sich am GEUS-Netz direkt ablesen —
+Stundendruck von Summit gegen andere Stationen auf dem grönländischen Eisschild:
+
+| Station | Entfernung | r | sd(Residuum) | Abschwächung |
+|---|---|---|---|---|
+| GRIP-Kette | 30 km | 0,9993 | 0,22 hPa | 0,1 % |
+| EGP | 347 km | 0,942 | 2,22 hPa | 11,9 % |
+| NASA-U | 380 km | 0,928 | 2,46 hPa | 12,8 % |
+| NEEM | 648 km | 0,860 | 3,37 hPa | 22,3 % |
+| Dye-2 | 741 km | 0,871 | 3,22 hPa | 25,3 % |
+| Saddle | 768 km | 0,873 | 3,24 hPa | 23,6 % |
+
+Daraus die Faustregel: unter 100 km bleibt die Abschwächung unter 1 %,
+bei 300–400 km kostet sie rund 12 % — dieselbe Größenordnung wie die Unsicherheit der
+Theorievorhersage —, und ab 600 km über 20 %. Zwei Einschränkungen: die Stationen unterscheiden
+sich um 500 bis 1100 m in der Höhe, was einen Teil der Abweichung als reinen Skalenfaktor
+beisteuert (in der Regression bereits herausgerechnet, in der Steigung von 0,80 bis 0,97
+sichtbar); und der grönländische Eisschild hat stärkere Höhengradienten als das antarktische
+Plateau, wo die Kohärenz eher weiter reicht.
+
+**Praktisch heißt das:** eine antarktische AWS mit Stundenwerten in wenigen 10 km Entfernung
+ist mehr als ausreichend, und die Reanalyse ist die Rückfallebene, wenn keine Station in der
+Nähe steht. Wichtiger als die Entfernung ist, dass **Zeitstempel und Abtastung zusammenpassen**
+— Tagesmittel gegen Momentanwerte kosten mehr als 30 km Luftlinie.
+
+## Umkehrung: die Kopplung als Porositätsmessung
+
+`b = φ/(ρ c)` enthält die Porosität. Mit `φ = 1 − ρ/917` ist die Beziehung eindeutig
+umkehrbar, und die Empfindlichkeiten sind
+
+$$\frac{\delta\varphi}{\varphi} = (1-\varphi)\,\frac{\delta b}{b}, \qquad
+\frac{\delta\rho}{\rho} = \varphi\,\frac{\delta b}{b}.$$
+
+Der Messfehler folgt aus `SE(b) = σ_T /(σ_p √N)`. Mit 0,1 mK Rauschen je Messung — dem Wert,
+den die verfüllten Ketten erreichen — und σ_p = 5 hPa:
+
+```{r porositaet}
+cp_ice <- function(TK) 152.5 + 7.122 * TK
+Tk <- 228.6; ci4 <- cp_ice(Tk)
+dK <- local({ k0 <- 11*exp(-10160/(8.314*Tk)); k1 <- 575*exp(-21400/(8.314*Tk))
+  z55 <- (log(.55/(.917-.55)) - log(.34/(.917-.34)))/(.917*k0)
+  function(z) vapply(z, function(q) { Z <- if (q <= z55) exp(.917*k0*q + log(.34/(.917-.34)))
+    else exp(.917*k1*(q - z55)/sqrt(0.064) + log(.55/(.917-.55))); .917*Z/(1+Z) }, 0) })
+bK4 <- function(z) { r <- dK(z)*1000; (1 - r/917)/(r*ci4)*1e5 }
+sT <- 0.1; sP <- 5
+
+pt <- bind_rows(lapply(c(1, 5, 10, 20, 30, 50, 70, 84), function(z) {
+  r <- dK(z)*1000; phi <- 1 - r/917; b <- bK4(z)
+  f <- function(N) { rb <- sT/(sP*sqrt(N))/b
+    c(rb = 100*rb, dphi = 100*(1-phi)*rb, drho = phi*rb*r) }
+  a1 <- f(730); a3 <- f(2190)
+  data.frame(`Tiefe (m)` = z, `ρ` = round(r), `φ` = round(phi, 3),
+             `b (mK/hPa)` = round(b, 4), `Signal je sd (mK)` = round(b*sP, 2),
+             `δφ/φ, 1 Jahr` = sprintf("%.2f %%", a1["dphi"]),
+             `δρ, 1 Jahr` = sprintf("%.1f kg/m³", a1["drho"]),
+             `δφ/φ, 3 Jahre` = sprintf("%.2f %%", a3["dphi"]),
+             `δρ, 3 Jahre` = sprintf("%.1f kg/m³", a3["drho"]), check.names = FALSE) }))
+knitr::kable(pt, row.names = FALSE,
+  caption = sprintf("Erreichbare Genauigkeit bei %.1f mK Rauschen je Messung und %.0f hPa Druckstreuung, zwei Messungen täglich (Kohnen-Dichteprofil, c_Eis = %.0f J/(kg·K)).", sT, sP, ci4))
+```
+
+In **Dichte** ausgedrückt ist die Genauigkeit über die ganze Säule ähnlich — 1,6 bis 8,9 kg/m³
+nach einem Jahr, 0,9 bis 5,1 kg/m³ nach dreien —, weil der Faktor `φ` die abnehmende Kopplung
+teilweise ausgleicht. In **Porosität** ausgedrückt verschlechtert sie sich nach unten: 0,3 %
+bei 1 m, 1,6 % bei 30 m, 9 % am Close-off nach einem Jahr.
+
+Der Punkt am Close-off ist der interessante: dort kommuniziert nur die **offene** Porosität mit
+der Atmosphäre, `b` misst also `φ_offen`. Das ist die Größe, die den Firn-Eis-Übergang
+definiert, und sie wäre damit kontinuierlich in situ messbar — mit derselben Kette, die
+ohnehin die Temperatur misst, ohne zusätzliches Gerät. Nach drei Jahren läge die Auflösung bei
+5 % von `φ_offen`.
+
+Was damit **nicht** gemeint ist: eine Jahresvariation des Übergangs. Die Close-off-Tiefe folgt
+dem Dichteprofil, und das ändert sich auf der Zeitskala der Verdichtung — Jahrzehnte. Die
+Temperatur, über die sie nach Martinerie et al. von der Dichte abhängt, hat in 80 m Tiefe
+keinen Jahresgang mehr: die Jahreswelle ist bei einer Dämpfungslänge von 1,7 m schon in 20 m
+verschwunden. Auf Jahresskala ist am Firn-Eis-Übergang nichts zu erwarten, was sich messen
+ließe.
+
+Zwei andere Größen wären es dagegen wert:
+
+* **Die Form des Übergangs.** Der Verlauf von `φ_offen(z)` durch die Lock-in-Zone wird heute
+  aus der Kerndichte und einer Parametrisierung des geschlossenen Anteils erschlossen. Ein
+  b(z)-Profil misst ihn direkt und in situ, an ungestörtem Firn statt an einem entnommenen
+  Kern.
+* **Die langsame Verschiebung.** Ändern sich Akkumulation oder Temperatur, wandert der
+  Übergang — über Jahrzehnte, nicht Jahre. Ein Sensor an fester Position wandert unterdessen
+  selbst mit der Akkumulation nach unten (an Dome C 8 cm/a, an Kohnen 21 cm/a) und tastet die
+  Zone dabei ab; das liefert das Profil auch dann, wenn nur wenige Knoten in der Zone sitzen.
+
+Als **Störgröße** ist der Effekt dagegen klein: 0,04 bis 0,5 mK je Druck-Standardabweichung.
+Für die Verdichtung, die von der mittleren Temperatur abhängt, ist er ohne Bedeutung; im
+Fehlerbudget einer Paläo-Inversion mit 2,8 mK Präzision steht er mit bis zu 2,5 mK über die
+volle Druckspanne.
+
+### Was die Genauigkeit wirklich begrenzt
+
+Die Zahlen oben sind die **statistische** Grenze. Zwei andere Dinge entscheiden, ob sie
+erreichbar ist.
+
+**Drift ist unkritisch, Temperaturempfindlichkeit der Messkette nicht.** Der Schätzer nutzt
+nur das synoptische Band: beide Reihen werden hochpassgefiltert, eine langsame Sensordrift
+über Monate fällt heraus und verzerrt `b` nicht. Verzerrend wirkt nur ein Fehler, der mit dem
+Druck **im synoptischen Band** korreliert — und dafür gibt es einen konkreten Kandidaten. Der
+gemeinsame Anteil in head02 folgte der Lufttemperatur mit 5,8 mK/K; Luftdruck und
+oberflächennahe Temperatur hängen synoptisch zusammen:
+
+```{r syst-risk}
+if (ok03) {
+  rP_s <- resid(loess(bar3 ~ td3, span = 0.15))
+  i02  <- which(d03$depth_m == 0.2 & grepl("10 m", d03$chain))
+  y02  <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i02])]]; ok02 <- is.finite(y02)
+  rT_s <- rep(NA_real_, length(y02)); rT_s[ok02] <- resid(loess(y02[ok02] ~ td3[ok02], span = 0.15))
+  sl   <- unname(coef(lm(rT_s ~ rP_s))[2]); rr <- cor(rP_s, rT_s, use = "complete.obs")
+  knitr::kable(data.frame(
+    Größe = c("r(Druck, Firntemperatur 0,2 m) im synoptischen Band",
+              "Steigung", "Scheinbeitrag bei 5,8 mK/K Kettenempfindlichkeit",
+              "echtes b bei 10 m", "Varianzaufschlag, wenn T als zweiter Regressor mitläuft"),
+    Wert = c(sprintf("%+.2f", rr), sprintf("%.3f K/hPa", sl),
+             sprintf("%.3f mK/hPa", abs(5.82*sl)), "0,061 mK/hPa",
+             sprintf("%.1f %%", 100*(1/(1-rr^2)-1)))), row.names = FALSE,
+    caption = "Kohnen B50: der Zusammenhang von Druck und Oberflächentemperatur begrenzt, wie stark eine temperaturempfindliche Messkette stört.")
+}
+```
+
+Eine Kette mit head02s Empfindlichkeit ergäbe einen Scheinbeitrag von 0,33 mK/hPa — das
+Fünffache des echten Signals. head03 hat diesen Fehler nicht, deshalb stimmt dort die
+Vorhersage. Drei Gegenmaßnahmen, die alle billig sind:
+
+* **Referenzwiderstand im Messpfad** (Firmware-Anforderung 1.2) — misst die Verstärkung direkt.
+* **Tiefendifferenzen** statt Absolutwerten: ein gemeinsamer Verstärkungsfehler fällt heraus,
+  die physikalische Kopplung nicht, weil `φ/(ρc)` mit der Tiefe abnimmt.
+* **Oberflächentemperatur als zweiten Regressor** mitführen. Bei r = 0,11 sind die beiden
+  Regressoren fast orthogonal, der Varianzaufschlag beträgt 1,2 % — praktisch kostenlos.
+
+**Vom Klima trennt die Zeitskala.** Die Kopplung ist phasengleich und synoptisch (2–10 Tage);
+das Klimasignal ist saisonal bis mehrjährig. Bei einer Dämpfungslänge von 1,7 m für die
+Jahreswelle bleibt in 13 m Tiefe ein Anteil von 5·10⁻⁴ der Oberflächenamplitude, also unter
+10 mK, und der Hochpass entfernt ihn ohnehin. Die Trennung ist damit mehr als eine
+Größenordnung in der Frequenz — für die Tiefen, in denen die Porositätsmessung interessant
+wäre (30 bis 84 m), existiert gar kein Klimasignal mehr.
+
+**Was bleibt, ist ein systematischer Boden für den Absolutwert.** `b` hängt linear von der
+Wärmekapazität des Eises ab; `c(T) = 152,5 + 7,122·T` ist auf etwa 1 % bekannt, und in dieser
+Auswertung war ein zu hoher Wert der Grund, warum der Faktor zunächst bei 1,01 statt bei 0,95
+lag. Dazu kommt, dass unterhalb von rund 700 kg/m³ nur noch die **offene** Porosität
+beiträgt — was für die Close-off-Messung der Zweck ist, für eine Gesamtporosität aber ein
+Modellfehler wäre. Die absolute Genauigkeit liegt damit bei einigen Prozent; die zeitliche
+Entwicklung und das relative Tiefenprofil sind so genau wie in der Tabelle.
+
+## Das luftgefüllte 200-m-Loch (head04, B40)
+
+Unterhalb des Close-off gibt es keine offene Porosität mehr — dort muss der
+Kompressionseffekt verschwinden und nur die thermoelastische Antwort des Eises von rund
+0,002 mK/hPa übrig bleiben. head04 misst mit einer 200-m-Kette im **offenen** Bohrloch bis
+201 m und erlaubt den Test. Einen eigenen Drucksensor hat der Kopf nicht; als Referenz dient
+das Netzmittel von head03 an B50 (zeitlich zugeordnet, maximal 8 h Versatz, 180 gemeinsame
+Tage).
+
+```{r h04-deep}
+h04 <- tryCatch(readr::read_csv("../KohnenRecords_Analyse/data/decoded_head04_231710_combined.csv",
+                                show_col_types = FALSE), error = function(e) NULL)
+c04 <- tryCatch(readr::read_csv("../KohnenRecords_Analyse/data/head04_calibration.csv",
+                                show_col_types = FALSE), error = function(e) NULL)
+if (!is.null(h04) && !is.null(c04) && ok03) {
+  d04 <- unique(c04[, c("node", "depth_m")])
+  pr3 <- data.frame(t = h03$time_utc, p = rowMeans(P3[, Tmin3 > -45], na.rm = TRUE))
+  h04 <- h04[order(h04$time_utc), ]
+  ii <- vapply(h04$time_utc, function(tt) { dd <- abs(as.numeric(difftime(pr3$t, tt, units = "hours")))
+    j <- which.min(dd); if (dd[j] < 8) j else NA_integer_ }, 0L)
+  h04$p <- pr3$p[ii]; h04 <- h04[is.finite(h04$p), ]
+  td4 <- as.numeric(difftime(h04$time_utc, min(h04$time_utc), units = "days"))
+  rP4 <- resid(loess(h04$p ~ td4, span = 0.2)); dP4 <- c(NA, diff(rP4)/diff(td4))
+
+  deep4 <- bind_rows(lapply(which(d04$depth_m >= 40), function(i) {
+    y <- h04[[sprintf("n%d.ntc1_temp_C", d04$node[i])]]; o <- is.finite(y)
+    if (sum(o) < 100) return(NULL)
+    r <- rep(NA_real_, length(y)); r[o] <- resid(loess(y[o] ~ td4[o], span = 0.2)) * 1000
+    m <- data.frame(r = r, p = rP4, dp = dP4); m <- m[complete.cases(m), ]
+    f1 <- summary(lm(r ~ p, m))$coefficients
+    f2 <- summary(lm(r ~ p + dp, m))
+    data.frame(depth_m = d04$depth_m[i],
+               b_allein = f1[2,1], t_allein = f1[2,3],
+               b_p = f2$coefficients[2,1], t_p = f2$coefficients[2,3],
+               b_rate = f2$coefficients[3,1], t_rate = f2$coefficients[3,3],
+               r2 = f2$r.squared) }))
+
+  knitr::kable(deep4 |> transmute(`Tiefe (m)` = round(depth_m, 1),
+      `b allein (mK/hPa)` = round(b_allein, 4), `t` = round(t_allein, 1),
+      `b·p daneben` = round(b_p, 4), `t (p)` = round(t_p, 1),
+      `b·dp/dt (mK je hPa/Tag)` = round(b_rate, 4), `t (Rate)` = round(t_rate, 1),
+      `R²` = round(r2, 2)), row.names = FALSE,
+    caption = "head04, offenes Bohrloch, Druckreferenz von B50. Links die Regression auf den Druck allein, rechts mit der Druckänderungsrate als zweitem Regressor.")
+}
+```
+
+Etwas ist bis 201 m zu sehen — aber es ist nicht der Kompressionseffekt. Nimmt man den Druck
+allein, sieht es mit t = 3,8 bis 6,8 nach einem Signal aus; sobald die **Änderungsrate**
+`dp/dt` danebensteht, verschiebt sich alles dorthin: t(Rate) = 12 bis 19, R² = 0,50 bis 0,75,
+während der phasengleiche Anteil auf t ≤ 3 zusammenfällt und das Vorzeichen wechselt.
+
+Das ist die erwartete Trennung. Der Kompressionseffekt ist **phasengleich** mit dem Druck und
+braucht offene Poren; unterhalb des Close-off gibt es beides nicht. Was bleibt, ist **Luft in
+Bewegung**: der Volumenstrom im Bohrloch ist proportional zu `dp/dt`, und die strömende Luft
+trägt Wärme. Genau dieselbe Größe erzeugt die Unruhe, die in luftgefüllten Löchern die
+Temperaturmessung begrenzt.
+
+Die Tiefenstruktur des Ratenterms liefert dabei einen Nebenbefund:
+
+| Tiefe | 40 m | 50 m | 62 m | 75 m | 92 m | 111 m | 157 m | 201 m |
+|---|---|---|---|---|---|---|---|---|
+| b·dp/dt (mK je hPa/Tag) | 0,65 | 0,53 | 0,15 | 0,090 | 0,020 | 0,019 | 0,019 | 0,012 |
+
+Zwischen 75 und 92 m fällt der Term um den Faktor 4,5 und bleibt darunter konstant. Dort liegt
+der **Close-off** — nach Martinerie et al. bei 829 kg/m³, im Herron-Langway-Profil bei rund
+84 m. Oberhalb ist die Bohrlochwand durchlässig, die Luft kann in den Firn hinein und heraus
+strömen; unterhalb ist sie dicht, und es bleibt nur die axiale Strömung im Loch. Das offene
+Bohrloch zeigt seine eigene Close-off-Tiefe also über die Änderung seiner Druckantwort an.
+
+### Passt die Amplitude zur Advektion? Nein.
+
+Zuerst die Kontrolle, ob der Ratenterm überhaupt real ist oder ein Artefakt der Filterung:
+head03 hat beide Kettentypen am selben Ort, mit derselben Druckreferenz und denselben Tagen.
+
+```{r rate-control}
+if (ok03) {
+  rP_c <- resid(loess(bar3 ~ td3, span = 0.15)); dP_c <- c(NA, diff(rP_c)/diff(td3))
+  sel_c <- which((grepl("Luft", d03$chain) & d03$depth_m %in% c(21, 32, 50, 62)) |
+                 (grepl("10 m", d03$chain) & d03$depth_m %in% c(7, 8, 9, 10)))
+  ctrl2 <- bind_rows(lapply(sel_c, function(i) {
+    y <- h03[[sprintf("n%d.ntc1_temp_C", d03$node[i])]]; o <- is.finite(y)
+    r <- rep(NA_real_, length(y)); r[o] <- resid(loess(y[o] ~ td3[o], span = 0.15)) * 1000
+    m <- data.frame(r = r, p = rP_c, dp = dP_c); m <- m[complete.cases(m), ]
+    f <- summary(lm(r ~ p + dp, m))
+    data.frame(Kette = ifelse(grepl("Luft", d03$chain[i]), "60 m, Luft", "10 m, Schnee"),
+               `Tiefe (m)` = d03$depth_m[i],
+               `b·p (mK/hPa)` = round(f$coefficients[2,1], 4), `t (p)` = round(f$coefficients[2,3], 1),
+               `b·dp/dt` = round(f$coefficients[3,1], 4), `t (Rate)` = round(f$coefficients[3,3], 1),
+               check.names = FALSE) }))
+  knitr::kable(ctrl2 |> arrange(Kette, `Tiefe (m)`), row.names = FALSE,
+    caption = "head03, beide Ketten, gleiche Filterung und gleiche Druckreferenz.")
+}
+```
+
+Die Trennung ist vollständig: die **verfüllte** Kette antwortet phasengleich auf den Druck
+(t = 6 bis 47) und gar nicht auf die Rate (|t| ≤ 0,3); die **luftgefüllte** umgekehrt
+(t(Rate) = 24 bis 27, phasengleicher Anteil klein und negativ). Ein Artefakt der Auswertung
+ist damit ausgeschlossen — dieselbe Rechnung liefert an demselben Ort zwei verschiedene
+Antworten, je nach Bohrlochfüllung.
+
+**Die Amplitude passt aber nicht zu einfacher Advektion.** Die Rechnung für head04 bei 133 m:
+
+* Der Luftraum über der Tiefe z wird um `Δp/p` komprimiert, die Luft bei z verschiebt sich
+  also um `δ = z·Δp/p`. Bei 133 m und 65 000 Pa sind das 0,20 m je hPa.
+* Bei einer Druckänderung von 1 hPa/Tag ist die Geschwindigkeit `v = 2,4·10⁻⁶ m/s`.
+* Der lokale Temperaturgradient beträgt dort 0,0034 K/m.
+* Die verschobene Luft gleicht sich der Wand an; für einen Luftzylinder von 5 cm Radius ist
+  `τ ≈ a²/(5,8 κ_Luft) ≈ 20 s`.
+* Damit `ΔT = v·Γ·τ = 1,6·10⁻⁴ mK` je hPa/Tag.
+
+Gemessen sind **0,015 mK je hPa/Tag** — rund **90-mal mehr**. Umgekehrt gerechnet müsste die
+Luft ihre Anomalie über etwa **30 Minuten** halten statt über 20 Sekunden, oder über 2 % ihres
+Tagesweges statt über 0,02 %.
+
+Freie Konvektion im Bohrloch, der übliche Verdächtige, scheidet aus: unterhalb 92 m steigt die
+Temperatur mit 0,0036 K/m nach unten, die adiabatische Rate beträgt 0,0098 K/m — die Luftsäule
+ist stabil geschichtet, oberhalb erst recht.
+
+Damit steht der Befund, aber nicht seine Erklärung: der Ratenterm ist real, an die
+Bohrlochfüllung gebunden und über 200 m messbar; seine Größe folgt nicht aus dem Wärmeinhalt
+der bewegten Luft. Denkbar bleibt, dass nicht die Luft, sondern der **Knoten** die Zeitkonstante
+setzt — ein Sensorkörper in schlecht leitender Luft hat leicht eine halbe Stunde —, aber dann
+müsste er stärker an die strömende Luft als an die Wand gekoppelt sein. Das ist mit diesen
+Daten nicht zu entscheiden.
+
+### Wäre das mehr als die Dichte des Kerns? Recherchestand
+
+**Was heute gemessen wird.** Die Kerndichte liefert die **Gesamt**porosität, nicht die offene.
+Der Schritt von der einen zur anderen geht über zwei Wege: **Gaspyknometrie** an Proben (zwei
+Kammern bekannten Volumens mit Ventil — im Prinzip derselbe Vorgang wie hier, nur im Labor)
+und **Röntgentomographie** (μCT), die die Porenmorphologie dreidimensional auflöst
+([Burr et al. 2018](https://tc.copernicus.org/articles/12/2481/2018/)). Am Standort Lock-In
+stimmen beide Methoden überein. Die Zusammenstellung der publizierten Datensätze
+([Fourteau et al. 2020](https://essd.copernicus.org/articles/12/1171/2020/)) nennt die
+Unsicherheit des Verhältnisses geschlossener zu gesamter Porosität mit **0,02 bei niedriger
+Dichte und bis 0,2 bei hoher** — nahe dem Close-off also 20 %, dominiert von der Unsicherheit
+des Probenvolumens. Dazu kommt die **Schnittblasen-Korrektur**, die dichteabhängig ist und
+zusammen mit der Systemdrift in einen empirischen Faktor gepackt wird.
+
+**Was am Übergang selbst offen ist.** Die Schichtung steuert ihn: feinkörnige Lagen schließen
+früher, der Close-off geschieht bei einer kritischen offenen Porosität, die von der
+Akkumulationsrate abhängt, und Länge und Tiefe der Lock-in-Zone folgen aus Akkumulation und
+mikrostruktureller Variabilität ([Gregory et al. 2014](https://tc.copernicus.org/articles/8/91/2014/)).
+Am AWI arbeitet **Johannes Freitag** genau daran — Röntgen-μCT an geschichtetem Firn,
+Direktbeobachtung des Porenverschlusses, Verknüpfung von Schichtung und Lufteinschluss.
+
+**Was eine In-situ-Messung hinzufügen könnte — und was nicht.**
+
+* **Nicht** die Mikrostruktur. μCT löst Millimeterlagen auf; unsere Auflösung ist der
+  Knotenabstand, also Meter. Für die Frage, *warum* eine Lage früher schließt, taugt das
+  Verfahren nicht.
+* **Wohl** eine andere Größe: `b` misst die Porosität, die **pneumatisch mit der Atmosphäre
+  verbunden** ist. Eine Pore, die lokal offen ist, aber unter einer dichten Lage liegt,
+  antwortet nicht auf das barometrische Signal. Das ist die funktionale Definition, die
+  Firnluft-Modelle brauchen — und die aus einer Probe im Labor nicht folgt, weil dort die
+  Verbindung zur Säule durchtrennt ist.
+* **Ohne Probennahme.** Keine Relaxation nach der Entnahme, keine Schnittblasen-Korrektur,
+  kein Volumenfehler — die drei Beiträge, aus denen die 2 bis 20 % der Labormethode
+  stammen. Unsere 5 bis 9 % nach ein bis drei Jahren lägen in derselben Größenordnung, mit
+  anderen Fehlerquellen.
+* **Kontinuierlich.** Ein Kern ist eine Momentaufnahme; die Kette misst weiter, und der
+  Sensor wandert mit der Akkumulation durch die Zone.
+
+Ob das den Aufwand wert ist, ist eine Frage an die Firnluft-Gemeinschaft und wäre mit
+Johannes Freitag in einem Gespräch zu klären — er kennt sowohl die Labormethoden als auch
+deren Grenzen.
+
+## Einordnung: was daran bekannt ist
+
+Die Physik ist Lehrbuchstoff, nicht neu. Der Vorgang heißt in der technischen Thermodynamik
+**Behälterfüllung**: ein starres Volumen wird aus einer Leitung befüllt, die Energiebilanz des
+offenen Systems lautet `dU = h·dm + δQ`. Zwei Grenzfälle stehen in jedem Lehrbuch —
+adiabatisch endet die Füllung bei `T = γ·T₀`, isotherm wird die Wärme `Q = V·Δp` frei. Unser
+Fall ist der isotherme, weil die Eismatrix als Thermostat wirkt; `V` ist das Porenvolumen, also
+`φ` je Einheitsvolumen.
+
+Dieselbe Rechnung steckt in mehreren gut untersuchten Anwendungen:
+
+* **Betankung von Druckgasbehältern** — dass ein Wasserstofftank beim Befüllen warm wird, ist
+  ein Standardproblem der Fahrzeugtechnik, inklusive der Wärmeabgabe an die Behälterwand.
+* **Druckluftspeicher (CAES)** — die Kompressionswärme und der isotherme Grenzfall sind der
+  Kern der Auslegung.
+* **Gaspyknometrie** — Porenvolumen wird gemessen, indem Gas in ein bekanntes Volumen expandiert
+  und der Druck abgelesen wird; die begleitende Temperaturtransiente ist dort eine bekannte
+  Fehlerquelle, auf deren Abklingen man wartet. Das ist im Prinzip dieselbe Messung wie hier,
+  nur im Labor und mit dem Gas als Messgröße statt der Temperatur.
+
+Für **natürliche poröse Medien** ist die Gasseite gut untersucht — barometrisches Pumpen im
+Firn und im Boden als Transportmechanismus —, die thermische Seite deutlich weniger. Was ich
+in der Recherche nicht gefunden habe, ist die Kombination: der Firn als Kalorimeter für die
+barometrische Kompression seiner eigenen Porenluft, mit `b = φ/(ρc)` als Messgröße für die
+offene Porosität. Zwei Websuchen sind allerdings keine Literaturrecherche; vor einer
+Neuheitsbehauptung wären drei Ecken zu prüfen: die Hochpräzisions-Bohrlochthermometrie (dort
+wird auf mK-Niveau gearbeitet und über Störquellen diskutiert), die Bodenphysik zum
+barometrischen Pumpen, und die Höhlenmeteorologie.
+
+## Was gilt und was offen ist
+
+* Die Firntemperatur folgt dem Luftdruck mit `b = φ/(ρ c)`, gemessen 0,025–0,037 mK/hPa bei
+  16–30 m, phasengleich, mit 68–86 % erklärter Varianz.
+* Der Effekt reicht bis zum Firn-Eis-Übergang, gedämpft um gut eine Größenordnung, und geht
+  darunter in den thermoelastischen Boden des Eises über.
+* Nachweisbar ist er nur im verfüllten Loch; im offenen überdeckt ihn die Advektion in der
+  Bohrlochluft um zwei Größenordnungen.
+* Offen: das Verhalten unterhalb eines Tages. `r WINDOW` Tage Tagesmittelwerte lösen weder
+  `dp/dt` noch die Relaxation auf. Eine Messreihe mit stündlicher Abtastung — oder eine
+  Druckkammer im Labor — würde Mechanismus und Zeitkonstante direkt zeigen.
+* Ebenfalls offen: der absolute Versatz zwischen den Ketten. Beide laufen auf der
+  universellen Mean-S4-Kurve; der Kalibrierrest liegt bei 37 mK RMS und begrenzt jeden
+  Vergleich von Mittelwerten, nicht aber die hier ausgewerteten Streuungen und Steigungen.
