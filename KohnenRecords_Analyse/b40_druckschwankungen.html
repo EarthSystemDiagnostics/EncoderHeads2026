@@ -2598,6 +2598,8 @@ Figure 2
 </div>
 </div>
 <p>Der Zusatzanteil ist mit dem B50-dp/dt unkorreliert. Die wahrscheinliche Quelle ist die Druckänderung, die eine Referenz mit zwei Werten am Tag nicht auflöst (Abschnitt B46 unten); Wind ist nicht ausgeschlossen.</p>
+<p><strong>Zeitauflösung von dp/dt.</strong> Die Temperatur ist eine Punktmessung um 17:38 UTC. dp/dt ist die Steigung zwischen zwei B50-Werten (09:03 und 21:03 UTC), der Intervallmitte zugeordnet und auf 17:38 interpoliert: 79 % Gewicht auf 09:03→21:03, 21 % auf 21:03→09:03 des Folgetags. Die Temperatur antwortet aber auf die Druckänderung der letzten Minuten bis Viertelstunde (τ, siehe unten). Die 12-h-Steigung steht also für diese Rate; der erklärte Anteil ist eine Untergrenze, und <code>b</code> kann durch die Ersatzgröße verzerrt sein.</p>
+<p><strong>Warum beide Bereiche dasselbe Signal zeigen.</strong> Advektion oben und Kompressionswärme unten (folgende Abschnitte) sind verschiedene Prozesse, aber beide antworten linear auf den Druck und bauen ihre Störung schnell ab, oben mit τ ≈ 13 min, unten mit τ ≈ 46 s. Die Antwort ist in beiden Fällen ein Hochpass <code>p − Tiefpass_τ(p)</code>, und bei Tagesperioden ist ωτ &lt; 10⁻²: beide folgen <code>τ·dp/dt</code>. Die Zeitreihen sind deshalb zwangsläufig korreliert; verschieden ist nur <code>b(z)</code>. Weil beide dieselbe kurzfristige Rate sehen und sie mit derselben 12-h-Steigung geschätzt wird, ist auch der Fehler dieser Schätzung gemeinsam — das ist der Rest in Abbildung 2. Unterscheiden lassen sich die Prozesse erst bei Perioden in der Nähe von τ.</p>
 </section>
 <section id="oberhalb-des-close-off-advektion" class="level2">
 <h2 class="anchored" data-anchor-id="oberhalb-des-close-off-advektion">Oberhalb des Close-off: Advektion</h2>
@@ -2831,6 +2833,7 @@ Figure 4
 <h2 class="anchored" data-anchor-id="unterhalb-des-close-off-kompressionswärme-der-bohrlochluft">Unterhalb des Close-off: Kompressionswärme der Bohrlochluft</h2>
 <p>Bei 92–201 m liegt <code>b</code> bei 0,012–0,026 mK je hPa/Tag, ohne Trend mit der Tiefe, und ist <strong>positiv, obwohl der Gradient dort umgekehrt ist</strong> (Temperatur steigt nach unten, +1,2 bis +4,7 mK/m). Advektion würde dort ein negatives <code>b</code> verlangen.</p>
 <p>Die Luft im Loch erwärmt sich bei Kompression adiabatisch um <code>(R/c_p)·T/p</code> je hPa und gibt die Wärme an die Wand ab. Ändert sich der Druck langsam gegen die Wärmeleitzeit, stellt sich im Zylinder ein stationäres Profil ein; die Erwärmung beträgt auf der Achse <code>(R/c_p)(T/p)·(a²/4κ)·dp/dt</code>, im Querschnittsmittel die Hälfte davon.</p>
+<p><strong>Warum dp/dt und nicht p.</strong> Im verfüllten Loch folgt die Kompressionswärme dem Druck (<code>b = φ/(ρc)</code> ≈ 0,03 mK/hPa, <code>druck_temperatur.qmd</code>): die Porenluft gibt ihre Wärme in Millisekunden an die Eismatrix ab, die Matrix behält sie, und der Sensor misst die Matrix — die gespeicherte Wärme, proportional zu p. Im offenen Loch misst der Sensor die Luft. Sie gibt ihre Wärme in ~46 s an die Wand ab, deren Temperatur sich dabei nicht messbar ändert (die Luft trägt ~5·10⁻⁴ der Wärmekapazität). Der Überschuss der Luft gegenüber der Wand stellt sich auf das Gleichgewicht von Erwärmungsrate und Wärmeabfluss ein und ist damit proportional zu dp/dt. Derselbe Vorgang, zwei Beobachter: der Sensor im Firn sieht den Speicher, der Sensor in der Luft den Durchfluss.</p>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
@@ -2933,7 +2936,8 @@ Figure 5
 <ul>
 <li>Bei 21 und 32 m bleiben nach <code>b·F</code> 4,6 bzw. 1,2 mK (vorher 43 bzw. 14 mK). In B46 ist der Rest nahe dem Temperaturmaximum schief verteilt (Schiefe −1,2 bei 10–13 m, +1,2 bei 5 m), was auf Verschiebungen im Meterbereich deutet, bei denen der lineare Ansatz nicht mehr reicht.</li>
 <li>Welcher Prozess die 10–15 min bei B46 setzt, ist nicht geklärt; die Wärmeleitung zur Wand allein ergibt 20–50 s.</li>
-<li>Direkter Test: schnelle Daten aus B40 selbst. Die Hypothese sagt voraus, dass unterhalb von 92 m die Temperatur bei allen auflösbaren Perioden um 90° gegen den Druck verschoben ist (keine Hochpass-Ecke im Minutenbereich), oberhalb eine Ecke bei 10–15 min wie in B46.</li>
+<li>Direkter Test: schnelle Daten aus B40 selbst. Die Hypothese sagt voraus, dass unterhalb von 92 m die Temperatur bei allen auflösbaren Perioden um 90° gegen den Druck verschoben ist (keine Hochpass-Ecke im Minutenbereich), oberhalb eine Ecke bei 10–15 min wie in B46. Vorher ist die Verzögerung von ~70 s zwischen p und T desselben Knotens zu klären (Abbildung 4).</li>
+<li>Ein Barometer mit 10-min-Werten in Kohnen würde die Rate unmittelbar vor 17:38 liefern; der Rest müsste damit kleiner werden.</li>
 </ul>
 </section>
 
