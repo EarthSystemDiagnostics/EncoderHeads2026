@@ -1,0 +1,358 @@
+---
+title: "Temperaturschwankungen im offenen Bohrloch B40"
+subtitle: "head04 (200 m, luftgefüllt, Ø 12 cm), Januar–August 2026, mit den 95-s-Daten von B46"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+**Hypothese.** Die Tag-zu-Tag-Schwankungen in B40 sind ein einziges druckgetriebenes Signal mit
+festem Tiefenprofil, `T′(z,t) = b(z)·F(t)`, mit `F` ≈ dp/dt. Das Profil `b(z)` hat zwei Bereiche:
+oberhalb des Close-off strömt Luft durch das Loch und trägt den Temperaturgradienten mit
+(Advektion); unterhalb erwärmt sich die Bohrlochluft adiabatisch bei Kompression und gibt die
+Wärme an die Wand ab (Kompressionswärme).
+
+```{r setup}
+library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
+BLUE <- "#2a78d6"; ORANGE <- "#eb6834"; GREY <- "grey45"
+th <- theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+K   <- "data/"
+B46 <- "/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv"
+tp  <- function(x) as.POSIXct(x, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+
+h4 <- read.csv(paste0(K, "decoded_head04_231710_combined.csv")); h4$t <- tp(h4$time_utc)
+h3 <- read.csv(paste0(K, "decoded_head03_231709_combined.csv")); h3$t <- tp(h3$time_utc)
+d03 <- read.csv(paste0(K, "head03_depths.csv"))
+c4  <- unique(read.csv(paste0(K, "head04_calibration.csv"))[, c("node", "depth_m")])
+c4  <- c4[c4$node <= 20, ]
+
+# Druckreferenz: Netzmittel B50 (head03, 09 und 21 UTC), Sensoren nie unter −45 °C
+P3  <- sapply(d03$node, function(n) h3[[sprintf("n%d.pressure_hPa", n)]])
+Tm3 <- sapply(d03$node, function(n) min(h3[[sprintf("n%d.ntc1_temp_C", n)]], na.rm = TRUE))
+o3  <- order(h3$t); t3 <- as.numeric(h3$t[o3]); p3 <- rowMeans(P3[, Tm3 > -45], na.rm = TRUE)[o3]
+t3  <- t3[is.finite(p3)]; p3 <- p3[is.finite(p3)]
+
+# auf die head04-Messzeit (17:38 UTC) interpoliert
+h4 <- h4[order(h4$t), ]; tt <- as.numeric(h4$t)
+h4$p    <- approx(t3, p3, tt)$y
+h4$dpdt <- approx(t3[-1] - diff(t3)/2, diff(p3)/diff(t3) * 86400, tt)$y   # hPa/Tag
+h4 <- h4[is.finite(h4$p) & is.finite(h4$dpdt), ]
+td <- (as.numeric(h4$t) - as.numeric(h4$t[1])) / 86400
+
+prof <- sapply(c4$node, function(n) mean(h4[[sprintf("n%d.ntc1_temp_C", n)]], na.rm = TRUE))
+gfun <- splinefun(c4$depth_m, prof, method = "natural")
+```
+
+## Befund: ein Antrieb, alle Tiefen
+
+Je Tiefe wird die Temperatur hochpassgefiltert (loess-Residuum, span 0,2) und auf das ebenso
+gefilterte Drucksignal und auf dp/dt regressiert. Grundlage: `r nrow(h4)` Tagesprofile,
+`r format(min(h4$t), "%d.%m.")`–`r format(max(h4$t), "%d.%m.%Y")`.
+
+```{r b40-fit}
+rp <- resid(loess(h4$p ~ td, span = 0.2))
+sel <- which(c4$depth_m >= 21)
+R <- NULL; Rb <- NULL
+tab <- bind_rows(lapply(sel, function(i) {
+  n <- c4$node[i]; y <- h4[[sprintf("n%d.ntc1_temp_C", n)]] * 1000
+  y2 <- h4[[sprintf("n%d.ntc2_temp_C", n)]] * 1000
+  r <- y - predict(loess(y ~ td, span = 0.2), data.frame(td = td))
+  f <- lm(r ~ rp + h4$dpdt); s <- summary(f)$coefficients
+  rr <- rep(NA_real_, length(r)); rr[as.integer(names(resid(f)))] <- resid(f)
+  R <<- cbind(R, rr); Rb <<- cbind(Rb, r)
+  data.frame(z = c4$depth_m[i], grad = gfun(c4$depth_m[i], 1) * 1000,
+             sd_r = sd(r, na.rm = TRUE), b = s[3, 1], t = s[3, 3],
+             r2 = summary(f)$r.squared, sd_f = sd(resid(f)),
+             repl = sd(diff(y - y2), na.rm = TRUE) / sqrt(2)) }))
+colnames(R) <- colnames(Rb) <- round(tab$z)
+
+# Rest bei 26–50 m, normiert mit b, als zusätzliche Antriebsreihe (hPa/Tag)
+ref <- round(tab$z) %in% c(26, 32, 40, 50)
+up  <- rowMeans(sweep(R[, ref], 2, tab$b[ref], "/"))
+tab$b_rest  <- sapply(seq_len(ncol(R)), function(j) coef(lm(R[, j] ~ up))[2])
+tab$r_rest  <- sapply(seq_len(ncol(R)), function(j) cor(R[, j], up, use = "c"))
+tab$sd_rang1 <- apply(R - outer(up, tab$b), 2, sd, na.rm = TRUE)
+
+knitr::kable(tab |> transmute(`Tiefe (m)` = round(z), `dT/dz (mK/m)` = round(grad, 1),
+    `b (mK je hPa/Tag)` = signif(b, 3), t = round(t, 1), `R²` = round(r2, 2),
+    `Streuung (mK)` = signif(sd_r, 3), `nach dp/dt` = signif(sd_f, 3),
+    `Rest gegen Rest 26–50 m` = signif(b_rest, 3), r = round(r_rest, 2),
+    `nach b·F` = signif(sd_rang1, 2), `Replikat` = signif(repl, 2)), row.names = FALSE,
+  caption = "head04. b: Koeffizient von dp/dt. „Rest gegen Rest“: Steigung des Residuums gegen das mit b normierte Residuum bei 26–50 m. „nach b·F“: Streuung nach Abzug von b·(dp/dt + Rest).")
+```
+
+* dp/dt erklärt in jeder Tiefe 68–90 % der Varianz (t = 19–37). Der phasengleiche Druckanteil
+  ist daneben klein.
+* Der Rest ist über die ganze Säule korreliert, und seine Steigung gegen den Rest bei 26–50 m
+  ist in jeder Tiefe gleich `b` (Spalte „Rest gegen Rest“). Er hat also dasselbe Tiefenprofil
+  wie das Drucksignal. Ein Gleichtakt der Elektronik hätte in allen Tiefen dieselbe Amplitude
+  in mK; mit dem Residuum der Platinentemperatur korreliert er bei 111 und 158 m mit r = 0,14
+  bzw. 0,17.
+* Mit der Kette selbst als Referenz (`F = dp/dt + Rest`) sinkt die Streuung bei 92–201 m auf
+  0,03–0,04 mK, das Niveau des Replikatrauschens. Diese Tiefen gehen in die Bestimmung von
+  `F` nicht ein.
+
+
+```{r fig-zeitreihe, fig.height=7}
+zs <- c(26, 62, 134, 187)
+ts_df <- bind_rows(lapply(zs, function(z) { j <- which(round(tab$z) == z)
+  data.frame(t = h4$t, z = z, gemessen = Rb[, j], `b · dp/dt (B50)` = tab$b[j] * h4$dpdt,
+             check.names = FALSE) })) |>
+  pivot_longer(c(gemessen, `b · dp/dt (B50)`)) |>
+  mutate(zl = factor(sprintf("%d m  (b = %.3g)", z, tab$b[match(z, round(tab$z))]),
+                     sprintf("%d m  (b = %.3g)", zs, tab$b[match(zs, round(tab$z))])))
+ggplot(ts_df, aes(t, value, colour = name)) + geom_line(linewidth = 0.45) +
+  facet_wrap(~ zl, ncol = 1, scales = "free_y") +
+  scale_colour_manual(values = c(gemessen = "black", `b · dp/dt (B50)` = BLUE), name = NULL) +
+  labs(x = NULL, y = "Temperatur, Abweichung vom Trend (mK)") + th + theme(legend.position = "top")
+```
+
+Abbildung 1: Hochpassgefilterte Temperatur in vier Tiefen über und unter dem Close-off, dazu
+`b·dp/dt` mit dem Druck von B50. Die Amplitude unterscheidet sich zwischen 26 und 187 m um den
+Faktor 100, der Zeitverlauf ist derselbe.
+
+```{r fig-rest, fig.height=4.5, fig.width=9}
+deepz <- round(tab$z)[tab$z >= 90]
+rest_df <- bind_rows(lapply(deepz, function(z) { j <- which(round(tab$z) == z)
+  data.frame(z = factor(z), up = up, y = R[, j] / tab$b[j]) }))
+lim <- range(up, na.rm = TRUE)
+ggplot(rest_df, aes(up, y)) +
+  geom_abline(slope = 1, intercept = 0, colour = ORANGE, linewidth = 0.8) +
+  geom_point(size = 0.9, alpha = 0.5) + facet_wrap(~ z, nrow = 1, labeller = as_labeller(function(x) paste(x, "m"))) +
+  coord_cartesian(xlim = lim, ylim = 1.5 * lim) +
+  labs(x = "Rest bei 26–50 m, geteilt durch b (hPa/Tag)",
+       y = "Rest in der Tiefe, geteilt durch b (hPa/Tag)") + th
+```
+
+Abbildung 2: Der Teil, den dp/dt von B50 nicht erklärt, in 92–201 m gegen denselben Rest bei
+26–50 m, jeweils durch das eigene `b` geteilt. Die orange Linie ist die 1:1-Gerade, die bei einem
+gemeinsamen Antrieb gilt. Die tiefen Knoten gehen in die Referenz nicht ein.
+
+```{r rest-quelle}
+cat(sprintf("sd dp/dt (B50) = %.1f hPa/Tag, sd Zusatzanteil = %.1f hPa/Tag, Korrelation %.2f",
+            sd(h4$dpdt), sd(up, na.rm = TRUE), cor(h4$dpdt, up, use = "c")))
+```
+
+Der Zusatzanteil ist mit dem B50-dp/dt unkorreliert. Die wahrscheinliche Quelle ist die
+Druckänderung, die eine Referenz mit zwei Werten am Tag nicht auflöst
+(Abschnitt B46 unten); Wind ist nicht ausgeschlossen.
+
+## Oberhalb des Close-off: Advektion
+
+Bis 75 m nimmt die Temperatur im Loch nach unten ab, und `b` ist positiv: steigt der Druck,
+strömt Luft nach unten und bringt wärmere Luft von oben. Den Zeitverlauf zeigen erst die
+95-s-Daten von B46 (02.–05.01.2026, 60-m-Kette im noch offenen Loch, Druck und NTC an jedem
+Knoten).
+
+```{r b46}
+d46 <- tryCatch(read.csv(B46), error = function(e) NULL)
+ok46 <- !is.null(d46)
+if (ok46) {
+  d46$t <- as.POSIXct(d46$DateTime, tz = "UTC")
+  ts <- as.numeric(d46$t - d46$t[1], units = "secs")
+  dm <- read.csv(paste0(K, "head02_depths.csv")); dm60 <- dm[dm$chain == "60m-Kette", ]
+  hp <- function(x, tau) { y <- numeric(length(x)); lp <- x[1]
+    for (i in seq_along(x)) { if (i > 1) lp <- lp + (1 - exp(-(ts[i] - ts[i-1]) / tau)) * (x[i] - lp)
+                              y[i] <- x[i] - lp }; y }
+  pr46 <- sapply(dm60$node, function(n) mean(d46[[paste0(n, "_NTC1")]]))
+  g46  <- splinefun(dm60$depth_m, pr46, method = "natural")
+  taus <- exp(seq(log(60), log(6 * 3600), length.out = 40)); tr <- poly(ts, 3)
+  fit46 <- bind_rows(lapply(which(dm60$depth_m >= 16), function(i) {
+    n <- dm60$node[i]; T <- d46[[paste0(n, "_NTC1")]] * 1000; p <- d46[[paste0(n, "_Pressure")]] / 1000
+    rss <- sapply(taus, function(tau) sum(resid(lm(T ~ tr + hp(p, tau)))^2))
+    tau <- taus[which.min(rss)]; f <- lm(T ~ tr + hp(p, tau))
+    z <- dm60$depth_m[i]; G <- unname(coef(f)[5])
+    data.frame(z = z, tau = tau / 60, G = G, Gcol = -g46(z, 1) * 1000 * z / mean(p),
+               sd0 = sd(resid(lm(T ~ tr))), sd1 = sd(resid(f))) }))
+  knitr::kable(fit46 |> transmute(`Tiefe (m)` = z, `τ (min)` = round(tau, 1),
+      `G (mK/hPa)` = round(G, 1), `G / Säulenkompression` = round(G / Gcol),
+      `Streuung vorher (mK)` = round(sd0, 2), `nachher` = round(sd1, 2)), row.names = FALSE,
+    caption = "B46, offenes Loch: T = G·(p − Tiefpass_τ(p)) + Trend, mit dem Drucksensor desselben Knotens. Säulenkompression: G = −(dT/dz)·z/p.")
+}
+```
+
+```{r fig-b46-phase, fig.height=4.8, fig.width=10}
+if (ok46) {
+  dtg <- 95; tg <- seq(0, max(ts), by = dtg); ip <- function(y) approx(ts, y, tg)$y
+  edges <- exp(seq(log(0.06), log(30), length.out = 13))     # Periodengrenzen in h
+  sp <- bind_rows(lapply(which(dm60$depth_m >= 16), function(i) {
+    n <- dm60$node[i]
+    X <- cbind(ip(d46[[paste0(n, "_Pressure")]] / 1000), ip(d46[[paste0(n, "_NTC1")]] * 1000))
+    X <- apply(X, 2, function(x) resid(lm(x ~ poly(tg, 3))))
+    s <- spec.pgram(ts(X, deltat = dtg / 3600), taper = 0.1, plot = FALSE)
+    bind_rows(lapply(seq_len(length(edges) - 1), function(k) {
+      j <- which(1 / s$freq > edges[k] & 1 / s$freq <= edges[k + 1]); if (length(j) < 2) return(NULL)
+      Sxy <- sum(sqrt(s$coh[j] * s$spec[j, 1] * s$spec[j, 2]) * exp(1i * s$phase[j]))
+      H <- Conj(Sxy) / sum(s$spec[j, 1])
+      data.frame(z = dm60$depth_m[i], per = sqrt(edges[k] * edges[k + 1]),
+                 coh = Mod(Sxy)^2 / (sum(s$spec[j, 1]) * sum(s$spec[j, 2])),
+                 phase = Arg(H) * 180 / pi,
+                 gain = Mod(H) / fit46$G[fit46$z == dm60$depth_m[i]]) })) }))
+  pm <- expand.grid(per = exp(seq(log(0.06), log(30), length.out = 200)), tau = c(10, 15)) |>
+    mutate(w = 2 * pi / (per * 60), phase = atan(1 / (w * tau)) * 180 / pi,
+           gain = w * tau / sqrt(1 + (w * tau)^2), lab = sprintf("τ = %d min", tau))
+  sp <- sp |> filter(coh > 0.5)
+  # feste Verzögerung zwischen T und p eines Knotens (Abfragezeit oder Sensorantwort), τ = 13 min
+  dly <- optimize(function(D) with(sp, sum((phase - (atan(1 / (2*pi/(per*3600) * 780)) -
+                                   2*pi/(per*3600) * D) * 180/pi)^2)), c(0, 300))$minimum
+  pm <- bind_rows(pm |> mutate(typ = "Hochpass"),
+                  pm |> mutate(phase = phase - w / 60 * dly * 180 / pi, typ = "mit Verzögerung"))
+  base <- list(scale_x_log10(breaks = c(0.1, 0.3, 1, 3, 10, 24), labels = c("6 min", "18 min", "1 h", "3 h", "10 h", "24 h")),
+               scale_colour_viridis_c(name = "Tiefe (m)", end = 0.9), th, labs(x = "Periode"))
+  p1 <- ggplot(sp, aes(per, phase)) +
+    geom_line(aes(group = interaction(lab, typ), linetype = typ), data = pm, colour = ORANGE, linewidth = 0.8) +
+    geom_point(aes(colour = z), size = 2) + base +
+    scale_linetype_manual(values = c(Hochpass = "solid", `mit Verzögerung` = "22"), name = NULL) +
+    scale_y_continuous(breaks = seq(-90, 90, 30)) + labs(y = "Phase T gegen p (°)")
+  p2 <- ggplot(sp, aes(per, gain)) + geom_line(aes(group = lab), data = pm |> filter(typ == "Hochpass"), colour = ORANGE, linewidth = 0.8) +
+    geom_point(aes(colour = z), size = 2) + base + scale_y_log10() + labs(y = "Verstärkung / G")
+  p1 + p2 + plot_layout(guides = "collect")
+}
+```
+
+Abbildung 4: B46, offenes Loch, Übertragungsfunktion vom Druck auf die Temperatur bei 16–62 m
+(Bänder mit Kohärenz über 0,5). Orange durchgezogen: Hochpass erster Ordnung mit τ = 10 und 15 min.
+90° bedeutet T ∝ dp/dt, 0° bedeutet T ∝ p. Unterhalb von 20 min fällt die Phase weiter ab; das
+entspricht einer festen Verzögerung von `r if (ok46) sprintf("%.0f s", dly)` zwischen Druck- und
+Temperaturwert desselben Knotens (gestrichelt), knapp ein Messintervall (95 s). Ob sie aus der
+Abfragereihenfolge oder aus der Sensorantwort stammt, ist offen; auf τ hat sie keinen Einfluss.
+Die Verstärkung ist durch das angepasste `G` der jeweiligen Tiefe geteilt.
+
+```{r fig-b46-zoom, fig.height=5.5, fig.width=10}
+if (ok46) {
+  zsel <- c(21, 40, 62); win <- d46$t >= as.POSIXct("2026-01-03 12:00", tz = "UTC") &
+                                d46$t <  as.POSIXct("2026-01-04 06:00", tz = "UTC")
+  zm <- bind_rows(lapply(zsel, function(z) { n <- dm60$node[dm60$depth_m == z]
+    T <- d46[[paste0(n, "_NTC1")]] * 1000; p <- d46[[paste0(n, "_Pressure")]] / 1000
+    f <- fit46[fit46$z == z, ]; h <- hp(p, f$tau * 60)
+    fl <- lm(T ~ tr + h); mod <- f$G * h; obs <- T - (fitted(fl) - coef(fl)["h"] * h)
+    data.frame(t = d46$t, z = z, gemessen = obs, Modell = mod)[win, ] })) |>
+    pivot_longer(c(gemessen, Modell)) |> mutate(zl = factor(sprintf("%d m", z), sprintf("%d m", zsel)))
+  pz <- data.frame(t = d46$t, p = d46$N11_Pressure / 10)[win, ]
+  g0 <- ggplot(pz, aes(t, p - mean(p))) + geom_line(colour = GREY, linewidth = 0.4) +
+    labs(x = NULL, y = "p (Pa)") + th
+  g1 <- ggplot(zm, aes(t, value, colour = name)) + geom_line(linewidth = 0.45) +
+    facet_wrap(~ zl, ncol = 1, scales = "free_y") +
+    scale_colour_manual(values = c(gemessen = "black", Modell = BLUE), name = NULL,
+                        labels = c(gemessen = "gemessen", Modell = "G·(p − Tiefpass_τ p)")) +
+    labs(x = NULL, y = "T, ohne Trend (mK)") + th + theme(legend.position = "top")
+  g1 / g0 + plot_layout(heights = c(3, 1))
+}
+```
+
+Abbildung 5: 18 Stunden aus B46, 95-s-Abtastung. Oben die Temperatur in drei Tiefen mit dem
+angepassten Hochpassmodell, unten der Druck am 40-m-Knoten (Abweichung vom Mittel).
+
+* Bei 16–62 m ist die Temperatur bei Perioden von 20 min bis 3 h zu 0,85–0,92 kohärent mit dem
+  Druck. Die Phase geht von 71–79° bei 8–24 h über 50–56° bei 1–3 h auf 7–20° bei 20–60 min:
+  bei langsamen Änderungen folgt T der Rate, bei schnellen dem Druck. Das ist ein Hochpass
+  erster Ordnung mit **τ = 10–15 min**, in allen Tiefen gleich; das Modell entfernt 65–75 % der
+  Streuung.
+* Die Zeitkonstante ist nicht die des Sensors: bei 50 m fällt die Autokorrelation des Rests
+  nach 6 min auf 0,03, und die Verzögerung zwischen p und T beträgt nur rund 70 s
+  (Abbildung 4).
+* Die Amplitude `G` ist **25- bis 400-mal** größer als die Kompression der Luftsäule über dem
+  Knoten erzeugen kann. Durch das Loch strömt also weit mehr Luft als sein eigenes Volumen;
+  wahrscheinlich versorgt es die Porenluft des umgebenden Firns. Das erklärt auch, warum `b` am
+  Close-off zwischen 75 und 92 m um eine Größenordnung fällt: darunter ist die Wand dicht.
+* Bei B40 ist `b` bei 21–50 m 2- bis 7-mal größer als `G·τ` bei B46 in gleicher Tiefe.
+
+```{r ref12h}
+if (ok46) {
+  pn <- paste0(dm$node[dm$chain == "10m-Kette"], "_Pressure")
+  pb <- rowMeans(as.matrix(d46[, pn])) / 1000; s <- hp(pb, 780)
+  r2 <- sapply(0:7, function(ph) { tk <- seq(ph * 5400, max(ts), by = 43200); pk <- approx(ts, pb, tk)$y
+    ok <- ts > min(tk) & ts < max(tk)
+    cor(s[ok], approx(tk[-1] - 21600, diff(pk) / 43200, ts[ok], rule = 2)$y)^2 })
+  cat(sprintf("Anteil der Varianz von p − Tiefpass_13min(p), den eine 12-h-Referenz erfasst: %.0f %%", 100 * mean(r2)))
+}
+```
+
+Eine Druckreferenz mit zwei Werten am Tag erfasst in diesen drei ruhigen Januartagen etwa die
+Hälfte des relevanten Signals; in B40 mit den größeren Winteränderungen sind es 68–90 %. Der
+Rest aus dem ersten Abschnitt liegt in dieser Größenordnung.
+
+## Unterhalb des Close-off: Kompressionswärme der Bohrlochluft
+
+Bei 92–201 m liegt `b` bei 0,012–0,026 mK je hPa/Tag, ohne Trend mit der Tiefe, und ist
+**positiv, obwohl der Gradient dort umgekehrt ist** (Temperatur steigt nach unten, +1,2 bis
++4,7 mK/m). Advektion würde dort ein negatives `b` verlangen.
+
+Die Luft im Loch erwärmt sich bei Kompression adiabatisch um `(R/c_p)·T/p` je hPa und gibt die
+Wärme an die Wand ab. Ändert sich der Druck langsam gegen die Wärmeleitzeit, stellt sich im
+Zylinder ein stationäres Profil ein; die Erwärmung beträgt auf der Achse
+`(R/c_p)(T/p)·(a²/4κ)·dp/dt`, im Querschnittsmittel die Hälfte davon.
+
+```{r kompression}
+a <- 0.06; Tk <- 228.65; p <- 688; k_air <- 0.0206; rho <- p * 100 / (287.05 * Tk)
+kap <- k_air / (rho * 1004); dTdp <- 0.2857 * Tk / p          # K/hPa
+b_achse  <- dTdp * a^2 / (4 * kap) / 86400 * 1000              # mK je hPa/Tag
+b_mittel <- b_achse / 2
+deep <- tab |> filter(z >= 90)
+knitr::kable(data.frame(
+  Größe = c("adiabatische Erwärmung der Luft", "Temperaturleitfähigkeit Luft (−44,5 °C, 688 hPa)",
+            "a²/(4κ) bei a = 6 cm", "b auf der Bohrlochachse", "b im Querschnittsmittel",
+            "b gemessen, 92–201 m"),
+  Wert = c(sprintf("%.3f K/hPa", dTdp), sprintf("%.2e m²/s", kap), sprintf("%.0f s", a^2/(4*kap)),
+           sprintf("%.3f mK je hPa/Tag", b_achse), sprintf("%.3f mK je hPa/Tag", b_mittel),
+           sprintf("%.3f–%.3f (Mittel %.3f)", min(deep$b), max(deep$b), mean(deep$b)))),
+  row.names = FALSE, caption = "Kompressionswärme, ohne angepassten Parameter.")
+```
+
+```{r fig-profil, fig.height=6, fig.width=10}
+zz <- seq(21, 201, by = 1)
+g1 <- ggplot() + annotate("rect", ymin = 75, ymax = 92, xmin = -Inf, xmax = Inf, fill = "grey90") +
+  geom_vline(xintercept = 0, colour = "grey60") +
+  geom_path(aes(gfun(zz, 1) * 1000, zz), colour = GREY) +
+  geom_point(aes(grad, z), data = tab, size = 2.5) +
+  scale_y_reverse() + labs(x = "dT/dz im Loch (mK/m)", y = "Tiefe (m)") + th
+g2 <- ggplot(tab) + annotate("rect", ymin = 75, ymax = 92, xmin = 0, xmax = Inf, fill = "grey90") +
+  annotate("rect", xmin = b_mittel, xmax = b_achse, ymin = 92, ymax = 205, fill = ORANGE, alpha = 0.25) +
+  annotate("text", x = b_achse * 1.15, y = 150, hjust = 0, size = 3.6, colour = ORANGE,
+           label = "Kompressionswärme\nØ 12 cm\n(Mittel bis Achse)") +
+  annotate("text", x = 2, y = 83.5, size = 3.4, colour = GREY, label = "Close-off") +
+  geom_point(aes(b, z, colour = "b aus dp/dt"), size = 2.5) +
+  geom_point(aes(b_rest, z, colour = "b aus dem Rest"), size = 2.5, shape = 1, stroke = 1) +
+  scale_x_log10() + scale_y_reverse() +
+  scale_colour_manual(values = c("b aus dp/dt" = "black", "b aus dem Rest" = BLUE), name = NULL) +
+  labs(x = "b (mK je hPa/Tag, log)", y = NULL) + th + theme(legend.position = "top")
+g1 + g2 + plot_layout(widths = c(1, 1.3))
+```
+
+Abbildung 3: Links der Temperaturgradient im Loch, rechts der Koeffizient `b`. Oberhalb des
+Close-off (grau) ist der Gradient negativ und `b` groß; darunter kehrt der Gradient das Vorzeichen
+um, `b` bleibt positiv, fällt um eine Größenordnung und liegt im Band der Kompressionswärme
+(orange). Advektion würde unterhalb des Close-off ein negatives `b` verlangen.
+
+Vorzeichen und Tiefenunabhängigkeit stimmen. Die Amplitude liegt mit `r sprintf("%.3f", mean(deep$b))`
+gemessen bei `r sprintf("%.0f %%", 100 * mean(deep$b) / b_mittel)` des Querschnittsmittels und
+`r sprintf("%.0f %%", 100 * mean(deep$b) / b_achse)` des Achsenwerts. Ein Knoten, der an der Wand
+anliegt, sieht weniger als die Achse; die Lage der Knoten im Loch ist nicht bekannt. Advektion
+trägt unterhalb des Close-off rechnerisch weniger als 10⁻³ mK je hPa/Tag bei, weil die dichte
+Wand keinen Zustrom zulässt.
+
+Damit ist die Diskrepanz aus `druck_temperatur.qmd` (Abschnitt head04: gemessen 0,015 gegen
+1,6·10⁻⁴ mK je hPa/Tag bei 133 m) erklärt: unterhalb des Close-off ist das Signal Kompressionswärme
+der Luft, keine Advektion.
+
+## Offen
+
+* Bei 21 und 32 m bleiben nach `b·F` 4,6 bzw. 1,2 mK (vorher 43 bzw. 14 mK). In B46 ist der Rest
+  nahe dem Temperaturmaximum schief verteilt (Schiefe −1,2 bei 10–13 m, +1,2 bei 5 m), was auf
+  Verschiebungen im Meterbereich deutet, bei denen der lineare Ansatz nicht mehr reicht.
+* Welcher Prozess die 10–15 min bei B46 setzt, ist nicht geklärt; die Wärmeleitung zur Wand
+  allein ergibt 20–50 s.
+* Direkter Test: schnelle Daten aus B40 selbst. Die Hypothese sagt voraus, dass unterhalb von
+  92 m die Temperatur bei allen auflösbaren Perioden um 90° gegen den Druck verschoben ist
+  (keine Hochpass-Ecke im Minutenbereich), oberhalb eine Ecke bei 10–15 min wie in B46.
