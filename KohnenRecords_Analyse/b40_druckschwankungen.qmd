@@ -372,6 +372,58 @@ Damit ist die Diskrepanz aus `druck_temperatur.qmd` (Abschnitt head04: gemessen 
 1,6·10⁻⁴ mK je hPa/Tag bei 133 m) erklärt: unterhalb des Close-off ist das Signal Kompressionswärme
 der Luft, keine Advektion.
 
+## Korrektur der Temperaturreihen
+
+`pressure_correction.R` zieht `b(z)·F(t)` von den Rohdaten ab, für head04 (B40, Druck von B50)
+und für die 60-m-Luftkette von head03 (B50, eigener Druck, dp/dt zentriert über 24 h). `F` ist
+`dp/dt + Rest`, der Rest kommt aus den Referenztiefen 21–62 m. Für jede Tiefe wird er ohne diese
+Tiefe gebildet, so dass sich kein Knoten selbst korrigiert. Ergebnis:
+`data/head04_231710_pressure_corrected.csv` und `data/head03_231709_pressure_corrected.csv`, mit
+den Spalten der Rohdaten und der Markierung `druckkorrigiert`.
+
+```{r korrektur}
+source("pressure_correction.R", local = TRUE)
+knitr::kable(stats |> filter(z >= 13) |> transmute(Kopf, `Tiefe (m)` = round(z),
+    `Streuung vorher (mK)` = signif(sd_vor, 2), `nachher` = signif(sd_nach, 2),
+    `Trend vorher (mK/a)` = signif(rate_vor, 3), `nachher ` = signif(rate_nach, 3),
+    `Fehler vorher (mK/a)` = signif(rse_vor, 2), ` nachher` = signif(rse_nach, 2)),
+  row.names = FALSE,
+  caption = "Streuung: Tag-zu-Tag (loess-Residuum). Trend: linear über den Messzeitraum, Mittel NTC1/NTC2, Fehler AR(1)-korrigiert wie in b40_inversion.qmd.")
+```
+
+```{r fig-korrektur, fig.height=6.5}
+zk <- c(26, 62, 134)
+kd <- bind_rows(lapply(zk, function(z) { j <- which(round(dep4) == z)
+  data.frame(t = h4$t[ok4], z = z, roh = k4$y[, j], korrigiert = k4$y[, j] - k4$corr[, j]) })) |>
+  group_by(z) |> mutate(roh = roh - mean(korrigiert, na.rm = TRUE),
+                        korrigiert = korrigiert - mean(korrigiert, na.rm = TRUE)) |> ungroup() |>
+  pivot_longer(c(roh, korrigiert)) |>
+  mutate(name = factor(name, c("roh", "korrigiert")), zl = factor(sprintf("%d m", z), sprintf("%d m", zk)))
+ggplot(kd, aes(t, value, colour = name)) + geom_line(linewidth = 0.45) +
+  facet_wrap(~ zl, ncol = 1, scales = "free_y") +
+  scale_colour_manual(values = c(roh = "grey65", korrigiert = BLUE), name = NULL) +
+  labs(x = NULL, y = "Temperatur, Abweichung vom Mittel (mK)") + th + theme(legend.position = "top")
+```
+
+Abbildung 6: head04, Rohdaten und korrigierte Reihe (Mittel NTC1/NTC2) in drei Tiefen.
+
+* Die Tag-zu-Tag-Streuung sinkt bei head04 bei 26–50 m um den Faktor 8–16, bei 92–201 m von
+  0,08–0,16 auf 0,023–0,032 mK. Bei der Luftkette von head03 sinkt sie bei 21–50 m um den Faktor
+  7–21.
+* Die Trends ändern sich um 3–7 % ihres Fehlers. Die Korrektur entfernt Schwankungen, keine
+  Erwärmung; die kleine Verschiebung stammt aus dem mittleren dp/dt über den Messzeitraum.
+* Der Trendfehler (AR(1)-korrigiert) sinkt bei head04 meist um 15–50 %, bei head03 um 32–74 %;
+  bei head04 steigt er bei 40 m (+7 %) und 201 m (+57 %). Vor der Korrektur waren die Reste um
+  den linearen Trend bei head04 von Tag zu Tag unkorreliert (Lag-1-Autokorrelation −0,06 bis
+  +0,04 bei 16–158 m): die Bohrlochvariabilität dekorreliert innerhalb eines Tages. Danach bleibt
+  ein langsamer Rest (Autokorrelation 0,6–0,9), der den Trendfehler bestimmt und durch die
+  AR(1)-Korrektur stärker gewichtet wird. Bei 92–158 m hat er 0,04–0,05 mK Streuung, die Größe des
+  NTC1−NTC2-Rauschens; sein über die Tiefen gemeinsamer Anteil (0,09 mK, Jahresgang ±0,06 mK)
+  korreliert mit der Platinentemperatur (r = 0,58).
+* Für `b40_inversion.qmd`: die dort angenommene Dekorrelationszeit von 30 Tagen für die
+  Bohrlochvariabilität ist mit den Daten nicht vereinbar; gemessen ist höchstens ein Tag. Mit den
+  korrigierten Reihen entfällt dieser Fehlerterm weitgehend.
+
 ## Offen
 
 * Bei 21 und 32 m bleiben nach `b·F` 4,6 bzw. 1,2 mK (vorher 43 bzw. 14 mK). In B46 ist der Rest
