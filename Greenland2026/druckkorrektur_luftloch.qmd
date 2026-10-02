@@ -1,0 +1,415 @@
+---
+title: "Druckkorrektur im offenen Bohrloch"
+subtitle: "Test an der Doppelkette GRIP (IMEI 301434062008130): Luftkette gegen Schneekette als Referenz"
+author: "Thom Laepple"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    fig-width: 9
+    fig-height: 5
+    theme: flatly
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+Die Temperaturschwankungen in luftgefüllten Bohrlöchern folgen der Druckänderung,
+`T′(z,t) = b(z)·F(t)` mit `F ≈ dp/dt` (`../KohnenRecords_Analyse/b40_druckschwankungen.qmd`). Die
+Doppelkette erlaubt, die daraus abgeleitete Korrektur unabhängig zu prüfen: Kette 1 hängt im
+offenen Loch, Kette 2 im 10 m entfernten verfüllten Loch, mit denselben Tiefen. Die Schneekette
+misst den Firn und dient als Referenz.
+
+```{r setup}
+source("decode_core.R")
+library(dplyr); library(tidyr); library(ggplot2)
+BLUE <- "#2a78d6"; ORANGE <- "#eb6834"; GREY <- "grey60"
+th <- theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
+
+BIN <- setdiff(Sys.glob("../testdata/301434062008130-*.bin"), "../testdata/301434062008130-138.bin")
+FIELDS <- c("ntc1", "ntc2", "gnd", "pressure"); N_NODES <- 20L
+lab_cal <- load_lab_cal(NA_character_, N_NODES)
+depth_map <- rbind(
+  data.frame(position = 1:10,  chain = "Luft",   depth_m = c(1,3,5,8,10,13,16,21,26,30)),
+  data.frame(position = 11:20, chain = "Schnee", depth_m = c(1,3,5,8,10,13,16,21,26,30)))
+s <- bind_rows(lapply(BIN, function(f) {
+  b <- read_snowchain_bin(f, FIELDS, N_NODES); nd <- bin_to_nodes(b, FIELDS, lab_cal); nd$position <- nd$node
+  merge(nd, depth_map, by = "position") |> mutate(time = unix2utc(b$time_unix)) })) |>
+  mutate(T = rowMeans(cbind(ntc1_C, ntc2_C), na.rm = TRUE)) |>
+  distinct(time, chain, depth_m, .keep_all = TRUE)
+
+# Auswertefenster: letzte 45 Tage (wie druck_temperatur.qmd); davor klingt die Einbaustörung ab
+WINDOW <- 45
+tm <- sort(unique(s$time)); tm <- tm[tm >= max(tm) - WINDOW * 86400]
+tn <- as.numeric(tm); td <- (tn - tn[1]) / 86400
+ZS <- c(13, 16, 21, 26, 30)
+mat <- function(ch) sapply(ZS, function(z) { x <- s |> filter(chain == ch, depth_m == z)
+  x$T[match(tm, x$time)] * 1000 })
+A <- mat("Luft"); S <- mat("Schnee"); colnames(A) <- colnames(S) <- ZS
+p <- (s |> group_by(time) |> summarise(p = mean(pressure_hPa, na.rm = TRUE)))$p[match(tm, sort(unique(s$time)))]
+
+# Summit-AWS, stündlich (GEUS)
+aws <- tryCatch({ options(timeout = 120)
+  a <- read.csv("https://thredds.geus.dk/thredds/fileServer/aws/l3sites/csv/hour/SUM_hour.csv")
+  a$t <- as.numeric(as.POSIXct(a$time, tz = "UTC")); a[is.finite(a$p_u), c("t", "p_u")] },
+  error = function(e) NULL)
+stopifnot(!is.null(aws))
+pa   <- function(x) approx(aws$t, aws$p_u, x)$y
+dpdt <- (pa(tn + 3 * 3600) - pa(tn - 3 * 3600)) / 0.25          # hPa/Tag, ±3 h um die Messung
+
+hpf <- function(v) { if (all(is.na(v))) return(v); dd <- data.frame(y = v, x = td)
+  v - predict(loess(y ~ x, data = dd, span = 0.5), dd) }
+RA <- apply(A, 2, hpf); RS <- apply(S, 2, hpf); rp <- hpf(p)
+zv <- c("16", "21", "26", "30")
+```
+
+Ausgewertet werden `r length(tm)` Tagesprofile (`r format(min(tm), "%d.%m.")`–`r format(max(tm), "%d.%m.%Y")`,
+je 15:13 UTC). Temperatur ist das Mittel aus NTC1 und NTC2, beide Reihen und der Druck sind gleich
+hochpassgefiltert (loess-Residuum, span 0,5). Die Schneekette hat bei 13 m keinen Messwert.
+
+## Die Referenz: Schneekette
+
+```{r schnee}
+ref_tab <- bind_rows(lapply(c("16", "21", "26", "30"), function(z) {
+  f <- summary(lm(RS[, z] ~ rp))
+  data.frame(`Tiefe (m)` = as.numeric(z), `Streuung (mK)` = round(sd(RS[, z]), 3),
+             `b (mK/hPa)` = round(f$coefficients[2, 1], 4), `R²` = round(f$r.squared, 2),
+             `Rest (mK)` = round(sd(resid(f)), 3), check.names = FALSE) }))
+knitr::kable(ref_tab, row.names = FALSE,
+  caption = sprintf("Schneekette gegen den Kettendruck (in Phase), Druckstreuung %.1f hPa.", sd(rp)))
+```
+
+```{r fig-schnee, fig.height=5.5}
+sd_df <- bind_rows(lapply(c("16", "21", "30"), function(z) {
+  b <- coef(lm(RS[, z] ~ rp))[2]
+  data.frame(t = tm, z = paste(z, "m"), Schneekette = RS[, z], `b · p` = b * rp, check.names = FALSE) })) |>
+  pivot_longer(-c(t, z)) |> mutate(z = factor(z, paste(c(16, 21, 30), "m")))
+ggplot(sd_df, aes(t, value, colour = name)) + geom_line(linewidth = 0.6) +
+  facet_wrap(~ z, ncol = 1, scales = "free_y") +
+  scale_colour_manual(values = c(Schneekette = ORANGE, `b · p` = "black"), name = NULL) +
+  labs(x = NULL, y = "Temperatur, Abweichung vom Trend (mK)") + th + theme(legend.position = "top")
+```
+
+Abbildung 1: Schneekette und Kompressionswärme `b·p` mit dem Druck der Kette. Die Skala ist
+Zehntel-mK; die Schneekette folgt dem Druck in Phase.
+
+Die Schwankung im verfüllten Loch ist zu 72–93 % Kompressionswärme der Porenluft, in Phase mit p
+und mit `b = φ/(ρc)` wie in `druck_temperatur.qmd`. Nach deren Abzug bleiben 0,04–0,05 mK. Als
+Referenz für die Luftkette, deren Schwankungen 3–23 mK betragen, ist die Schneekette damit um zwei
+Größenordnungen genauer als nötig.
+
+## Die Korrektur der Luftkette
+
+Zwei Stufen, beide nur mit Daten aus dem offenen Loch und dem Druck:
+
+* **b·dp/dt:** Regression je Tiefe auf die Druckänderung der Summit-AWS in den ±3 h um die Messung.
+* **b·F:** zusätzlich der Rest, den dp/dt nicht erklärt, gemittelt über die übrigen Tiefen
+  13–30 m und je durch `b` geteilt (für jede Tiefe ohne diese Tiefe selbst). `F = dp/dt + Rest`.
+
+```{r fig-scatter, fig.height=4.2, fig.width=10}
+sc <- bind_rows(lapply(zv, function(z) data.frame(z = factor(paste(z, "m"), paste(zv, "m")),
+                                                  dpdt = dpdt, T = RA[, z])))
+ggplot(sc, aes(dpdt, T)) + geom_hline(yintercept = 0, colour = "grey80") + geom_vline(xintercept = 0, colour = "grey80") +
+  geom_point(size = 1.6, alpha = 0.7) + geom_smooth(method = "lm", se = FALSE, colour = BLUE, linewidth = 0.8) +
+  facet_wrap(~ z, nrow = 1, scales = "free_y") +
+  labs(x = "dp/dt Summit-AWS, ±3 h um die Messung (hPa/Tag)", y = "Luftkette, Abweichung vom Trend (mK)") + th
+```
+
+Abbildung 2: Unruhe der Luftkette gegen die Druckänderung um die Messzeit. Steigt der Druck,
+strömt wärmere Luft von oben nach (der Gradient im Loch ist negativ).
+
+```{r korrektur}
+b1 <- setNames(sapply(colnames(RA), function(z) unname(coef(lm(RA[, z] ~ dpdt))[2])), colnames(RA))
+rr <- RA - outer(dpdt, b1)
+korr <- sapply(colnames(RA), function(z) { k <- setdiff(colnames(RA), z)
+  F <- dpdt + rowMeans(sweep(rr[, k, drop = FALSE], 2, b1[k], "/"))
+  coef(lm(RA[, z] ~ F))[2] * F })
+colnames(korr) <- colnames(RA)
+
+tab <- data.frame(z = as.numeric(zv),
+  r2   = sapply(zv, function(z) summary(lm(RA[, z] ~ dpdt))$r.squared),
+  roh  = sapply(zv, function(z) sd(RA[, z] - RS[, z])),
+  dpdt = sapply(zv, function(z) sd(RA[, z] - b1[z] * dpdt - RS[, z])),
+  bF   = sapply(zv, function(z) sd(RA[, z] - korr[, z] - RS[, z])),
+  ref  = sapply(zv, function(z) sd(RS[, z])))
+knitr::kable(tab |> transmute(`Tiefe (m)` = z, `R² dp/dt` = round(r2, 2),
+    `roh` = round(roh, 1), `nach b·dp/dt` = round(dpdt, 1), `nach b·F` = round(bF, 2),
+    `Faktor` = round(roh / bF, 1), `Schneekette selbst` = round(ref, 2)), row.names = FALSE,
+  caption = "Streuung der Differenz Luftkette − Schneekette (mK). Faktor: roh / nach b·F.")
+```
+
+```{r fig-zeitreihe, fig.height=6}
+fz <- c("16", "21", "30")
+zd <- bind_rows(lapply(fz, function(z) data.frame(t = tm, z = paste(z, "m"),
+  `Luft, roh` = RA[, z], `Luft, korrigiert` = RA[, z] - korr[, z], Schnee = RS[, z], check.names = FALSE))) |>
+  pivot_longer(-c(t, z)) |>
+  mutate(name = factor(name, c("Luft, roh", "Luft, korrigiert", "Schnee")),
+         z = factor(z, paste(fz, "m")))
+ggplot(zd, aes(t, value, colour = name)) + geom_line(linewidth = 0.5) +
+  facet_wrap(~ z, ncol = 1, scales = "free_y") +
+  scale_colour_manual(values = c(`Luft, roh` = GREY, `Luft, korrigiert` = BLUE, Schnee = ORANGE), name = NULL) +
+  labs(x = NULL, y = "Temperatur, Abweichung vom Trend (mK)") + th + theme(legend.position = "top")
+```
+
+Abbildung 3: Hochpassgefilterte Temperatur in drei Tiefen. Die Schneekette (orange) schwankt um
+0,1 mK und liegt auf dieser Skala auf der Nulllinie.
+
+```{r fig-profil, fig.height=4.5, fig.width=8}
+pd <- tab |> transmute(z, `Luft, roh` = roh, `nach b·dp/dt` = dpdt, `nach b·F` = bF,
+                       `Schnee` = ref,
+                       `Schnee ohne b·p` = sapply(zv, function(zz) sd(resid(lm(RS[, zz] ~ rp))))) |>
+  pivot_longer(-z) |>
+  mutate(name = factor(name, c("Luft, roh", "nach b·dp/dt", "nach b·F", "Schnee", "Schnee ohne b·p")))
+ggplot(pd, aes(value, z, colour = name, shape = name)) + geom_path(linewidth = 0.4) + geom_point(size = 2.6) +
+  scale_x_log10() + scale_y_reverse(breaks = as.numeric(zv)) +
+  scale_colour_manual(values = c(`Luft, roh` = GREY, `nach b·dp/dt` = "grey30", `nach b·F` = BLUE,
+                                 Schnee = ORANGE, `Schnee ohne b·p` = ORANGE), name = NULL) +
+  scale_shape_manual(values = c(16, 16, 16, 16, 1), name = NULL) +
+  labs(x = "Streuung (mK, log)", y = "Tiefe (m)") + th
+```
+
+Abbildung 4: Fehler der Luftkette gegenüber der Schneekette vor und nach der Korrektur, dazu die
+Streuung der Schneekette selbst.
+
+## Wie tief muss verfüllt werden?
+
+Die Unruhe im offenen Loch fällt mit der Tiefe, weil der Gradient im Loch abnimmt und unterhalb
+des Close-off die Advektion entfällt. Für die Tiefen unter 30 m liefert B40 (head04, Kohnen,
+offenes 200-m-Loch, 180 Tagesprofile) das Profil, aus `../KohnenRecords_Analyse/pressure_correction.R`.
+
+```{r fig-tiefe, fig.height=6, fig.width=9}
+b40 <- tryCatch(read.csv("../KohnenRecords_Analyse/data/pressure_correction_stats.csv"), error = function(e) NULL)
+td_df <- bind_rows(
+  data.frame(Standort = "GRIP, offen", z = tab$z, roh = tab$roh, korr = tab$bF),
+  if (!is.null(b40)) b40 |> filter(grepl("head04", Kopf), z >= 13) |>
+    transmute(Standort = "B40, offen", z, roh = sd_vor, korr = sd_nach),
+  data.frame(Standort = "GRIP, verfüllt", z = tab$z, roh = tab$ref,
+             korr = sapply(zv, function(zz) sd(resid(lm(RS[, zz] ~ rp)))))) |>
+  pivot_longer(c(roh, korr), names_to = "Zustand") |>
+  mutate(Zustand = factor(ifelse(Zustand == "roh", "ohne Korrektur", "mit Korrektur"),
+                          c("ohne Korrektur", "mit Korrektur")))
+ggplot(td_df, aes(value, z, colour = Standort, linetype = Zustand, shape = Zustand)) +
+  annotate("rect", ymin = 75, ymax = 92, xmin = 0, xmax = Inf, fill = "grey92") +
+  annotate("text", x = 30, y = 83.5, label = "Close-off B40", colour = GREY, size = 3.4) +
+  geom_vline(xintercept = c(0.1, 2.8), colour = "grey50", linetype = "dotted") +
+  annotate("text", x = c(0.1, 2.8), y = 5, label = c("0,1 mK", "2,8 mK\n(Kalibrierung)"),
+           hjust = -0.05, size = 3.3, colour = "grey30") +
+  geom_path(linewidth = 0.6) + geom_point(size = 2.2) +
+  scale_x_log10() + scale_y_reverse(breaks = c(13, 21, 30, 40, 50, 62, 75, 92, 111, 134, 158, 187, 201), minor_breaks = NULL) +
+  scale_colour_manual(values = c(`GRIP, offen` = BLUE, `B40, offen` = "black", `GRIP, verfüllt` = ORANGE), name = NULL) +
+  scale_shape_manual(values = c(16, 1), name = NULL) +
+  labs(x = "Tag-zu-Tag-Streuung (mK, log)", y = "Tiefe (m)") + th
+```
+
+Abbildung 5: Tag-zu-Tag-Streuung im offenen Loch (GRIP, B40) gegen die Tiefe, ohne und mit
+Korrektur `b·F`, dazu das verfüllte Loch in GRIP. Gepunktet: 0,1 mK und die relative Kalibrierung
+von 2,8 mK.
+
+```{r tiefe-tab}
+if (!is.null(b40)) {
+  t40 <- b40 |> filter(grepl("head04", Kopf), z >= 20) |>
+    transmute(`Tiefe (m)` = round(z), `ohne Korrektur (mK)` = signif(sd_vor, 2), `mit Korrektur (mK)` = signif(sd_nach, 2))
+  knitr::kable(t40, row.names = FALSE, caption = "B40, offenes Loch: Tag-zu-Tag-Streuung.")
+}
+```
+
+* **Für 2,8 mK** (relative Kalibrierung) liegt das offene Loch in B40 ohne Korrektur erst ab
+  ~60 m darunter (50 m: 3,3 mK, 62 m: 0,96 mK), mit Korrektur ab ~26 m (21 m: 5,8 mK, 26 m:
+  1,1 mK). Ohne Druckmessung wäre also bis **~60 m** zu verfüllen, mit Korrektur bis **~25 m**.
+  In GRIP liegt die korrigierte Luftkette bei 26–30 m bei 0,8–0,9 mK.
+* **Für 0,1 mK** (Niveau des verfüllten Lochs) reicht das offene Loch erst unterhalb des
+  Close-off, mit und ohne Korrektur: bei 62–75 m sind es auch korrigiert noch 0,13–0,16 mK, ab
+  92 m 0,08–0,16 mK ohne und 0,02–0,03 mK mit Korrektur. Verfüllt werden müsste dafür **bis zum
+  Close-off**, an Kohnen ~85–90 m.
+* Die Werte gelten für ein Loch, das über die ganze Länge offen ist. Ob ein verfüllter oberer
+  Abschnitt die Strömung darunter verringert, ist nicht gemessen; die Grenzen sind in diesem
+  Sinn obere Schranken. Die Kompressionswärme unterhalb des Close-off (≤ 0,1 mK) hängt nicht
+  von der Strömung ab und bleibt auch dann bestehen.
+* Die Unruhe skaliert mit dem Temperaturgradienten im Loch. Er ist saisonal und standortabhängig;
+  an einem Standort mit stärkerem Gradienten in 30–60 m verschieben sich die Grenzen nach unten.
+
+## Monatsmittel: das Tiefenprofil mit und ohne Korrektur
+
+Wie stark verschiebt die Korrektur das absolute Profil? Für B40 (Januar–Juli) werden je Monat die
+Mittel der Rohdaten und der korrigierten Reihe gebildet. Gezeigt ist die Abweichung vom mittleren
+korrigierten Profil des ganzen Zeitraums, damit Unterschiede im mK-Bereich sichtbar sind; die
+Fehlerbalken sind ±1 Standardfehler des Monatsmittels (AR(1)-korrigiert).
+
+```{r monat-b40}
+old <- setwd("../KohnenRecords_Analyse")
+b40ok <- tryCatch({ source("pressure_correction.R", local = TRUE); TRUE }, error = function(e) FALSE)
+setwd(old)
+if (b40ok) {
+  mon4 <- format(h4$t[ok4], "%m")
+  se_ar <- function(v) { v <- v[is.finite(v)]; n <- length(v); if (n < 5) return(NA)
+    r1 <- cor(v[-1], v[-n]); r1 <- max(min(r1, 0.95), 0); sd(v) / sqrt(n * (1 - r1) / (1 + r1)) }
+  ref4 <- colMeans(k4$y - k4$corr, na.rm = TRUE)
+  mp <- bind_rows(lapply(seq_along(dep4), function(j) {
+    raw <- k4$y[, j]; kor <- raw - k4$corr[, j]
+    rr <- k4$r[, j]; rk <- rr - k4$corr[, j]
+    bind_rows(lapply(sort(unique(mon4)), function(m) { i <- mon4 == m
+      data.frame(z = dep4[j], Monat = m,
+                 Version = c("roh", "korrigiert"),
+                 T = c(mean(raw[i], na.rm = TRUE), mean(kor[i], na.rm = TRUE)) - ref4[j],
+                 se = c(se_ar(rr[i]), se_ar(rk[i]))) })) })) |>
+    filter(z >= 21) |>
+    mutate(Version = factor(Version, c("roh", "korrigiert")),
+           Bereich = factor(ifelse(z < 80, "21–75 m", "92–201 m"), c("21–75 m", "92–201 m")),
+           Monat = factor(Monat, sprintf("%02d", 1:12), month.abb))
+}
+```
+
+```{r fig-monat-b40, fig.height=8, fig.width=10}
+if (b40ok) {
+  ggplot(mp, aes(T, z, colour = Monat)) +
+    geom_vline(xintercept = 0, colour = "grey75") +
+    geom_errorbarh(aes(xmin = T - se, xmax = T + se), height = 0, alpha = 0.6) +
+    geom_path(aes(group = Monat), linewidth = 0.5) + geom_point(size = 1.8) +
+    facet_grid(Bereich ~ Version, scales = "free") + scale_y_reverse() +
+    scale_colour_viridis_d(option = "D", end = 0.9, drop = TRUE, name = NULL) +
+    labs(x = "Monatsmittel minus mittleres korrigiertes Profil (mK)", y = "Tiefe (m)") + th
+}
+```
+
+Abbildung 6: B40, Monatsmittel der Temperatur als Abweichung vom mittleren korrigierten Profil,
+links Rohdaten, rechts korrigiert. Oben 21–75 m, unten 92–201 m (andere x-Skala).
+
+```{r tab-monat-b40}
+if (b40ok) {
+  d4 <- mp |> select(z, Monat, Version, T, se) |>
+    pivot_wider(names_from = Version, values_from = c(T, se)) |>
+    group_by(z) |> summarise(`max |korr − roh| (mK)` = signif(max(abs(T_korrigiert - T_roh)), 2),
+                             `SE roh (mK)` = signif(median(se_roh), 2),
+                             `SE korrigiert (mK)` = signif(median(se_korrigiert), 2)) |>
+    rename(`Tiefe (m)` = z) |> mutate(`Tiefe (m)` = round(`Tiefe (m)`))
+  knitr::kable(d4, row.names = FALSE,
+    caption = "B40: größte Verschiebung eines Monatsmittels durch die Korrektur und Median des Standardfehlers der Monatsmittel.")
+}
+```
+
+* Die Korrektur verschiebt die Monatsmittel um höchstens 3,9 mK bei 21 m, 1,2–1,3 mK bei 26–32 m,
+  0,3 mK bei 40–50 m und ≤ 0,01 mK unterhalb des Close-off. Die Verschiebung ist `b` mal dem
+  mittleren dp/dt des Monats und wechselt das Vorzeichen von Monat zu Monat.
+* Sie bleibt in jedem Monat innerhalb des Standardfehlers der Rohdaten. Die Monatsmittel selbst
+  werden durch die Korrektur nicht systematisch verfälscht; was sich ändert, ist ihre
+  Unsicherheit (Tabelle).
+
+Für GRIP liegen zwei Monate im Fenster. Die Sensoren der Doppelkette sind nicht einzeln
+kalibriert; sie laufen auf der universellen Mean-S4-Kurve mit einem Kalibrierrest von rund 37 mK
+RMS je Sensor (`druck_temperatur.qmd`). Die absoluten Profile der beiden Ketten unterscheiden sich
+um bis zu 110 mK, was in dieser Größenordnung liegt; die Korrektur ändert daran weniger als 1 mK.
+Vergleichbar ist deshalb die Änderung von August auf September, in der sich die Offsets
+herausheben. Ein Fehler in der Steigung der Kennlinie wirkt auf eine Änderung von wenigen mK nur
+anteilig (bei 1 % Steigungsfehler 0,05 mK).
+
+```{r fig-monat-grip, fig.height=4.5, fig.width=8}
+mg <- format(tm, "%m"); i1 <- mg == "08"; i2 <- mg == "09"
+dm <- function(v, r) c(mean(v[i2]) - mean(v[i1]), sqrt(var(r[i1]) / sum(i1) + var(r[i2]) / sum(i2)))
+gp <- bind_rows(lapply(zv, function(z) {
+  x <- rbind(dm(A[, z], RA[, z]), dm(A[, z] - korr[, z], RA[, z] - korr[, z]), dm(S[, z], RS[, z]))
+  data.frame(z = as.numeric(z), Version = c("Luft, roh", "Luft, korrigiert", "Schnee"),
+             d = x[, 1], se = x[, 2]) })) |>
+  mutate(Version = factor(Version, c("Luft, roh", "Luft, korrigiert", "Schnee")))
+ggplot(gp, aes(d, z, colour = Version)) +
+  geom_vline(xintercept = 0, colour = "grey75") +
+  geom_errorbarh(aes(xmin = d - se, xmax = d + se), height = 0) +
+  geom_path(linewidth = 0.5) + geom_point(size = 2.2) +
+  scale_y_reverse(breaks = as.numeric(zv)) +
+  scale_colour_manual(values = c(`Luft, roh` = GREY, `Luft, korrigiert` = BLUE, Schnee = ORANGE), name = NULL) +
+  labs(x = "Monatsmittel September minus August (mK)", y = "Tiefe (m)") + th
+```
+
+Abbildung 7: GRIP, Änderung des Monatsmittels von August (ab 14.08.) auf September in beiden
+Löchern, ±1 Standardfehler.
+
+```{r tab-monat-grip}
+knitr::kable(gp |> transmute(`Tiefe (m)` = z, Version, `Sep − Aug (mK)` = round(d, 2), `SE (mK)` = round(se, 2)) |>
+  pivot_wider(names_from = Version, values_from = c(`Sep − Aug (mK)`, `SE (mK)`)), row.names = FALSE)
+```
+
+* Bei 16 und 21 m stimmt die korrigierte Luftkette mit der Schneekette innerhalb von 1 SE überein
+  (−6,8 ± 1,0 gegen −6,6 mK; 7,5 ± 0,5 gegen 7,1 mK). Roh ist der Standardfehler 5–6-mal größer
+  (6,4 bzw. 4,9 mK), der Mittelwert liegt zufällig ebenfalls nahe.
+* Bei 26 und 30 m weichen beide Löcher um 2,3 bzw. 0,9 mK voneinander ab, weit über dem
+  Standardfehler der korrigierten Reihe (0,2–0,25 mK). Das ist ein Unterschied zwischen den
+  Löchern, weder Druckeffekt noch Kalibrieroffset; roh wäre er im Standardfehler (2,3 bzw. 1,0 mK) nicht erkennbar.
+
+## Beeinflusst der Druck das mittlere Profil?
+
+In erster Ordnung nicht: Kompressionswärme und Verschiebung der Luft hängen linear vom Druck ab,
+der Druck schwankt um einen festen Mittelwert, beide mitteln sich heraus. Zwei Effekte zweiter
+Ordnung bleiben, beide hier für B40 abgeschätzt.
+
+**Zusätzlicher Wärmetransport entlang des Lochs.** Die Luft pendelt und hält ihre Störung über τ.
+Das wirkt wie eine axiale Diffusivität `K_eff = ξ'²·⟨dp/dt·(p − Tiefpass_τ p)⟩`, mit der
+Verschiebung je hPa `ξ' = b/(−Γ·τ)`. Der Mittelwert stammt aus dem 95-s-Druck von B46. Die an die
+Wand abgegebene Wärme hängt an der Profilkrümmung `T''`; für eine Linienquelle im Firn
+(`k_f` = 0,6 W/(m·K)) ist die Verschiebung der Wandtemperatur
+`ΔT ≈ ρ_L c_L A K_eff T''/(2π k_f)·ln(L/a)`, mit L = 10 m.
+
+**Abtastfehler im offenen Loch.** Der Sensor misst Luft aus z + ξ; im Zeitmittel liegt er um
+`½·⟨ξ²⟩·T''` neben der Wandtemperatur. `ξ_rms` folgt aus Tag-zu-Tag-Streuung / |Γ|.
+
+```{r zweite-ordnung}
+B46P <- "/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv"
+Q <- tryCatch({
+  d46 <- read.csv(B46P); t46 <- as.numeric(as.POSIXct(d46$DateTime, tz = "UTC"))
+  p46 <- rowMeans(as.matrix(d46[, grep("^N(79|80|81|82|83|84|85|86|88|89|90|91)_Pressure$", names(d46))])) / 1000
+  lp <- p46[1]; h <- numeric(length(p46))
+  for (i in seq_along(p46)) { if (i > 1) lp <- lp + (1 - exp(-(t46[i] - t46[i-1]) / 780)) * (p46[i] - lp); h[i] <- p46[i] - lp }
+  ps <- as.numeric(stats::filter(p46, rep(1/5, 5), sides = 2))
+  mean(c(NA, diff(ps) / diff(t46)) * h, na.rm = TRUE) }, error = function(e) 2.7e-6)
+if (b40ok) {
+  pr4 <- colMeans(k4$y - k4$corr, na.rm = TRUE) / 1000
+  g4 <- splinefun(dep4, pr4, method = "natural")
+  sel <- which(dep4 >= 20 & dep4 < 80)
+  zo <- data.frame(z = round(dep4[sel]), b = k4$b[sel], G = g4(dep4[sel], 1) * 1000,
+                   T2 = g4(dep4[sel], 2) * 1000, sdT = apply(k4$r[, sel], 2, sd, na.rm = TRUE)) |>
+    mutate(xi = b / (-G * 780 / 86400), Keff = xi^2 * Q,
+           C = 1000 * pi * 0.06^2 * Keff,
+           dT_wand = C * T2 / 1000 / (2 * pi * 0.6) * log(10 / 0.06) * 1000,
+           xi_rms = sdT / abs(G), dT_abtast = 0.5 * xi_rms^2 * T2) |>
+    filter(abs(G) > 1)          # bei 75 m ist Γ ≈ 0, ξ dort nicht definiert
+  knitr::kable(zo |> transmute(`Tiefe (m)` = z, `T'' (mK/m²)` = signif(T2, 2), `ξ' (m/hPa)` = signif(xi, 2),
+      `K_eff (m²/s)` = signif(Keff, 2), `Wand-ΔT (mK)` = signif(dT_wand, 2),
+      `ξ_rms (m)` = signif(xi_rms, 2), `Abtastfehler (mK)` = signif(dT_abtast, 2)), row.names = FALSE,
+    caption = sprintf("B40, Effekte zweiter Ordnung auf das mittlere Profil. ⟨dp/dt·(p − Tiefpass_τ p)⟩ = %.1e hPa²/s (B46, drei Januartage).", Q))
+}
+```
+
+* Der axiale Transport durch die pumpende Luft ersetzt etwa die Leitung des beim Bohren entfernten
+  Firns (Radius 3–11 cm), mehr nicht. Die Verschiebung der Wandtemperatur bleibt unter 0,1 mK;
+  bei 5- bis 10-mal stärkerem Pumpen in Stürmen unter 1 mK.
+* Der Abtastfehler `½⟨ξ²⟩T''` ist eine Verzerrung des Messwerts, kein Wärmeaustausch. Er beträgt
+  bei 21 m 2,5 mK, bei 26–32 m 0,6–0,8 mK und fällt ab 40 m auf ≤ 0,07 mK und wird durch die lineare
+  Korrektur `b·F` nicht entfernt. Sein Vorzeichen folgt `T''`.
+* Unterhalb des Close-off gibt es keine Verschiebung; die Kompressionswärme mittelt sich heraus.
+* Im verfüllten Loch gleicht sich die Porenluft in Millisekunden an das Eis an, und sie trägt
+  5·10⁻⁴ der Wärmekapazität; der Effekt auf das mittlere Profil liegt viele Größenordnungen unter
+  µK. Windpumpen in den obersten 1–2 m ist ein anderer Mechanismus und hier nicht abgeschätzt.
+
+## Ergebnis
+
+* Die Druckänderung der Stunden um die Messung erklärt 48–59 % der Unruhe im offenen Loch
+  (Abbildung 2).
+* `b·dp/dt` allein verringert den Fehler um den Faktor 1,4–1,6, `b·F` um den Faktor 4–10. Es
+  bleiben 4,1 / 1,8 / 0,85 / 0,80 mK bei 16 / 21 / 26 / 30 m.
+* Das ist der Fehler der korrigierten Luftkette gegenüber dem Firn; die Referenz trägt 0,04–0,16 mK
+  bei. Auch korrigiert ist die Luftkette 20- bis 100-mal ungenauer als das verfüllte Loch nach
+  Abzug der Kompressionswärme.
+* `b·F` setzt voraus, dass es in den Referenztiefen kein echtes, tiefenübergreifend gemeinsames
+  Signal von Tag zu Tag gibt. Für 13–30 m ist das erfüllt; die Schneekette zeigt dort nach Abzug
+  der Kompressionswärme nur 0,04–0,05 mK.
+* **Verfülltiefe:** Für den Kalibrierfehler von 2,8 mK genügt Verfüllen bis ~60 m ohne
+  Druckmessung oder bis ~25 m mit Korrektur. Für 0,1 mK ist bis zum Close-off zu verfüllen (Kohnen
+  ~85–90 m); darunter liegt das offene Loch auch ohne Korrektur bei 0,08–0,16 mK.
+* **Monatsmittel:** Die Korrektur verschiebt sie in B40 um höchstens 3,9 mK (21 m), bleibt immer
+  innerhalb des Standardfehlers der Rohdaten und verkleinert diesen um den Faktor 3–14
+  (Abbildung 6). In GRIP gibt die korrigierte Luftkette die Monatsänderung der Schneekette bei
+  16–21 m innerhalb von 1 SE wieder (Abbildung 7).
+* **Mittleres Profil:** Die Druckeffekte sind für die Bohrlochthermometrie Rauschen. Der
+  zusätzliche Wärmetransport im offenen Loch verschiebt die Wandtemperatur um weniger als 0,1 mK;
+  im offenen Loch bleibt ein Abtastfehler `½⟨ξ²⟩T''` im mK-Bereich oberhalb von ~35 m.
