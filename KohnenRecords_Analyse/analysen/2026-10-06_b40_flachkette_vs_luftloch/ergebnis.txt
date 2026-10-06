@@ -1,0 +1,105 @@
+head04: 203 Profile 2026-01-18 17:38:18 bis 2026-08-13 17:38:18 
+
+== B40 ganzer Record (18.01.-13.08.2026): σ_Tag = sd(ΔT_1d)/√2, σ_loess = Residuum um loess(span .2), Replikat NTC1-NTC2 ==
+               chain node depth_m   n  Tmean   Tmin   Tmax sd_Tag sd_loess sd_repl
+   Luft (200-m-Loch)    1     1.0 203 -42.76 -49.10 -33.60   84.0    143.3     0.8
+   Luft (200-m-Loch)    2     2.0 203 -42.10 -46.38 -37.10   62.5     61.6     1.0
+   Luft (200-m-Loch)    3     5.0 203 -42.77 -43.99 -41.90   98.0     93.5     0.2
+   Luft (200-m-Loch)    4     8.0 203 -43.54 -44.07 -43.05   76.9     75.7     0.2
+   Luft (200-m-Loch)    5    10.0 203 -43.78 -44.01 -43.38   75.1     74.9     0.2
+   Luft (200-m-Loch)    6    13.0 203 -43.95 -44.11 -43.64   60.9     60.5     0.1
+   Luft (200-m-Loch)    7    16.0 203 -44.05 -44.18 -43.85   49.4     48.0     0.1
+ Schnee (10-m-Kette)   21     1.0 203 -42.50 -48.78 -33.67   69.5    131.4     3.7
+ Schnee (10-m-Kette)   22     1.4 203 -42.25 -47.75 -35.02   53.1     75.4     1.4
+ Schnee (10-m-Kette)   23     1.9 203 -42.03 -46.52 -36.80   40.6     32.3     1.1
+ Schnee (10-m-Kette)   24     2.9 203 -42.01 -45.17 -39.20   29.6      7.0     0.6
+ Schnee (10-m-Kette)   25     5.9 203 -43.02 -44.15 -42.45   10.0      1.5     0.8
+
+== B40 druckkorrigiert (b·dp/dt aus B50 abgezogen) ==
+               chain node depth_m sd_Tag sd_loess
+   Luft (200-m-Loch)    1     1.0   84.0    143.3
+   Luft (200-m-Loch)    2     2.0   62.5     61.6
+   Luft (200-m-Loch)    3     5.0   71.0     70.9
+   Luft (200-m-Loch)    4     8.0   38.2     35.7
+   Luft (200-m-Loch)    5    10.0   46.9     44.8
+   Luft (200-m-Loch)    6    13.0   36.7     36.2
+   Luft (200-m-Loch)    7    16.0   25.0     24.8
+ Schnee (10-m-Kette)   21     1.0   69.5    131.4
+ Schnee (10-m-Kette)   22     1.4   53.1     75.4
+ Schnee (10-m-Kette)   23     1.9   40.6     32.3
+ Schnee (10-m-Kette)   24     2.9   29.6      7.0
+ Schnee (10-m-Kette)   25     5.9   10.0      1.5
+
+== B40 Fenster 01.05.-30.06.2026 ==
+               chain node depth_m  n  Tmean sd_Tag sd_loess sd_repl
+   Luft (200-m-Loch)    1     1.0 61 -47.15   82.1     62.6     0.5
+   Luft (200-m-Loch)    2     2.0 61 -44.56   66.7     62.0     0.5
+   Luft (200-m-Loch)    3     5.0 61 -42.49   62.9     55.0     0.1
+   Luft (200-m-Loch)    4     8.0 61 -43.29  112.7    102.5     0.2
+   Luft (200-m-Loch)    5    10.0 61 -43.68  108.7     99.6     0.2
+   Luft (200-m-Loch)    6    13.0 61 -43.95   78.4     71.6     0.2
+   Luft (200-m-Loch)    7    16.0 61 -44.07   56.5     51.4     0.1
+ Schnee (10-m-Kette)   21     1.0 61 -46.76   56.3     21.4     0.7
+ Schnee (10-m-Kette)   22     1.4 61 -45.83   34.9      9.4     0.2
+ Schnee (10-m-Kette)   23     1.9 61 -44.63   20.9      3.0     0.1
+ Schnee (10-m-Kette)   24     2.9 61 -43.09    8.9      0.3     0.1
+ Schnee (10-m-Kette)   25     5.9 61 -42.60    3.4      0.3     0.1
+
+== B40 Paare Luft/Schnee gleicher Tiefe: Verhältnis σ_Tag, Differenz Luft-Schnee (Mittel, sd), Korrelation der Tagesdifferenzen, Lag (Tage) der max. Kreuzkorrelation der loess-Residuen ==
+1 m / 1 m    σ_Tag Luft/Schnee 84/69 mK (Verh. 1.2) | Spanne Luft 15.50 K, Schnee 15.11 K | Luft−Schnee: Mittel -0.26 K, sd 0.26 K | r(ΔT_Tag) = 0.83
+             Kreuzkorr. max r=0.999 bei Lag 0 Tage (positiv = Luft eilt voraus); Schnee−Luft über die Zeit: erstes Monat -0.10 K, letztes Monat +0.22 K
+2 m / 1,9 m  σ_Tag Luft/Schnee 63/41 mK (Verh. 1.5) | Spanne Luft 9.28 K, Schnee 9.72 K | Luft−Schnee: Mittel -0.07 K, sd 0.20 K | r(ΔT_Tag) = 0.63
+             Kreuzkorr. max r=1.000 bei Lag 0 Tage (positiv = Luft eilt voraus); Schnee−Luft über die Zeit: erstes Monat +0.35 K, letztes Monat -0.11 K
+5 m / 5,9 m  σ_Tag Luft/Schnee 98/10 mK (Verh. 9.8) | Spanne Luft 2.10 K, Schnee 1.70 K | Luft−Schnee: Mittel +0.24 K, sd 0.34 K | r(ΔT_Tag) = 0.16
+             Kreuzkorr. max r=0.825 bei Lag 0 Tage (positiv = Luft eilt voraus); Schnee−Luft über die Zeit: erstes Monat -0.41 K, letztes Monat +0.26 K
+
+GRIP Doppelkette: 83 Profile 2026-07-08 15:13:54 bis 2026-09-28 15:13:17 
+
+== GRIP letzte 30 Tage ==
+            chain depth_m  n  Tmean sd_Tag sd_loess sd_repl
+   Luft (GRIP K1)       1 31 -21.81   77.6     16.3     2.2
+ Schnee (GRIP K2)       1 31 -21.47   69.3      5.7     2.3
+   Luft (GRIP K1)       3 31 -25.26  259.0    147.9     3.1
+ Schnee (GRIP K2)       3 31 -25.06   11.2      0.2     0.6
+   Luft (GRIP K1)       5 31 -28.55  252.1    143.6     4.5
+ Schnee (GRIP K2)       5 31 -28.48    2.9      0.1     0.2
+   Luft (GRIP K1)       8 31 -30.04   26.6     13.9     0.3
+ Schnee (GRIP K2)       8 31 -30.03    0.8      0.0     0.1
+   Luft (GRIP K1)      10 31 -30.26    8.2      4.0     0.1
+ Schnee (GRIP K2)      10 31 -30.25    0.6      0.1     0.1
+   Luft (GRIP K1)      13 31 -30.26    8.8      5.0     0.2
+   Luft (GRIP K1)      16 31 -30.47   26.7     15.5     0.8
+ Schnee (GRIP K2)      16 31 -30.50    0.1      0.0     0.0
+
+== GRIP ab 29.07. (3 Wochen nach Einbau) bis 28.09. ==
+            chain depth_m  n  Tmean   Tmin   Tmax sd_Tag sd_loess
+   Luft (GRIP K1)       1 62 -19.99 -24.12 -17.78   82.2     42.4
+ Schnee (GRIP K2)       1 62 -19.76 -23.62 -17.85   73.7     33.6
+   Luft (GRIP K1)       3 62 -25.75 -27.36 -24.78  241.2    201.8
+ Schnee (GRIP K2)       3 62 -25.55 -26.89 -25.00   19.6      0.8
+   Luft (GRIP K1)       5 62 -29.03 -30.04 -28.05  199.0    163.5
+ Schnee (GRIP K2)       5 62 -28.97 -29.93 -28.11    2.8      0.3
+   Luft (GRIP K1)       8 62 -30.14 -30.29 -29.91   19.1     15.8
+ Schnee (GRIP K2)       8 62 -30.13 -30.26 -29.89    2.2      0.1
+   Luft (GRIP K1)      10 62 -30.26 -30.29 -30.22    6.1      5.0
+ Schnee (GRIP K2)      10 62 -30.24 -30.26 -30.19    1.4      0.1
+   Luft (GRIP K1)      13 62 -30.24 -30.29 -30.19    8.2      6.9
+   Luft (GRIP K1)      16 62 -30.47 -30.54 -30.43   24.1     19.9
+ Schnee (GRIP K2)      16 62 -30.49 -30.50 -30.48    0.1      0.1
+
+== Verhältnis σ_Tag Luft/Schnee ==
+ depth_m  Luft Schnee  Verh           satz
+       3 259.0   11.2  23.1      GRIP 30 d
+       5 252.1    2.9  88.3      GRIP 30 d
+       8  26.6    0.8  33.6      GRIP 30 d
+      10   8.2    0.6  12.7      GRIP 30 d
+      13   8.8     NA    NA      GRIP 30 d
+      16  26.7    0.1 233.9      GRIP 30 d
+       1  77.6   69.3   1.1      GRIP 30 d
+       3 241.2   19.6  12.3 GRIP ab 29.07.
+       5 199.0    2.8  71.3 GRIP ab 29.07.
+       8  19.1    2.2   8.6 GRIP ab 29.07.
+      10   6.1    1.4   4.3 GRIP ab 29.07.
+      13   8.2     NA    NA GRIP ab 29.07.
+      16  24.1    0.1 219.3 GRIP ab 29.07.
+       1  82.2   73.7   1.1 GRIP ab 29.07.
