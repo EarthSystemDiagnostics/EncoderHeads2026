@@ -1,0 +1,38 @@
+Monatsmittel Luft - Schnee (K):
+        Paar   01    02    03    04    05    06    07    08
+   1 m / 1 m  0.2  0.00 -0.37 -0.46 -0.39 -0.39 -0.10 -0.38
+ 2 m / 1,9 m -0.3 -0.37 -0.22 -0.11  0.05  0.10  0.15  0.05
+ 5 m / 5,9 m  0.3  0.53  0.64  0.54  0.25 -0.02 -0.21 -0.28
+
+Jahreswellen-Fit (Periode 365,25 d, Record 18.01.-13.08.): Mittel, Amplitude A (K) +- se, Tag des Maximums (DOY), Residuum (mK):
+  chain node depth    mean     A   seA tmax resid  range
+   Luft    1   1.0 -40.234 8.240 0.087   -3   685 15.505
+ Schnee   21   1.0 -40.194 7.941 0.077   -1   619 15.111
+ Schnee   22   1.4 -40.797 6.550 0.059    7   522 12.730
+ Schnee   23   1.9 -41.646 4.867 0.045   23   468  9.724
+   Luft    2   2.0 -41.776 4.619 0.044   24   455  9.280
+ Schnee   24   2.9 -42.785 3.086 0.045   59   372  5.970
+   Luft    3   5.0 -43.603 1.526 0.025  116   139  2.095
+ Schnee   25   5.9 -43.656 1.187 0.009  133    49  1.699
+   Luft    4   8.0 -43.710 0.459 0.011  170    78  1.016
+   Luft    5  10.0 -43.778 0.190 0.007  213    76  0.634
+   Luft    6  13.0 -43.915 0.070 0.010  274    61  0.465
+   Luft    7  16.0 -44.042 0.025 0.009  317    49  0.333
+
+Schneekette: Steigung ln A gegen tmax = -0.0137 /Tag (Leitung: -0.0172); R2 = 0.993
+Schneekette: Daempfungstiefe aus Amplitude 2.62 m, aus Phase 2.08 m (Phase: 27.9 Tage/m)
+
+Lage relativ zur Schnee-Leitungsgeraden: A/A_erw (1 = auf der Geraden), Phasenabweichung (Tage; negativ = frueher als Leitung), scheinbare Tiefe aus A bzw. Phase (m):
+  chain depth     A A/A_erw dPhase_d z_aus_A z_aus_Phase    mean
+   Luft   1.0 8.240    1.09        7     0.7         0.9 -40.234
+ Schnee   1.0 7.941    1.08        6     0.8         1.0 -40.194
+ Schnee   1.4 6.550    1.00        0     1.3         1.3 -40.797
+ Schnee   1.9 4.867    0.93       -6     2.1         1.9 -41.646
+   Luft   2.0 4.619    0.89       -9     2.2         1.9 -41.776
+ Schnee   2.9 3.086    0.96       -3     3.2         3.1 -42.785
+   Luft   5.0 1.526    1.04        3     5.1         5.2 -43.603
+ Schnee   5.9 1.187    1.03        2     5.7         5.8 -43.656
+   Luft   8.0 0.459    0.66      -31     8.2         7.1 -43.710
+   Luft  10.0 0.190    0.49      -52    10.5         8.7 -43.778
+   Luft  13.0 0.070    0.42      -64    13.1        10.8 -43.915
+   Luft  16.0 0.025    0.27      -96    15.9        12.4 -44.042
