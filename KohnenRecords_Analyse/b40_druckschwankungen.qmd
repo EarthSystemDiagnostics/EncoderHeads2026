@@ -28,7 +28,7 @@ library(dplyr); library(tidyr); library(ggplot2); library(patchwork)
 BLUE <- "#2a78d6"; ORANGE <- "#eb6834"; GREY <- "grey45"
 th <- theme_bw(base_size = 12) + theme(panel.grid.minor = element_blank())
 K   <- "data/"
-B46 <- "/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv"
+B46 <- "data/b46_fast/CalibratedData_B46_2chains_260105.csv"
 tp  <- function(x) as.POSIXct(x, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 
 h4 <- read.csv(paste0(K, "decoded_head04_231710_combined.csv")); h4$t <- tp(h4$time_utc)

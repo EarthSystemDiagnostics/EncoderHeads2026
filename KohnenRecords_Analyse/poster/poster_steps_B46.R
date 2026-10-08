@@ -4,7 +4,7 @@ suppressMessages({library(dplyr); library(tidyr); library(ggplot2); library(patc
 BLUE <- "#2a78d6"; ORANGE <- "#eb6834"; GREY <- "grey55"
 th <- theme_bw(base_size = 10) + theme(panel.grid.minor = element_blank())
 
-d46 <- read.csv("/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv")
+d46 <- read.csv("data/b46_fast/CalibratedData_B46_2chains_260105.csv")
 d46$t <- as.POSIXct(d46$DateTime, tz = "UTC"); ts <- as.numeric(d46$t - d46$t[1], units = "secs")
 dm <- read.csv("data/head02_depths.csv"); dm60 <- dm[dm$chain == "60m-Kette", ]
 hp <- function(x, tau) { y <- numeric(length(x)); lp <- x[1]

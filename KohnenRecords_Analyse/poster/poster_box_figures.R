@@ -6,7 +6,7 @@ th <- theme_bw(base_size = 11) + theme(panel.grid.minor = element_blank(), legen
                                        legend.margin = margin(0, 0, -4, 0))
 
 ## Fig. 1: B46, 95-s-Daten, offenes 60-m-Loch ---------------------------------
-d46 <- read.csv("/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv")
+d46 <- read.csv("data/b46_fast/CalibratedData_B46_2chains_260105.csv")
 d46$t <- as.POSIXct(d46$DateTime, tz = "UTC"); ts <- as.numeric(d46$t - d46$t[1], units = "secs")
 hp <- function(x, tau) { y <- numeric(length(x)); lp <- x[1]
   for (i in seq_along(x)) { if (i > 1) lp <- lp + (1 - exp(-(ts[i] - ts[i-1]) / tau)) * (x[i] - lp); y[i] <- x[i] - lp }; y }
