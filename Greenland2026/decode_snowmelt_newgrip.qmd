@@ -972,19 +972,105 @@ if (nrow(res) >= 5) {
 }
 ```
 
+### Oberfläche ohne Tagesgang (Winter-Schätzer)
+
+Ab Oktober fällt die Tagesamplitude der Luft unter 2 K, in der Polarnacht verschwindet sie;
+die vier Schätzer oben haben dann keine Tage mehr. Die beiden folgenden Schätzer nutzen statt der
+Tageswelle die Wetteranomalien (Abweichung jedes Sensors vom zentrierten 24-h-Mittel) in einem
+gleitenden 10-Tage-Fenster. **Streuung:** ln sd(h) ist über der Fläche flach und fällt darunter
+linear (exponentielle Dämpfung); der Knick des stückweise linearen Fits ist die Oberfläche.
+**Verzug:** Kreuzkorrelation jeder Höhe gegen die freie Luft (64–96 cm); über der Fläche ist der
+Verzug 0, darunter wächst er linear; Knick ebenso.
+
+```{r winter-schaetzer, eval=multi, fig.height=4.5, fig.width=10.5}
+an_w <- ser_dat |> filter(hoehe_cm <= 96) |> group_by(hoehe_cm) |> arrange(ts, .by_group = TRUE) |>
+  mutate(an = temp_C - sapply(ts, function(t0) mean(temp_C[abs(ts - t0) <= 43200]))) |>
+  ungroup()
+
+# Stückweise linear: y = c + b1·(h−hs)_+ + b2·(hs−h)_+, hs auf 0,5-cm-Gitter
+knick <- function(h, y, w = rep(1, length(h)), hs_grid = seq(2, 70, 0.5)) {
+  rss <- sapply(hs_grid, function(hs)
+    sum(w * resid(lm(y ~ pmax(h - hs, 0) + pmax(hs - h, 0), weights = w))^2))
+  hs_grid[which.min(rss)]
+}
+# Verzug je Höhe gegen die Luft, 1-h-Gitter, Maximum parabolisch verfeinert
+verzug_w <- function(w) {
+  g   <- seq(min(w$ts), max(w$ts), 3600)
+  ref <- w |> filter(hoehe_cm >= 64) |> group_by(hoehe_cm) |>
+    group_modify(~ tibble(ts = g, a = approx(.x$ts, .x$an, g)$y)) |>
+    group_by(ts) |> summarise(a = mean(a), .groups = "drop") |> pull(a)
+  L <- -3:24
+  w |> group_by(hoehe_cm) |> group_modify(function(s, k) {
+    # Höhen mit Lücken im Fenster (ausgeschnittenes Tape-Experiment) entfallen
+    if (sum(is.finite(s$an)) < 20) return(tibble())
+    y  <- approx(s$ts, s$an, g)$y
+    cc <- sapply(L, function(l) {
+      i <- seq(max(1, 1 - l), min(length(g), length(g) - l))
+      ok <- is.finite(ref[i]) & is.finite(y[i + l])
+      if (sum(ok) < 20) NA_real_ else cor(ref[i][ok], y[i + l][ok]) })
+    if (all(is.na(cc))) return(tibble())
+    j <- which.max(cc); lag <- L[j]
+    if (j > 1 && j < length(L) && all(is.finite(cc[j + -1:1]))) {
+      den <- cc[j-1] - 2*cc[j] + cc[j+1]
+      if (den < 0) lag <- lag + 0.5*(cc[j-1] - cc[j+1])/den }
+    tibble(lag_h = lag, r = max(cc, na.rm = TRUE)) }) |> ungroup()
+}
+
+tage_w <- seq(as.Date(min(ser_dat$time)) + 5, as.Date(max(ser_dat$time)) - 1, by = "1 day")
+winter <- bind_rows(lapply(tage_w, function(dy) {
+  t0 <- as.numeric(as.POSIXct(paste(dy, "12:00"), tz = "UTC"))
+  w  <- an_w |> filter(abs(ts - t0) <= 5*86400)
+  if (n_distinct(w$ts) < 40) return(NULL)
+  s  <- w |> group_by(hoehe_cm) |> summarise(sd = sd(an, na.rm = TRUE), .groups = "drop") |>
+    filter(is.finite(sd), sd > 0)
+  lz <- verzug_w(w)
+  tibble(day = dy,
+         h_V = if (nrow(s) >= 6) knick(s$hoehe_cm, log(s$sd)) else NA_real_,
+         h_L = if (nrow(lz) >= 6 && "lag_h" %in% names(lz))
+                 knick(lz$hoehe_cm, lz$lag_h, w = pmax(lz$r, 0.1)^2) else NA_real_)
+}))
+
+ueb_d <- res |> transmute(day, h_ueb = h_bot + z_ueb)
+cmp_w <- winter |> left_join(ueb_d, by = "day")
+ggplot(cmp_w, aes(day)) +
+  geom_point(aes(y = h_ueb, colour = "Übergang Tagesgang (4-cm-Raster)"), size = 1.2, na.rm = TRUE) +
+  geom_line(aes(y = h_V, colour = "Streuung (Knick)"), linewidth = 0.7) +
+  geom_line(aes(y = h_L, colour = "Verzug (Knick)"), linewidth = 0.7) +
+  scale_colour_manual(NULL, values = c(`Streuung (Knick)` = "#b2182b",
+                                       `Verzug (Knick)` = "#2166ac",
+                                       `Übergang Tagesgang (4-cm-Raster)` = "#e08214")) +
+  coord_cartesian(ylim = c(0, max(60, max(cmp_w$h_L, na.rm = TRUE) + 10))) +
+  labs(x = NULL, y = "Oberfläche, Kettenhöhe (cm)",
+       title = sprintf("Oberflächenlage aus Wetteranomalien — %s", cfg$label),
+       subtitle = "10-Tage-Fenster, zentriert; Punkte: Übergangsschätzer aus der Tageswelle") +
+  theme_bw(11) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r winter-schaetzer-text, eval=multi, echo=FALSE, results='asis'}
+ok_w <- cmp_w |> filter(is.finite(h_ueb), h_ueb >= 14) |>
+  filter(abs(h_ueb - runmed(h_ueb, 7, endrule = "median")) <= 8)
+lw <- tail(winter, 1)
+cat(sprintf("Gegen den Übergangsschätzer (%d Tage mit Fläche ≥ 14 cm, Ausreißer > 8 cm vom laufenden Median entfernt): Streuung %+.1f cm (sd %.1f cm), Verzug %+.1f cm (sd %.1f cm). Aktuell (%s, Fenster bis zum Datenende): **%.1f cm** (Verzug), %.1f cm (Streuung). Das Fenster glättet über 10 Tage; ein schneller Schneefall erscheint verschmiert über ±5 Tage.\n",
+  nrow(ok_w), mean(ok_w$h_V - ok_w$h_ueb), sd(ok_w$h_V - ok_w$h_ueb),
+  mean(ok_w$h_L - ok_w$h_ueb), sd(ok_w$h_L - ok_w$h_ueb),
+  format(lw$day, "%d.%m.%Y"), lw$h_L, lw$h_V))
+```
+
 ### Zoom: der eingeschneite Bereich
 
 Seit dem Einschneien der untersten Knoten lässt sich das Profil unter der Oberfläche direkt
 betrachten. Alle folgenden Darstellungen laufen in **Tiefe unter der Schneeoberfläche**, nicht in
 Kettenhöhe: die Oberfläche wandert im Betrachtungszeitraum um rund 20 cm, und jede Messung
-bekommt die Tiefe, die zu ihrem Tag gehört (Oberflächenlage aus dem Übergangsschätzer).
+bekommt die Tiefe, die zu ihrem Tag gehört (Oberflächenlage aus dem Verzugs-Schätzer des
+vorigen Abschnitts, der auch ohne Tagesgang arbeitet).
 
 ```{r zoom-hov, eval=multi, fig.height=8.5, fig.width=10.5}
-# Oberflächenlage: der Übergangsschätzer liefert 2-cm-Stufen und nicht an jedem
-# Tag einen Wert. Für die Tiefenkoordinate wird er auf jeden Tag interpoliert
-# und geglättet, sonst fallen ganze Tage aus dem Hovmöller heraus.
-sfc <- res |> transmute(day, h_surf = h_bot + z_ueb) |> filter(is.finite(h_surf))
-alltage <- seq(min(sfc$day), max(sfc$day), by = "1 day")
+# Oberflächenlage aus dem Verzugs-Schätzer (Wetteranomalien, 10-Tage-Fenster):
+# liefert an jedem Tag einen Wert, auch bei schwachem Tagesgang. Der
+# Übergangsschätzer gab im Oktober Ausreißer (76 cm statt 28 cm) und ab Mitte
+# Oktober keine Werte mehr. Letzte Lage bis zum Datenende fortgeschrieben.
+sfc <- winter |> transmute(day, h_surf = h_L) |> filter(is.finite(h_surf))
+alltage <- seq(min(sfc$day), as.Date(max(ser_dat$time)), by = "1 day")
 hsi <- approx(as.numeric(sfc$day), sfc$h_surf, as.numeric(alltage), rule = 2)$y
 if (length(alltage) >= 12)
   hsi <- as.numeric(predict(loess(hsi ~ as.numeric(alltage), span = 0.35)))
@@ -1012,18 +1098,38 @@ hovg <- gr1 |> group_by(z) |> group_modify(function(x, k) {
   x <- x |> arrange(time); u <- as.numeric(x$time)
   keep <- tg >= min(u) & tg <= max(u)
   tibble(ts = tg[keep], anom = approx(u, x$anom, tg[keep])$y) }) |> ungroup() |>
-  mutate(time = as.POSIXct(ts, origin = "1970-01-01", tz = "UTC"))
+  mutate(time = as.POSIXct(ts, origin = "1970-01-01", tz = "UTC")) |>
+  # Jede Tiefe auf ihre eigene Streuung normiert: die Anomalie fällt im Schnee
+  # auf wenige Zehntel K, in Kelvin bliebe sie gegen die Luft unsichtbar.
+  group_by(z) |> mutate(anom_n = anom / sd(anom)) |> ungroup()
 
-p_h <- ggplot(hovg, aes(time, z, fill = pmax(pmin(anom, 4), -4))) +
+# Verzug je Tiefe aus der Kreuzkorrelation gegen die oberste Zeile (Luft),
+# als Linie in den Hovmöller gelegt: so weit muss man je Tiefe nach rechts.
+xr   <- hovg |> filter(z == min(z)) |> select(ts, a0 = anom)
+lagz <- hovg |> filter(z >= 0) |> inner_join(xr, by = "ts") |> group_by(z) |>
+  arrange(ts, .by_group = TRUE) |>
+  summarise(lag_h = { L <- 0:12
+    cc <- sapply(L, function(k) cor(head(a0, n() - k), tail(anom_n, n() - k)))
+    L[which.max(cc)] * 2 }, .groups = "drop")
+# Warme Spitzen der Luft (lokale Maxima > 1,5 σ) als Startpunkte der Linien
+spitzen <- hovg |> filter(z == min(z)) |> arrange(ts) |>
+  filter(anom_n > 1.5, anom_n >= lag(anom_n, default = -Inf),
+         anom_n >= lead(anom_n, default = -Inf)) |> pull(ts)
+lagl <- bind_rows(lapply(spitzen, function(t0) lagz |>
+  mutate(ev = t0, time = as.POSIXct(t0 + lag_h*3600, origin = "1970-01-01", tz = "UTC"))))
+
+p_h <- ggplot(hovg, aes(time, z, fill = pmax(pmin(anom_n, 2.5), -2.5))) +
   geom_tile(width = 7200, height = 1) +
-  scale_fill_gradient2(name = "Abweichung vom\n24-h-Mittel (K)",
+  scale_fill_gradient2(name = "Abweichung vom\n24-h-Mittel\n(σ der Tiefe)",
                        low = "#2166ac", mid = "white", high = "#b2182b",
-                       limits = c(-4, 4)) +
+                       limits = c(-2.5, 2.5)) +
   geom_hline(yintercept = 0, linewidth = 0.7) +
+  geom_path(data = lagl, aes(time, z, group = ev), inherit.aes = FALSE,
+            linetype = "dashed", linewidth = 0.4) +
   scale_y_reverse("Tiefe unter der Oberfläche (cm)", breaks = seq(-8, 24, 4),
                   expand = c(0, 0)) +
   scale_x_datetime(NULL, expand = c(0, 0)) +
-  labs(subtitle = "Linie = Oberfläche, grau = unterhalb des tiefsten Sensors; die Tageswelle kippt mit der Tiefe nach rechts") +
+  labs(subtitle = "je Tiefe auf die eigene Streuung normiert; gestrichelt: Verzug aus der Kreuzkorrelation") +
   theme_bw(base_size = 12) +
   theme(panel.grid = element_blank(),
         panel.background = element_rect(fill = "grey88", colour = NA))

@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Thom Laepple">
-<meta name="dcterms.date" content="2026-10-01">
+<meta name="dcterms.date" content="2026-10-08">
 
 <title>Temperaturschwankungen im offenen Bohrloch B40</title>
 <style>
@@ -2239,7 +2239,7 @@ vertical-align: -.125em;
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">October 1, 2026</p>
+      <p class="date">October 8, 2026</p>
     </div>
   </div>
   
@@ -2259,7 +2259,7 @@ vertical-align: -.125em;
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>BLUE <span class="ot">&lt;-</span> <span class="st">&quot;#2a78d6&quot;</span>; ORANGE <span class="ot">&lt;-</span> <span class="st">&quot;#eb6834&quot;</span>; GREY <span class="ot">&lt;-</span> <span class="st">&quot;grey45&quot;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>th <span class="ot">&lt;-</span> <span class="fu">theme_bw</span>(<span class="at">base_size =</span> <span class="dv">12</span>) <span class="sc">+</span> <span class="fu">theme</span>(<span class="at">panel.grid.minor =</span> <span class="fu">element_blank</span>())</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>K   <span class="ot">&lt;-</span> <span class="st">&quot;data/&quot;</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>B46 <span class="ot">&lt;-</span> <span class="st">&quot;/Users/tlaepple/Nextcloud/KohnenRecords2526/2026_01_05/260105_B46/calibrated/CalibratedData_B46_2chains_260105.csv&quot;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>B46 <span class="ot">&lt;-</span> <span class="st">&quot;data/b46_fast/CalibratedData_B46_2chains_260105.csv&quot;</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>tp  <span class="ot">&lt;-</span> <span class="cf">function</span>(x) <span class="fu">as.POSIXct</span>(x, <span class="at">format =</span> <span class="st">&quot;%Y-%m-%dT%H:%M:%SZ&quot;</span>, <span class="at">tz =</span> <span class="st">&quot;UTC&quot;</span>)</span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>h4 <span class="ot">&lt;-</span> <span class="fu">read.csv</span>(<span class="fu">paste0</span>(K, <span class="st">&quot;decoded_head04_231710_combined.csv&quot;</span>)); h4<span class="sc">$</span>t <span class="ot">&lt;-</span> <span class="fu">tp</span>(h4<span class="sc">$</span>time_utc)</span>
